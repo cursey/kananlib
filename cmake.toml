@@ -1,0 +1,26 @@
+# Reference: https://build-cpp.github.io/cmkr/cmake-toml
+[project]
+name = "kananlib"
+
+[vcpkg]
+version = "2022.07.25"
+packages = ["spdlog", "bddisasm"]
+
+[find-package]
+spdlog = { required = false }
+bddisasm = { required = false }
+
+[target.kananlib]
+type = "static"
+sources = ["src/*.cpp", "include/**.hpp"]
+include-directories = ["include"]
+compile-features = ["cxx_std_17"]
+link-libraries = ["bddisasm::bddisasm", "spdlog::spdlog"]
+
+# TODO: define a target for each of your executables/libraries like this:
+#[target.myexecutable]
+#type = "executable" # static, shared
+#sources = ["src/kananlib/*.cpp", "include/kananlib/*.hpp"]
+#include-directories = ["include"]
+#compile-features = ["cxx_std_11"]
+#link-libraries = ["target-or-library"]
