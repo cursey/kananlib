@@ -4,7 +4,7 @@
 #include <TlHelp32.h>
 #include <spdlog/spdlog.h>
 
-#include "utility/Thread.hpp"
+#include <utility/Thread.hpp>
 
 namespace utility {
 namespace detail {

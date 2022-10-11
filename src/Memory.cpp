@@ -4,8 +4,8 @@
 
 #include <Windows.h>
 
-#include "utility/String.hpp"
-#include "utility/Memory.hpp"
+#include <utility/String.hpp>
+#include <utility/Memory.hpp>
 
 using namespace std;
 

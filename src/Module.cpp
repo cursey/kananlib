@@ -10,9 +10,9 @@
 
 #include <spdlog/spdlog.h>
 
-#include "utility/String.hpp"
-#include "utility/Thread.hpp"
-#include "utility/Module.hpp"
+#include <utility/String.hpp>
+#include <utility/Thread.hpp>
+#include <utility/Module.hpp>
 
 using namespace std;
 

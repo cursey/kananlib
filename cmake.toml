@@ -14,7 +14,7 @@ bddisasm = { required = false }
 type = "static"
 sources = ["src/*.cpp", "include/**.hpp"]
 include-directories = ["include"]
-compile-features = ["cxx_std_17"]
+compile-features = ["cxx_std_20"]
 link-libraries = ["bddisasm::bddisasm", "spdlog::spdlog"]
 
 # TODO: define a target for each of your executables/libraries like this:

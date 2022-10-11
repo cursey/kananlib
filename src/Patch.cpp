@@ -1,6 +1,6 @@
 #include <Windows.h>
 
-#include "utility/Patch.hpp"
+#include <utility/Patch.hpp>
 
 using namespace std;
 

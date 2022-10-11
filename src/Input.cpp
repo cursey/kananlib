@@ -1,6 +1,6 @@
 #include <windows.h>
 
-#include "utility/Input.hpp"
+#include <utility/Input.hpp>
 
 namespace utility {
 bool was_key_down(uint32_t key) {

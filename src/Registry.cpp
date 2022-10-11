@@ -1,6 +1,6 @@
 #include <spdlog/spdlog.h>
 
-#include "utility/Registry.hpp"
+#include <utility/Registry.hpp>
 
 namespace utility {
 std::optional<uint32_t> get_registry_dword(HKEY key, std::string_view subkey, std::string_view value) {

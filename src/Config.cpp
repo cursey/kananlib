@@ -1,8 +1,8 @@
 #include <fstream>
 #include <sstream>
 
-#include "utility/String.hpp"
-#include "utility/Config.hpp"
+#include <utility/String.hpp>
+#include <utility/Config.hpp>
 
 using namespace std;
 

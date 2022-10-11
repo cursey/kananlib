@@ -2,8 +2,8 @@
 
 #include <Windows.h>
 
-#include "utility/Memory.hpp"
-#include "utility/Pattern.hpp"
+#include <utility/Memory.hpp>
+#include <utility/Pattern.hpp>
 
 using namespace std;
 

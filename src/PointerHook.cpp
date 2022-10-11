@@ -3,7 +3,7 @@
 #include <windows.h>
 #include <spdlog/spdlog.h>
 
-#include "utility/PointerHook.hpp"
+#include <utility/PointerHook.hpp>
 
 PointerHook::PointerHook(void** old_ptr, void* new_ptr)
     : m_replace_ptr{old_ptr},

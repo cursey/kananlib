@@ -52,6 +52,7 @@ set(kananlib_SOURCES "")
 list(APPEND kananlib_SOURCES
 	"src/Address.cpp"
 	"src/Config.cpp"
+	"src/Emulation.cpp"
 	"src/Input.cpp"
 	"src/Memory.cpp"
 	"src/Module.cpp"
@@ -66,6 +67,7 @@ list(APPEND kananlib_SOURCES
 	"src/VtableHook.cpp"
 	"include/utility/Address.hpp"
 	"include/utility/Config.hpp"
+	"include/utility/Emulation.hpp"
 	"include/utility/Input.hpp"
 	"include/utility/Memory.hpp"
 	"include/utility/Module.hpp"
@@ -94,7 +96,7 @@ endif()
 source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${kananlib_SOURCES})
 
 target_compile_features(kananlib PUBLIC
-	cxx_std_17
+	cxx_std_20
 )
 
 target_include_directories(kananlib PUBLIC

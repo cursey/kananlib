@@ -4,8 +4,8 @@
 
 #include <spdlog/spdlog.h>
 
-#include "utility/Module.hpp"
-#include "utility/RTTI.hpp"
+#include <utility/Module.hpp>
+#include <utility/RTTI.hpp>
 
 namespace utility {
 namespace rtti {
