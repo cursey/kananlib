@@ -1,6 +1,6 @@
+#include <cstdint>
+
 #include <spdlog/spdlog.h>
-#include <bddisasm.h>
-#include <disasmtypes.h>
 
 #include <utility/Pattern.hpp>
 #include <utility/String.hpp>
@@ -228,7 +228,7 @@ namespace utility {
     std::optional<uintptr_t> scan_opcode(uintptr_t ip, size_t num_instructions, uint8_t opcode) {
         for (size_t i = 0; i < num_instructions; ++i) {
             INSTRUX ix{};
-            const auto status = NdDecodeEx(&ix, (ND_UINT8*)ip, 1000, ND_CODE_64, ND_DATA_64);
+            const auto status = NdDecodeEx(&ix, (uint8_t*)ip, 1000, ND_CODE_64, ND_DATA_64);
 
             if (!ND_SUCCESS(status)) {
                 break;
@@ -247,7 +247,7 @@ namespace utility {
     std::optional<uintptr_t> scan_disasm(uintptr_t ip, size_t num_instructions, const string& pattern) {
         for (size_t i = 0; i < num_instructions; ++i) {
             INSTRUX ix{};
-            const auto status = NdDecodeEx(&ix, (ND_UINT8*)ip, 1000, ND_CODE_64, ND_DATA_64);
+            const auto status = NdDecodeEx(&ix, (uint8_t*)ip, 1000, ND_CODE_64, ND_DATA_64);
 
             if (!ND_SUCCESS(status)) {
                 break;
@@ -266,7 +266,7 @@ namespace utility {
     std::optional<uintptr_t> scan_mnemonic(uintptr_t ip, size_t num_instructions, const string& mnemonic) {
         for (size_t i = 0; i < num_instructions; ++i) {
             INSTRUX ix{};
-            const auto status = NdDecodeEx(&ix, (ND_UINT8*)ip, 1000, ND_CODE_64, ND_DATA_64);
+            const auto status = NdDecodeEx(&ix, (uint8_t*)ip, 1000, ND_CODE_64, ND_DATA_64);
 
             if (!ND_SUCCESS(status)) {
                 break;
@@ -284,7 +284,7 @@ namespace utility {
 
     uint32_t get_insn_size(uintptr_t ip) {
         INSTRUX ix{};
-        const auto status = NdDecodeEx(&ix, (ND_UINT8*)ip, 1000, ND_CODE_64, ND_DATA_64);
+        const auto status = NdDecodeEx(&ix, (uint8_t*)ip, 1000, ND_CODE_64, ND_DATA_64);
 
         if (!ND_SUCCESS(status)) {
             return 0;
