@@ -106,6 +106,7 @@ target_include_directories(kananlib PUBLIC
 target_link_libraries(kananlib PUBLIC
 	bddisasm::bddisasm
 	spdlog::spdlog
+	shlwapi
 )
 
 unset(CMKR_TARGET)

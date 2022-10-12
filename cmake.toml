@@ -15,7 +15,11 @@ type = "static"
 sources = ["src/*.cpp", "include/**.hpp"]
 include-directories = ["include"]
 compile-features = ["cxx_std_20"]
-link-libraries = ["bddisasm::bddisasm", "spdlog::spdlog"]
+link-libraries = [
+    "bddisasm::bddisasm", 
+    "spdlog::spdlog", 
+    "shlwapi"
+]
 
 # TODO: define a target for each of your executables/libraries like this:
 #[target.myexecutable]
