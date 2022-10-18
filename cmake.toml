@@ -15,6 +15,7 @@ type = "static"
 sources = ["src/*.cpp", "include/**.hpp"]
 include-directories = ["include"]
 compile-features = ["cxx_std_20"]
+compile-options = ["/EHa"]
 link-libraries = [
     "bddisasm::bddisasm", 
     "spdlog::spdlog", 

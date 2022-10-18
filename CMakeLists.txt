@@ -99,6 +99,10 @@ target_compile_features(kananlib PUBLIC
 	cxx_std_20
 )
 
+target_compile_options(kananlib PUBLIC
+	"/EHa"
+)
+
 target_include_directories(kananlib PUBLIC
 	include
 )
