@@ -326,6 +326,10 @@ namespace utility {
 
                 seen_addresses.insert(ip);
 
+                if (IsBadReadPtr(ip, 16)) {
+                    break;
+                }
+
                 INSTRUX ix{};
                 const auto status = NdDecodeEx(&ix, ip, 1000, ND_CODE_64, ND_DATA_64);
 
@@ -343,33 +347,35 @@ namespace utility {
                     return;
                 }
 
-                if (ix.BranchInfo.IsBranch && ix.BranchInfo.IsConditional) {
-                    // Determine how to get the destination address from the ix
-                    // and push it to the branches deque
-                    spdlog::info("Conditional Branch detected: {:x}", (uintptr_t)ip);
+                if (ix.IsRipRelative) {
+                    if (ix.BranchInfo.IsBranch && ix.BranchInfo.IsConditional) {
+                        // Determine how to get the destination address from the ix
+                        // and push it to the branches deque
+                        spdlog::info("Conditional Branch detected: {:x}", (uintptr_t)ip);
 
-                    if (auto dest = utility::resolve_displacement((uintptr_t)ip); dest) {
-                        if (result != ExhaustionResult::STEP_OVER) {
-                            branches.push_back((uint8_t*)*dest);
-                        }
-                    } else {
-                        spdlog::error("Failed to resolve displacement for {:x}", (uintptr_t)ip);
-                        spdlog::error(" TODO: Fix this");
-                    }
-                } else if (ix.BranchInfo.IsBranch && !ix.BranchInfo.IsConditional) {
-                    spdlog::info("Unconditional Branch detected: {:x}", (uintptr_t)ip);
-
-                    if (auto dest = utility::resolve_displacement((uintptr_t)ip); dest) {
-                        if (std::string_view{ix.Mnemonic}.starts_with("JMP")) {
-                            ip = (uint8_t*)*dest;
-                        } else {
+                        if (auto dest = utility::resolve_displacement((uintptr_t)ip); dest) {
                             if (result != ExhaustionResult::STEP_OVER) {
                                 branches.push_back((uint8_t*)*dest);
                             }
+                        } else {
+                            spdlog::error("Failed to resolve displacement for {:x}", (uintptr_t)ip);
+                            spdlog::error(" TODO: Fix this");
                         }
-                    } else {
-                        spdlog::error("Failed to resolve displacement for {:x}", (uintptr_t)ip);
-                        spdlog::error(" TODO: Fix this");
+                    } else if (ix.BranchInfo.IsBranch && !ix.BranchInfo.IsConditional) {
+                        spdlog::info("Unconditional Branch detected: {:x}", (uintptr_t)ip);
+
+                        if (auto dest = utility::resolve_displacement((uintptr_t)ip); dest) {
+                            if (std::string_view{ix.Mnemonic}.starts_with("JMP")) {
+                                ip = (uint8_t*)*dest;
+                            } else {
+                                if (result != ExhaustionResult::STEP_OVER) {
+                                    branches.push_back((uint8_t*)*dest);
+                                }
+                            }
+                        } else {
+                            spdlog::error("Failed to resolve displacement for {:x}", (uintptr_t)ip);
+                            spdlog::error(" TODO: Fix this");
+                        }
                     }
                 }
 
