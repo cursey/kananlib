@@ -37,6 +37,18 @@ namespace utility {
     uintptr_t calculate_absolute(uintptr_t address, uint8_t custom_offset = 4);
 
     std::optional<INSTRUX> decode_one(uint8_t* ip, size_t max_size = 1000);
+    // exhaustive_decode decodes until it hits something like a return, int3, etc
+    // except when it notices a conditional jmp, it will decode both branches separately
+    enum ExhaustionResult {
+        CONTINUE,
+        BREAK,
+        STEP_OVER
+    };
+    struct ExhaustionContext {
+        uintptr_t addr{};
+        INSTRUX instrux{};
+    };
+    void exhaustive_decode(uint8_t* ip, size_t max_size, std::function<ExhaustionResult(INSTRUX&, uintptr_t)> callback);
 
     std::optional<uintptr_t> find_function_start(uintptr_t middle);
     // same as prev, but keeps going backwards until the "function" it lands on

@@ -1,4 +1,6 @@
 #include <cstdint>
+#include <unordered_set>
+#include <deque>
 
 #include <spdlog/spdlog.h>
 
@@ -308,6 +310,85 @@ namespace utility {
         }
 
         return ix;
+    }
+
+    // exhaustive_decode decodes until it hits something like a return, int3, fails, etc
+    // except when it notices a conditional jmp, it will decode both branches separately
+    void exhaustive_decode(uint8_t* start, size_t max_size, std::function<ExhaustionResult(INSTRUX&, uintptr_t)> callback) {
+        std::unordered_set<uint8_t*> seen_addresses{};
+        std::deque<uint8_t*> branches{};
+
+        auto decode_branch = [&](uint8_t* ip) {
+            for (size_t i = 0; i < max_size; ++i) {
+                if (seen_addresses.contains(ip)) {
+                    break;
+                }
+
+                seen_addresses.insert(ip);
+
+                INSTRUX ix{};
+                const auto status = NdDecodeEx(&ix, ip, 1000, ND_CODE_64, ND_DATA_64);
+
+                if (!ND_SUCCESS(status)) {
+                    break;
+                }
+
+                if (ix.Instruction == ND_INS_RETN || ix.Instruction == ND_INS_INT3) {
+                    break;
+                }
+
+                const auto result = callback(ix, (uintptr_t)ip);
+
+                if (result == ExhaustionResult::BREAK) {
+                    return;
+                }
+
+                if (ix.BranchInfo.IsBranch && ix.BranchInfo.IsConditional) {
+                    // Determine how to get the destination address from the ix
+                    // and push it to the branches deque
+                    spdlog::info("Conditional Branch detected: {:x}", (uintptr_t)ip);
+
+                    if (auto dest = utility::resolve_displacement((uintptr_t)ip); dest) {
+                        if (result != ExhaustionResult::STEP_OVER) {
+                            branches.push_back((uint8_t*)*dest);
+                        }
+                    } else {
+                        spdlog::error("Failed to resolve displacement for {:x}", (uintptr_t)ip);
+                        spdlog::error(" TODO: Fix this");
+                    }
+                } else if (ix.BranchInfo.IsBranch && !ix.BranchInfo.IsConditional) {
+                    spdlog::info("Unconditional Branch detected: {:x}", (uintptr_t)ip);
+
+                    if (auto dest = utility::resolve_displacement((uintptr_t)ip); dest) {
+                        if (std::string_view{ix.Mnemonic}.starts_with("JMP")) {
+                            ip = (uint8_t*)*dest;
+                        } else {
+                            if (result != ExhaustionResult::STEP_OVER) {
+                                branches.push_back((uint8_t*)*dest);
+                            }
+                        }
+                    } else {
+                        spdlog::error("Failed to resolve displacement for {:x}", (uintptr_t)ip);
+                        spdlog::error(" TODO: Fix this");
+                    }
+                }
+
+                ip += ix.Length;
+            }
+        };
+
+        branches.push_back(start);
+
+        while(true) {
+            const auto branch = branches.front();
+            branches.pop_front();
+
+            decode_branch(branch);
+
+            if (branches.empty()) {
+                break;
+            }
+        }
     }
 
     std::optional<uintptr_t> find_function_start(uintptr_t middle) {
