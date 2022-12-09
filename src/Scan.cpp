@@ -141,6 +141,29 @@ namespace utility {
         return scan_data(module, data, size);
     }
 
+    std::optional<uintptr_t> scan_string(uintptr_t start, size_t length, const std::string& str, bool zero_terminated) {
+        if (str.empty()) {
+            return {};
+        }
+
+        const auto data = (uint8_t*)str.c_str();
+        const auto size = str.size() + (zero_terminated ? 1 : 0);
+
+        return scan_data(start, length, data, size);
+    }
+
+    std::optional<uintptr_t> scan_string(uintptr_t start, size_t length, const std::wstring& str, bool zero_terminated) {
+        if (str.empty()) {
+            return {};
+        }
+
+        const auto data = (uint8_t*)str.c_str();
+        const auto size = (str.size() + (zero_terminated ? 1 : 0)) * sizeof(wchar_t);
+
+        return scan_data(start, length, data, size);
+    }
+
+
     optional<uintptr_t> scan_reference(HMODULE module, uintptr_t ptr, bool relative) {
         if (!relative) {
             return scan_ptr(module, ptr);
