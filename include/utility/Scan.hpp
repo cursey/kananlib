@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <functional>
 
 #include <bddisasm.h>
 #include <Windows.h>

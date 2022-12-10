@@ -1,7 +1,6 @@
 #include <cstdint>
 #include <unordered_set>
 #include <deque>
-#include <functional>
 
 #include <spdlog/spdlog.h>
 
