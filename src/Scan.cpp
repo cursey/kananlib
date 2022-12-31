@@ -427,6 +427,9 @@ namespace utility {
             return {};
         }
 
+        const auto module_size = utility::get_module_size((HMODULE)module).value_or(0xDEADBEEF);
+        const auto module_end = module + module_size;
+
         const auto middle_rva = middle - module;
 
         // This function abuses the fact that most non-obfuscated binaries have
@@ -446,14 +449,33 @@ namespace utility {
         // Get the number of entries in the exception directory
         const auto exception_directory_entries = exception_directory_size / sizeof(IMAGE_RUNTIME_FUNCTION_ENTRY);
 
+        std::optional<uintptr_t> last{};
+        uint32_t nearest_distance = 0xFFFFFFFF;
+
         for (auto i = 0; i < exception_directory_entries; i++) {
             const auto entry = exception_directory_ptr[i];
 
+            if (module + entry.EndAddress >= module_end || entry.EndAddress >= module_size) {
+                spdlog::error("Bad end address at {:x} {:x}", module + entry.EndAddress, module_end);
+                continue;
+            }
+
             // Check if the middle address is within the range of the function
             if (entry.BeginAddress <= middle_rva && middle_rva <= entry.EndAddress) {
-                // Return the start address of the function
-                return module + entry.BeginAddress;
+                const auto distance = middle_rva - entry.BeginAddress;
+
+                if (distance < nearest_distance) {
+                    nearest_distance = distance;
+
+                    // Return the start address of the function
+                    last = module + entry.BeginAddress;
+                }
             }
+        }
+
+        if (last) {
+            spdlog::info("Found function start for {:x} at {:x}", middle, *last);
+            return last;
         }
 
         return std::nullopt;
