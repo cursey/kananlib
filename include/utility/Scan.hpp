@@ -24,6 +24,10 @@ namespace utility {
     std::optional<uintptr_t> scan_string(HMODULE module, const std::wstring& str, bool zero_terminated = false);
     std::optional<uintptr_t> scan_string(uintptr_t start, size_t length, const std::string& str, bool zero_terminated = false);
     std::optional<uintptr_t> scan_string(uintptr_t start, size_t length, const std::wstring& str, bool zero_terminated = false);
+    std::vector<uintptr_t> scan_strings(HMODULE module, const std::string& str, bool zero_terminated = false);
+    std::vector<uintptr_t> scan_strings(HMODULE module, const std::wstring& str, bool zero_terminated = false);
+    std::vector<uintptr_t> scan_strings(uintptr_t start, size_t length, const std::string& str, bool zero_terminated = false);
+    std::vector<uintptr_t> scan_strings(uintptr_t start, size_t length, const std::wstring& str, bool zero_terminated = false);
 
 
     std::optional<uintptr_t> scan_reference(HMODULE module, uintptr_t ptr, bool relative = true);

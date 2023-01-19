@@ -163,6 +163,91 @@ namespace utility {
         return scan_data(start, length, data, size);
     }
 
+    std::vector<uintptr_t> scan_strings(HMODULE module, const std::string& str, bool zero_terminated) {
+        if (str.empty()) {
+            return {};
+        }
+
+        const auto data = (uint8_t*)str.c_str();
+        const auto size = str.size() + (zero_terminated ? 1 : 0);
+        const auto module_size = get_module_size(module).value_or(0);
+        const auto end = (uintptr_t)module + module_size - (str.length() + 1);
+
+        std::vector<uintptr_t> results{};
+
+        for (auto i = scan_data(module, data, size).value_or(0); 
+            i > 0 && i < end; 
+            i = scan_data(i + 1, end - i, data, size).value_or(0)) 
+        {
+            results.push_back(i);
+        }
+
+        return results;
+    }
+
+    std::vector<uintptr_t> scan_strings(HMODULE module, const std::wstring& str, bool zero_terminated) {
+        if (str.empty()) {
+            return {};
+        }
+
+        const auto data = (uint8_t*)str.c_str();
+        const auto size = (str.size() + (zero_terminated ? 1 : 0)) * sizeof(wchar_t);
+        const auto module_size = get_module_size(module).value_or(0);
+        const auto end = (uintptr_t)module + module_size - (str.length() + 1) * sizeof(wchar_t);
+
+        std::vector<uintptr_t> results{};
+
+        for (auto i = scan_data(module, data, size).value_or(0); 
+            i > 0 && i < end; 
+            i = scan_data(i + 1, end - i, data, size).value_or(0)) 
+        {
+            results.push_back(i);
+        }
+
+        return results;
+    }
+
+    std::vector<uintptr_t> scan_strings(uintptr_t start, size_t length, const std::string& str, bool zero_terminated) {
+        if (str.empty()) {
+            return {};
+        }
+
+        const auto data = (uint8_t*)str.c_str();
+        const auto size = str.size() + (zero_terminated ? 1 : 0);
+        const auto end = start + length - (str.length() + 1);
+
+        std::vector<uintptr_t> results{};
+
+        for (auto i = scan_data(start, length, data, size).value_or(0); 
+            i > 0 && i < end; 
+            i = scan_data(i + 1, end - i, data, size).value_or(0)) 
+        {
+            results.push_back(i);
+        }
+
+        return results;
+    }
+
+    std::vector<uintptr_t> scan_strings(uintptr_t start, size_t length, const std::wstring& str, bool zero_terminated) {
+        if (str.empty()) {
+            return {};
+        }
+
+        const auto data = (uint8_t*)str.c_str();
+        const auto size = (str.size() + (zero_terminated ? 1 : 0)) * sizeof(wchar_t);
+        const auto end = start + length - (str.length() + 1) * sizeof(wchar_t);
+
+        std::vector<uintptr_t> results{};
+
+        for (auto i = scan_data(start, length, data, size).value_or(0); 
+            i > 0 && i < end; 
+            i = scan_data(i + 1, end - i, data, size).value_or(0)) 
+        {
+            results.push_back(i);
+        }
+
+        return results;
+    }
 
     optional<uintptr_t> scan_reference(HMODULE module, uintptr_t ptr, bool relative) {
         if (!relative) {
