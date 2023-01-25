@@ -77,6 +77,7 @@ list(APPEND kananlib_SOURCES
 	"include/utility/RTTI.hpp"
 	"include/utility/Registry.hpp"
 	"include/utility/Scan.hpp"
+	"include/utility/ScopeGuard.hpp"
 	"include/utility/String.hpp"
 	"include/utility/Thread.hpp"
 	"include/utility/VtableHook.hpp"
