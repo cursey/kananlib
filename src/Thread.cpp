@@ -38,7 +38,7 @@ ThreadStates suspend_threads() {
             if (thread_handle != nullptr && snapshot_handle != INVALID_HANDLE_VALUE) {
                 auto state = std::make_unique<ThreadState>();
 
-                spdlog::info("Suspending {}", (uint32_t)te.th32ThreadID);
+                SPDLOG_INFO("Suspending {}", (uint32_t)te.th32ThreadID);
 
                 state->thread_id = te.th32ThreadID;
                 state->suspended = SuspendThread(thread_handle) > 0;
@@ -58,7 +58,7 @@ void resume_threads(const ThreadStates& states) {
         auto thread_handle = OpenThread(THREAD_SUSPEND_RESUME, FALSE, state->thread_id);
 
         if (thread_handle != nullptr) {
-            spdlog::info("Resuming {}", state->thread_id);
+            SPDLOG_INFO("Resuming {}", state->thread_id);
 
             ResumeThread(thread_handle);
             CloseHandle(thread_handle);

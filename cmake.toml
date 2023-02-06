@@ -1,6 +1,9 @@
 # Reference: https://build-cpp.github.io/cmkr/cmake-toml
 [project]
 name = "kananlib"
+cmake-before=""" 
+add_compile_options($<$<CXX_COMPILER_ID:MSVC>:/MP>)
+"""
 
 [vcpkg]
 version = "2022.07.25"
@@ -10,7 +13,7 @@ packages = ["spdlog", "bddisasm"]
 spdlog = { required = false }
 bddisasm = { required = false }
 
-[target.kananlib]
+[template.kananlib-template]
 type = "static"
 sources = ["src/*.cpp", "include/**.hpp"]
 include-directories = ["include"]
@@ -21,6 +24,13 @@ link-libraries = [
     "spdlog::spdlog", 
     "shlwapi"
 ]
+
+[target.kananlib]
+type = "kananlib-template"
+
+[target.kananlib-nolog]
+type = "kananlib-template"
+compile-definitions = ["SPDLOG_ACTIVE_LEVEL=SPDLOG_LEVEL_OFF"]
 
 # TODO: define a target for each of your executables/libraries like this:
 #[target.myexecutable]

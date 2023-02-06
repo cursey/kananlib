@@ -10,18 +10,18 @@ PointerHook::PointerHook(void** old_ptr, void* new_ptr)
     m_destination{new_ptr}
 {
     if (old_ptr == nullptr) {
-        spdlog::error("PointerHook: old_ptr is nullptr");
+        SPDLOG_ERROR("PointerHook: old_ptr is nullptr");
         throw std::invalid_argument("old_ptr cannot be nullptr");
     }
 
     if (IsBadReadPtr(old_ptr, sizeof(void*))) {
-        spdlog::error("PointerHook: old_ptr is not readable");
+        SPDLOG_ERROR("PointerHook: old_ptr is not readable");
         throw std::invalid_argument("old_ptr is not readable");
     }
 
     ProtectionOverride overrider{old_ptr, sizeof(void*), PAGE_EXECUTE_READWRITE};
 
-    spdlog::info("[PointerHook] Hooking {:x}->{:x} to {:x}", (uintptr_t)old_ptr, (uintptr_t)*old_ptr, (uintptr_t)new_ptr);
+    SPDLOG_INFO("[PointerHook] Hooking {:x}->{:x} to {:x}", (uintptr_t)old_ptr, (uintptr_t)*old_ptr, (uintptr_t)new_ptr);
 
     m_original = *old_ptr;
     *old_ptr = new_ptr;
@@ -37,7 +37,7 @@ bool PointerHook::remove() {
             ProtectionOverride overrider{m_replace_ptr, sizeof(void*), PAGE_EXECUTE_READWRITE};
             *m_replace_ptr = m_original;
         } catch (std::exception& e) {
-            spdlog::error("PointerHook: {}", e.what());
+            SPDLOG_ERROR("PointerHook: {}", e.what());
             return false;
         }
     }
@@ -51,7 +51,7 @@ bool PointerHook::restore() {
             ProtectionOverride overrider{m_replace_ptr, sizeof(void*), PAGE_EXECUTE_READWRITE};
             *m_replace_ptr = m_destination;
         } catch (std::exception& e) {
-            spdlog::error("PointerHook: {}", e.what());
+            SPDLOG_ERROR("PointerHook: {}", e.what());
             return false;
         }
     }
@@ -64,7 +64,7 @@ ProtectionOverride::ProtectionOverride(void* address, size_t size, uint32_t prot
     m_size{size}
 {
     if (!VirtualProtect(address, size, protection, (DWORD*)&m_old)) {
-        spdlog::error("PointerHook: VirtualProtect failed ({:x})", (uintptr_t)address);
+        SPDLOG_ERROR("PointerHook: VirtualProtect failed ({:x})", (uintptr_t)address);
         throw std::runtime_error("VirtualProtect failed");
     }
 }

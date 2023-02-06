@@ -27,6 +27,9 @@ if(CMKR_ROOT_PROJECT)
 	configure_file(cmake.toml cmake.toml COPYONLY)
 endif()
 
+ 
+add_compile_options($<$<CXX_COMPILER_ID:MSVC>:/MP>)
+
 project(kananlib)
 
 if(CMKR_ROOT_PROJECT AND NOT CMKR_DISABLE_VCPKG)
@@ -94,8 +97,6 @@ if(kananlib_SOURCES)
 	target_sources(kananlib PRIVATE ${kananlib_SOURCES})
 endif()
 
-source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${kananlib_SOURCES})
-
 target_compile_features(kananlib PUBLIC
 	cxx_std_20
 )
@@ -112,6 +113,80 @@ target_link_libraries(kananlib PUBLIC
 	bddisasm::bddisasm
 	spdlog::spdlog
 	shlwapi
+)
+
+unset(CMKR_TARGET)
+unset(CMKR_SOURCES)
+
+# Target kananlib-nolog
+set(CMKR_TARGET kananlib-nolog)
+set(kananlib-nolog_SOURCES "")
+
+list(APPEND kananlib-nolog_SOURCES
+	"src/Address.cpp"
+	"src/Config.cpp"
+	"src/Emulation.cpp"
+	"src/Input.cpp"
+	"src/Memory.cpp"
+	"src/Module.cpp"
+	"src/Patch.cpp"
+	"src/Pattern.cpp"
+	"src/PointerHook.cpp"
+	"src/RTTI.cpp"
+	"src/Registry.cpp"
+	"src/Scan.cpp"
+	"src/String.cpp"
+	"src/Thread.cpp"
+	"src/VtableHook.cpp"
+	"include/utility/Address.hpp"
+	"include/utility/Config.hpp"
+	"include/utility/Emulation.hpp"
+	"include/utility/Input.hpp"
+	"include/utility/Memory.hpp"
+	"include/utility/Module.hpp"
+	"include/utility/Patch.hpp"
+	"include/utility/Pattern.hpp"
+	"include/utility/PointerHook.hpp"
+	"include/utility/RTTI.hpp"
+	"include/utility/Registry.hpp"
+	"include/utility/Scan.hpp"
+	"include/utility/ScopeGuard.hpp"
+	"include/utility/String.hpp"
+	"include/utility/Thread.hpp"
+	"include/utility/VtableHook.hpp"
+)
+
+list(APPEND kananlib-nolog_SOURCES
+	cmake.toml
+)
+
+set(CMKR_SOURCES ${kananlib-nolog_SOURCES})
+add_library(kananlib-nolog STATIC)
+
+if(kananlib-nolog_SOURCES)
+	target_sources(kananlib-nolog PRIVATE ${kananlib-nolog_SOURCES})
+endif()
+
+target_compile_features(kananlib-nolog PUBLIC
+	cxx_std_20
+)
+
+target_compile_options(kananlib-nolog PUBLIC
+	"/EHa"
+)
+
+target_include_directories(kananlib-nolog PUBLIC
+	include
+)
+
+target_link_libraries(kananlib-nolog PUBLIC
+	bddisasm::bddisasm
+	spdlog::spdlog
+	shlwapi
+)
+
+target_compile_definitions(kananlib-nolog PUBLIC
+	SPDLOG_ACTIVE_LEVEL=SPDLOG_LEVEL_OFF
 )
 
 unset(CMKR_TARGET)

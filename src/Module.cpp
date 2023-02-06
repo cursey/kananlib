@@ -286,23 +286,23 @@ namespace utility {
         
         for (auto entry = peb->Ldr->InMemoryOrderModuleList.Flink; entry != &peb->Ldr->InMemoryOrderModuleList && entry != nullptr; entry = entry->Flink) {
             if (IsBadReadPtr(entry, sizeof(LIST_ENTRY))) {
-                spdlog::error("[PEB] entry {:x} is a bad pointer", (uintptr_t)entry);
+                SPDLOG_ERROR("[PEB] entry {:x} is a bad pointer", (uintptr_t)entry);
                 break;
             }
 
             auto ldr_entry = (_LDR_DATA_TABLE_ENTRY*)CONTAINING_RECORD(entry, _LDR_DATA_TABLE_ENTRY, InMemoryOrderLinks);
 
             if (IsBadReadPtr(ldr_entry, sizeof(_LDR_DATA_TABLE_ENTRY))) {
-                spdlog::error("[PEB] ldr entry {:x} is a bad pointer", (uintptr_t)ldr_entry);
+                SPDLOG_ERROR("[PEB] ldr entry {:x} is a bad pointer", (uintptr_t)ldr_entry);
                 break;
             }
 
             callback(entry, ldr_entry);
         }
     } catch(std::exception& e) {
-        spdlog::error("[PEB] exception while iterating modules: {}", e.what());
+        SPDLOG_ERROR("[PEB] exception while iterating modules: {}", e.what());
     } catch(...) {
-        spdlog::error("[PEB] unexpected exception while iterating modules. Continuing...");
+        SPDLOG_ERROR("[PEB] unexpected exception while iterating modules. Continuing...");
     }
 
     size_t get_module_count(std::wstring_view name) {
@@ -351,7 +351,7 @@ namespace utility {
                 entry->Flink->Blink = entry->Blink;
                 entry->Blink->Flink = entry->Flink;
                 
-                spdlog::info("{}", utility::narrow(lower_name));
+                SPDLOG_INFO("{}", utility::narrow(lower_name));
             }
         });
     }
@@ -378,12 +378,12 @@ namespace utility {
 
         foreach_module([&](LIST_ENTRY* entry, _LDR_DATA_TABLE_ENTRY* ldr_entry) {
             if (ldr_entry == nullptr || IsBadReadPtr(ldr_entry, sizeof(_LDR_DATA_TABLE_ENTRY))) {
-                spdlog::error("[!] Failed to read module entry, continuing...", (uintptr_t)ldr_entry);
+                SPDLOG_ERROR("[!] Failed to read module entry, continuing...", (uintptr_t)ldr_entry);
                 return;
             }
 
             if (IsBadReadPtr(ldr_entry->FullDllName.Buffer, ldr_entry->FullDllName.Length)) {
-                spdlog::error("[!] Failed to read module name, continuing...", (uintptr_t)ldr_entry);
+                SPDLOG_ERROR("[!] Failed to read module name, continuing...", (uintptr_t)ldr_entry);
                 return;
             }
 
@@ -394,7 +394,7 @@ namespace utility {
                     previous_name = ldr_entry->FullDllName.Buffer;
                 }
             } catch(...) {
-                spdlog::error("Could not determine name of module {:x}, continuing...", (uintptr_t)ldr_entry);
+                SPDLOG_ERROR("Could not determine name of module {:x}, continuing...", (uintptr_t)ldr_entry);
                 return;
             }
 
@@ -412,7 +412,7 @@ namespace utility {
                 if (path.parent_path() != current_path) {
                     // only log it once so the log doesn't get polluted
                     if (g_skipped_paths.count(lower_name) == 0) {
-                        spdlog::info("Skipping {}", utility::narrow(lower_name));
+                        SPDLOG_INFO("Skipping {}", utility::narrow(lower_name));
                         g_skipped_paths.insert(lower_name);
                     }
 
@@ -428,11 +428,11 @@ namespace utility {
                         std::filesystem::copy_file(path, new_path, std::filesystem::copy_options::overwrite_existing);
                     }
                 } catch(...) {
-                    spdlog::error("Failed to copy {} to {}", utility::narrow(path.wstring()), utility::narrow(new_path));
+                    SPDLOG_ERROR("Failed to copy {} to {}", utility::narrow(path.wstring()), utility::narrow(new_path));
                     new_path = std::filesystem::path{system_dir_view}.append(stripped_path).wstring() + path.extension().wstring();
                 }
 
-                spdlog::info("Creating new node for {} (0x{:x})", utility::narrow(lower_name), (uintptr_t)ldr_entry->DllBase);
+                SPDLOG_INFO("Creating new node for {} (0x{:x})", utility::narrow(lower_name), (uintptr_t)ldr_entry->DllBase);
 
                 const auto size = std::max<int32_t>(MAX_PATH+1, new_path.size()+1);
                 auto final_chars = new wchar_t[size]{ 0 };
@@ -444,19 +444,19 @@ namespace utility {
                 ldr_entry->FullDllName.Length = new_path.size() * sizeof(wchar_t);
                 ldr_entry->FullDllName.MaximumLength = size * sizeof(wchar_t);
 
-                spdlog::info("Done {} -> {}", utility::narrow(path.wstring()), utility::narrow(new_path));
+                SPDLOG_INFO("Done {} -> {}", utility::narrow(path.wstring()), utility::narrow(new_path));
             } catch (...) {
                 if (!previous_name.empty()) {
-                    spdlog::error("Failed {}", utility::narrow(previous_name));
+                    SPDLOG_ERROR("Failed {}", utility::narrow(previous_name));
                 } else {
-                    spdlog::error("Failed to read module name (2), continuing...");
+                    SPDLOG_ERROR("Failed to read module name (2), continuing...");
                 }
             }
         });
     } catch(std::exception& e) {
-        spdlog::error("Exception in spoof_module_paths_in_exe_dir {}", e.what());
+        SPDLOG_ERROR("Exception in spoof_module_paths_in_exe_dir {}", e.what());
     } catch(...) {
-        spdlog::error("Unexpected error in spoof_module_paths_in_exe_dir. Continuing...");
+        SPDLOG_ERROR("Unexpected error in spoof_module_paths_in_exe_dir. Continuing...");
     }
 
     optional<uintptr_t> ptr_from_rva(uint8_t* dll, uintptr_t rva) {

@@ -459,18 +459,18 @@ namespace utility {
                     if (ix.BranchInfo.IsBranch && ix.BranchInfo.IsConditional) {
                         // Determine how to get the destination address from the ix
                         // and push it to the branches deque
-                        spdlog::info("Conditional Branch detected: {:x}", (uintptr_t)ip);
+                        SPDLOG_INFO("Conditional Branch detected: {:x}", (uintptr_t)ip);
 
                         if (auto dest = utility::resolve_displacement((uintptr_t)ip); dest) {
                             if (result != ExhaustionResult::STEP_OVER) {
                                 branches.push_back((uint8_t*)*dest);
                             }
                         } else {
-                            spdlog::error("Failed to resolve displacement for {:x}", (uintptr_t)ip);
-                            spdlog::error(" TODO: Fix this");
+                            SPDLOG_ERROR("Failed to resolve displacement for {:x}", (uintptr_t)ip);
+                            SPDLOG_ERROR(" TODO: Fix this");
                         }
                     } else if (ix.BranchInfo.IsBranch && !ix.BranchInfo.IsConditional) {
-                        spdlog::info("Unconditional Branch detected: {:x}", (uintptr_t)ip);
+                        SPDLOG_INFO("Unconditional Branch detected: {:x}", (uintptr_t)ip);
 
                         if (auto dest = utility::resolve_displacement((uintptr_t)ip); dest) {
                             if (std::string_view{ix.Mnemonic}.starts_with("JMP")) {
@@ -481,8 +481,8 @@ namespace utility {
                                 }
                             }
                         } else {
-                            spdlog::error("Failed to resolve displacement for {:x}", (uintptr_t)ip);
-                            spdlog::error(" TODO: Fix this");
+                            SPDLOG_ERROR("Failed to resolve displacement for {:x}", (uintptr_t)ip);
+                            SPDLOG_ERROR(" TODO: Fix this");
                         }
                     }
                 }
@@ -541,7 +541,7 @@ namespace utility {
             const auto entry = exception_directory_ptr[i];
 
             if (module + entry.EndAddress >= module_end || entry.EndAddress >= module_size) {
-                spdlog::error("Bad end address at {:x} {:x}", module + entry.EndAddress, module_end);
+                SPDLOG_ERROR("Bad end address at {:x} {:x}", module + entry.EndAddress, module_end);
                 continue;
             }
 
@@ -559,7 +559,7 @@ namespace utility {
         }
 
         if (last) {
-            spdlog::info("Found function start for {:x} at {:x}", middle, *last);
+            SPDLOG_INFO("Found function start for {:x} at {:x}", middle, *last);
             return last;
         }
 
@@ -574,7 +574,7 @@ namespace utility {
         }
 
         for (auto func = find_function_start(middle); func.has_value(); func = find_function_start(*func - 1)) {
-            spdlog::info(" Checking if {:x} is a real function", *func);
+            SPDLOG_INFO(" Checking if {:x} is a real function", *func);
 
             const auto ref = utility::scan_displacement_reference(module, *func);
 
@@ -585,7 +585,7 @@ namespace utility {
             const auto resolved = utility::resolve_instruction(*ref);
 
             if (!resolved) {
-                spdlog::error(" Could not resolve instruction");
+                SPDLOG_ERROR(" Could not resolve instruction");
                 continue;
             }
 
@@ -598,26 +598,26 @@ namespace utility {
     }
 
     std::optional<uintptr_t> find_function_from_string_ref(HMODULE module, std::wstring_view str, bool zero_terminated) {
-        spdlog::info("Scanning module {} for string reference {}", utility::get_module_path(module).value_or("UNKNOWN"), utility::narrow(str));
+        SPDLOG_INFO("Scanning module {} for string reference {}", utility::get_module_path(module).value_or("UNKNOWN"), utility::narrow(str));
 
         const auto str_data = utility::scan_string(module, str.data(), zero_terminated);
 
         if (!str_data) {
-            spdlog::error("Failed to find string for {}", utility::narrow(str.data()));
+            SPDLOG_ERROR("Failed to find string for {}", utility::narrow(str.data()));
             return std::nullopt;
         }
 
         const auto str_ref = utility::scan_displacement_reference(module, *str_data);
 
         if (!str_ref) {
-            spdlog::error("Failed to find reference to string for {}", utility::narrow(str.data()));
+            SPDLOG_ERROR("Failed to find reference to string for {}", utility::narrow(str.data()));
             return std::nullopt;
         }
 
         const auto func_start = find_function_start(*str_ref);
 
         if (!func_start) {
-            spdlog::error("Failed to find function start for {}", utility::narrow(str.data()));
+            SPDLOG_ERROR("Failed to find function start for {}", utility::narrow(str.data()));
             return std::nullopt;
         }
 
@@ -651,19 +651,19 @@ namespace utility {
 
     // Same as the previous, but it keeps going upwards until utility::scan_ptr returns something
     std::optional<uintptr_t> find_virtual_function_from_string_ref(HMODULE module, std::wstring_view str, bool zero_terminated) {
-        spdlog::info("Scanning module {} for string reference {}", utility::get_module_path(module).value_or("UNKNOWN"), utility::narrow(str));
+        SPDLOG_INFO("Scanning module {} for string reference {}", utility::get_module_path(module).value_or("UNKNOWN"), utility::narrow(str));
 
         const auto str_data = utility::scan_string(module, str.data(), zero_terminated);
 
         if (!str_data) {
-            spdlog::error("Failed to find string for {}", utility::narrow(str.data()));
+            SPDLOG_ERROR("Failed to find string for {}", utility::narrow(str.data()));
             return std::nullopt;
         }
 
         const auto str_ref = utility::scan_displacement_reference(module, *str_data);
 
         if (!str_ref) {
-            spdlog::error("Failed to find reference to string for {}", utility::narrow(str.data()));
+            SPDLOG_ERROR("Failed to find reference to string for {}", utility::narrow(str.data()));
             return std::nullopt;
         }
 
@@ -674,7 +674,7 @@ namespace utility {
         const auto ix = decode_one((uint8_t*)ip);
 
         if (!ix) {
-            spdlog::error("Failed to decode instruction at 0x{:x}", ip);
+            SPDLOG_ERROR("Failed to decode instruction at 0x{:x}", ip);
             return std::nullopt;
         }
 
@@ -703,11 +703,11 @@ namespace utility {
         const auto reference_point = find_function_start(middle);
 
         if (!reference_point) {
-            spdlog::error("Failed to find function start for 0x{:x}, cannot resolve instruction", middle);
+            SPDLOG_ERROR("Failed to find function start for 0x{:x}, cannot resolve instruction", middle);
             return std::nullopt;
         }
 
-        spdlog::info("Reference point for {:x}: {:x}", middle, *reference_point);
+        SPDLOG_INFO("Reference point for {:x}: {:x}", middle, *reference_point);
 
         // Now keep disassembling forward until we run into an instruction
         // whose address is <= middle or address + size > middle
@@ -715,7 +715,7 @@ namespace utility {
             const auto ix = decode_one(ip);
 
             if (!ix) {
-                spdlog::error("Failed to decode instruction at 0x{:x}, cannot resolve instruction", (uintptr_t)ip);
+                SPDLOG_ERROR("Failed to decode instruction at 0x{:x}, cannot resolve instruction", (uintptr_t)ip);
                 return std::nullopt;
             }
 
