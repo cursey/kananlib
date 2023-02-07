@@ -475,6 +475,7 @@ namespace utility {
                         if (auto dest = utility::resolve_displacement((uintptr_t)ip); dest) {
                             if (std::string_view{ix.Mnemonic}.starts_with("JMP")) {
                                 ip = (uint8_t*)*dest;
+                                continue;
                             } else {
                                 if (result != ExhaustionResult::STEP_OVER) {
                                     branches.push_back((uint8_t*)*dest);
