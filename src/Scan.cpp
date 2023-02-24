@@ -1,6 +1,8 @@
 #include <cstdint>
 #include <unordered_set>
 #include <deque>
+#include <omp.h>
+#include <ppl.h>
 
 #include <spdlog/spdlog.h>
 
@@ -538,18 +540,21 @@ namespace utility {
         std::optional<uintptr_t> last{};
         uint32_t nearest_distance = 0xFFFFFFFF;
 
-        for (auto i = 0; i < exception_directory_entries; i++) {
+        std::mutex mtx{};
+
+        concurrency::parallel_for<size_t>(0, exception_directory_entries, [&](size_t i) {
             const auto entry = exception_directory_ptr[i];
 
             if (module + entry.EndAddress >= module_end || entry.EndAddress >= module_size) {
                 SPDLOG_ERROR("Bad end address at {:x} {:x}", module + entry.EndAddress, module_end);
-                continue;
+                return;
             }
 
             // Check if the middle address is within the range of the function
             if (entry.BeginAddress <= middle_rva && middle_rva <= entry.EndAddress) {
                 const auto distance = middle_rva - entry.BeginAddress;
 
+                std::scoped_lock _{mtx};
                 if (distance < nearest_distance) {
                     nearest_distance = distance;
 
@@ -557,7 +562,7 @@ namespace utility {
                     last = module + entry.BeginAddress;
                 }
             }
-        }
+        });
 
         if (last) {
             SPDLOG_INFO("Found function start for {:x} at {:x}", middle, *last);
