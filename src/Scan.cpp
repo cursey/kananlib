@@ -455,7 +455,8 @@ namespace utility {
                     return;
                 }
 
-                if (ix.IsRipRelative) {
+                // We dont want to follow indirect branches, we aren't emulating
+                if (ix.IsRipRelative && !ix.BranchInfo.IsIndirect) {
                     if (ix.BranchInfo.IsBranch && ix.BranchInfo.IsConditional) {
                         // Determine how to get the destination address from the ix
                         // and push it to the branches deque
@@ -486,6 +487,8 @@ namespace utility {
                             SPDLOG_ERROR(" TODO: Fix this");
                         }
                     }
+                } else if (ix.BranchInfo.IsIndirect) {
+                    break; // We dont want to disassemble anything after an indirect branch
                 }
 
                 ip += ix.Length;
