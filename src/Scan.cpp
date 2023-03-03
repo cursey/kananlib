@@ -489,8 +489,10 @@ namespace utility {
                             SPDLOG_ERROR(" TODO: Fix this");
                         }
                     }
-                } else if (ix.BranchInfo.IsIndirect) {
-                    break; // We dont want to disassemble anything after an indirect branch
+                } else if (ix.BranchInfo.IsBranch && !ix.BranchInfo.IsConditional) {
+                    if (!std::string_view{ix.Mnemonic}.starts_with("CALL")) {
+                        break;
+                    }
                 }
 
                 ip += ix.Length;
