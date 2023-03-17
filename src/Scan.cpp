@@ -275,7 +275,7 @@ namespace utility {
 
         const auto end = start + length;
 
-        for (auto i = start; i < end; i += sizeof(uint8_t)) {
+        for (auto i = start; i + 4 < end; i += sizeof(uint8_t)) {
             if (calculate_absolute(i, 4) == ptr) {
                 return i;
             }
@@ -296,7 +296,7 @@ namespace utility {
         auto pat = utility::Pattern{ preceded_by };
         const auto pat_len = pat.pattern_len();
 
-        for (auto i = (uintptr_t)module; i < end; i += sizeof(uint8_t)) {
+        for (auto i = (uintptr_t)module; i + 4 < end; i += sizeof(uint8_t)) {
             if (calculate_absolute(i, 4) == ptr) {
                 if (pat.find(i - pat_len, pat_len)) {
                     return i;
@@ -317,10 +317,21 @@ namespace utility {
         return scan_displacement_reference((uintptr_t)module, *module_size, ptr);
     }
 
-    std::optional<uintptr_t> scan_displacement_reference(uintptr_t start, size_t length, uintptr_t ptr) {
+    std::vector<uintptr_t> scan_displacement_references(HMODULE module, uintptr_t ptr) {
+        const auto module_size = get_module_size(module);
+
+        if (!module_size) {
+            return {};
+        }
+
+        return scan_displacement_references((uintptr_t)module, *module_size, ptr);
+    }
+
+    std::vector<uintptr_t> scan_displacement_references(uintptr_t start, size_t length, uintptr_t ptr) {
+        std::vector<uintptr_t> results{};
         const auto end = (start + length) - sizeof(void*);
 
-        for (auto i = (uintptr_t)start; i < end; i += sizeof(uint8_t)) {
+        for (auto i = (uintptr_t)start; i + 4 < end; i += sizeof(uint8_t)) {
             if (calculate_absolute(i, 4) == ptr) {
                 const auto resolved = utility::resolve_instruction(i);
 
@@ -328,13 +339,23 @@ namespace utility {
                     const auto displacement = utility::resolve_displacement(resolved->addr);
 
                     if (displacement && *displacement == ptr) {
-                        return i;
+                        results.push_back(i);
                     }
                 }
             }
         }
 
-        return {};
+        return results;
+    }
+
+    std::optional<uintptr_t> scan_displacement_reference(uintptr_t start, size_t length, uintptr_t ptr) {
+        const auto results = scan_displacement_references(start, length, ptr);
+
+        if (results.empty()) {
+            return {};
+        }
+
+        return results[0];
     }
     
     std::optional<uintptr_t> scan_opcode(uintptr_t ip, size_t num_instructions, uint8_t opcode) {
