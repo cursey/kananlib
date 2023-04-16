@@ -95,6 +95,15 @@ namespace utility {
         return utility::narrow(filename);
     }
 
+    std::optional<std::wstring> get_module_pathw(HMODULE module) {
+        wchar_t filename[MAX_PATH]{0};
+        if (GetModuleFileNameW(module, filename, MAX_PATH) >= MAX_PATH) {
+            return {};
+        }
+
+        return filename;
+    }
+
     std::optional<std::string> get_module_directory(HMODULE module) {
         wchar_t filename[MAX_PATH]{ 0 };
         if (GetModuleFileNameW(module, filename, MAX_PATH) >= MAX_PATH) {
