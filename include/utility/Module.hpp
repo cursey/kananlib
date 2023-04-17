@@ -28,6 +28,7 @@ namespace utility {
     std::optional<uintptr_t> get_imagebase_va_from_ptr(Address dll, Address base, void* ptr);
 
     std::optional<std::string> get_module_path(HMODULE module);
+    std::optional<std::wstring> get_module_pathw(HMODULE module);
     std::optional<std::string> get_module_directory(HMODULE module);
     std::optional<std::wstring> get_module_directoryw(HMODULE module);
     HMODULE load_module_from_current_directory(const std::wstring& module);
