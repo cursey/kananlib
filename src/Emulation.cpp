@@ -2,8 +2,11 @@
 #include <bdshemu.h>
 #include <disasmtypes.h>
 
+#include <spdlog/spdlog.h>
+
 #include <utility/Module.hpp>
 #include <utility/Emulation.hpp>
+#include <utility/Scan.hpp>
 
 namespace utility {
 ShemuContext::ShemuContext(uintptr_t base, size_t buffer_size, size_t stack_size) 
@@ -101,5 +104,64 @@ ShemuContext emulate(HMODULE module, uintptr_t ip, size_t num_instructions) {
     ShemuContext out{module};
     out.emulate(ip, num_instructions);
     return out;
+}
+
+void emulate(HMODULE module, uintptr_t ip, size_t num_instructions, std::function<ExhaustionResult(const ShemuContextExtended& ctx)> callback) {
+    utility::ShemuContext emu{module};
+
+    emu.ctx->MemThreshold = 100;
+    emu.ctx->Registers.RegRip = ip;
+
+    emulate(module, ip, num_instructions, emu, callback);
+}
+
+void emulate(HMODULE module, uintptr_t ip, size_t num_instructions, ShemuContext& emu, std::function<ExhaustionResult(const ShemuContextExtended& ctx)> callback) {
+    utility::ShemuContextExtended ctx{&emu, false};
+
+    while (true) try {
+        if (emu.ctx->InstructionsCount > num_instructions) {
+            break;
+        }
+
+        const auto ix = utility::decode_one((uint8_t*)emu.ctx->Registers.RegRip);
+
+        if (!ix) {
+            break;
+        }
+
+        ctx.next.ix = *ix;
+        ctx.next.writes_to_memory = (ix->MemoryAccess & ND_ACCESS_ANY_WRITE) != 0;
+
+        const auto result = callback(ctx);
+
+        if (result == ExhaustionResult::BREAK) {
+            break;
+        }
+
+        if (result == ExhaustionResult::STEP_OVER) {
+            emu.ctx->Registers.RegRip += ctx.next.ix.Length;
+            emu.ctx->Instruction = *ix;
+            ++emu.ctx->InstructionsCount;
+            continue;
+        }
+
+        // Continue
+        const auto emu_failed = emu.emulate() != SHEMU_SUCCESS;
+
+        if (emu_failed) {
+            const auto ix_cur = utility::decode_one((uint8_t*)emu.ctx->Registers.RegRip);
+
+            if (!ix_cur) {
+                break;
+            }
+
+            emu.ctx->Registers.RegRip += ix_cur->Length;
+            emu.ctx->Instruction = *ix_cur;
+            ++emu.ctx->InstructionsCount;
+        }
+    } catch (...) {
+        spdlog::error("Exception in emulation loop");
+        break;
+    }
 }
 }

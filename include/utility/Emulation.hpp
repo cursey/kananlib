@@ -3,8 +3,11 @@
 #include <memory>
 #include <vector>
 #include <cstdint>
+#include <functional>
 
 #include <windows.h>
+
+#include "Scan.hpp"
 
 struct _SHEMU_CONTEXT;
 typedef struct _SHEMU_CONTEXT SHEMU_CONTEXT;
@@ -25,4 +28,16 @@ struct ShemuContext {
 
 ShemuContext emulate(uintptr_t base, size_t size, uintptr_t ip, size_t num_instructions);
 ShemuContext emulate(HMODULE module, uintptr_t ip, size_t num_instructions);
+
+struct ShemuContextExtended {
+    ShemuContext* ctx;
+
+    struct {
+        INSTRUX ix{};
+        bool writes_to_memory{false};
+    } next;
+};
+
+void emulate(HMODULE module, uintptr_t ip, size_t num_instructions, std::function<ExhaustionResult(const ShemuContextExtended& ctx)> callback);
+void emulate(HMODULE module, uintptr_t ip, size_t num_instructions, ShemuContext& start_ctx, std::function<ExhaustionResult(const ShemuContextExtended& ctx)> callback);
 }
