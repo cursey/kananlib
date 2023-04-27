@@ -126,11 +126,12 @@ void emulate(HMODULE module, uintptr_t ip, size_t num_instructions, ShemuContext
         const auto ix = utility::decode_one((uint8_t*)emu.ctx->Registers.RegRip);
 
         if (!ix) {
+            spdlog::error("Failed to decode instruction at {:x}", emu.ctx->Registers.RegRip);
             break;
         }
 
         ctx.next.ix = *ix;
-        ctx.next.writes_to_memory = (ix->MemoryAccess & ND_ACCESS_ANY_WRITE) != 0;
+        ctx.next.writes_to_memory = (ix->MemoryAccess & ND_ACCESS_ANY_WRITE) != 0 && !ix->BranchInfo.IsBranch;
 
         const auto result = callback(ctx);
 
@@ -149,9 +150,12 @@ void emulate(HMODULE module, uintptr_t ip, size_t num_instructions, ShemuContext
         const auto emu_failed = emu.emulate() != SHEMU_SUCCESS;
 
         if (emu_failed) {
+            spdlog::error("Emulation failed at {:x}", emu.ctx->Registers.RegRip);
+
             const auto ix_cur = utility::decode_one((uint8_t*)emu.ctx->Registers.RegRip);
 
             if (!ix_cur) {
+                spdlog::error("Failed to decode instruction at {:x}", emu.ctx->Registers.RegRip);
                 break;
             }
 
