@@ -534,10 +534,10 @@ namespace utility {
         }
     }
 
-    std::optional<uintptr_t> find_function_start(uintptr_t middle) {
+    PIMAGE_RUNTIME_FUNCTION_ENTRY find_function_entry(uintptr_t middle) {
         const auto module = (uintptr_t)utility::get_module_within(middle).value_or(nullptr);
 
-        if (module == 0) {
+        if (module == 0 || middle == 0) {
             return {};
         }
 
@@ -563,16 +563,22 @@ namespace utility {
         // Get the number of entries in the exception directory
         const auto exception_directory_entries = exception_directory_size / sizeof(IMAGE_RUNTIME_FUNCTION_ENTRY);
 
-        std::optional<uintptr_t> last{};
+        PIMAGE_RUNTIME_FUNCTION_ENTRY last = nullptr;
         uint32_t nearest_distance = 0xFFFFFFFF;
 
         std::mutex mtx{};
 
         concurrency::parallel_for<size_t>(0, exception_directory_entries, [&](size_t i) {
-            const auto entry = exception_directory_ptr[i];
+            auto& entry = exception_directory_ptr[i];
 
             if (module + entry.EndAddress >= module_end || entry.EndAddress >= module_size) {
                 SPDLOG_ERROR("Bad end address at {:x} {:x}", module + entry.EndAddress, module_end);
+                return;
+            }
+
+            if (entry.BeginAddress == middle_rva) {
+                std::scoped_lock _{mtx};
+                last = &entry;
                 return;
             }
 
@@ -585,14 +591,20 @@ namespace utility {
                     nearest_distance = distance;
 
                     // Return the start address of the function
-                    last = module + entry.BeginAddress;
+                    last = &entry;
                 }
             }
         });
 
-        if (last) {
-            SPDLOG_INFO("Found function start for {:x} at {:x}", middle, *last);
-            return last;
+        return last;
+    }
+
+    std::optional<uintptr_t> find_function_start(uintptr_t middle) {
+        const auto entry = find_function_entry(middle);
+
+        if (entry != nullptr) {
+            SPDLOG_INFO("Found function start for {:x} at {:x}", middle, entry->BeginAddress);
+            return (uintptr_t)entry->BeginAddress + (uintptr_t)utility::get_module_within(middle).value_or(nullptr);
         }
 
         return std::nullopt;

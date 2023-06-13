@@ -60,6 +60,7 @@ namespace utility {
     };
     void exhaustive_decode(uint8_t* ip, size_t max_size, std::function<ExhaustionResult(INSTRUX&, uintptr_t)> callback);
 
+    PIMAGE_RUNTIME_FUNCTION_ENTRY find_function_entry(uintptr_t middle);
     std::optional<uintptr_t> find_function_start(uintptr_t middle);
     // same as prev, but keeps going backwards until the "function" it lands on
     // is actually called somewhere within the module
