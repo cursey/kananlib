@@ -579,6 +579,11 @@ namespace utility {
             if (entry.BeginAddress == middle_rva) {
                 std::scoped_lock _{mtx};
                 last = &entry;
+                nearest_distance = 0;
+                return;
+            }
+
+            if (nearest_distance == 0) {
                 return;
             }
 
