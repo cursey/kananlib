@@ -743,7 +743,7 @@ namespace utility {
 
                 if (middle >= ip && middle < ip + ix.Length) {
                     result = fn;
-                    SPDLOG_INFO("Found encapsulating function at 0x{:x} for {:x} within vtable {:x}", fn, middle, vtable);
+                    SPDLOG_INFO("Found encapsulating function at 0x{:x} for {:x} within vtable {:x} (index {})", fn, middle, vtable, i);
                     return utility::ExhaustionResult::BREAK;
                 }
 
