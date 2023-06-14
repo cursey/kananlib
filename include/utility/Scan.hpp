@@ -71,6 +71,10 @@ namespace utility {
     std::optional<uintptr_t> find_virtual_function_start(uintptr_t middle);
     std::optional<uintptr_t> find_virtual_function_from_string_ref(HMODULE module, std::wstring_view str, bool zero_terminated = false);
 
+    // Given any address/instruction within a function, walk a virtual table and disassemble to see if
+    // any of the given functions contain the address/instruction
+    std::optional<uintptr_t> find_encapsulating_virtual_function(uintptr_t vtable, size_t walk_amount, uintptr_t middle);
+
     std::optional<uintptr_t> resolve_displacement(uintptr_t ip);
 
     struct Resolved {

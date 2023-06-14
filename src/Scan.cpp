@@ -718,6 +718,37 @@ namespace utility {
 
         return find_virtual_function_start(*str_ref);
     }
+    
+    std::optional<uintptr_t> find_encapsulating_virtual_function(uintptr_t vtable, size_t walk_amount, uintptr_t middle) {
+        if (middle == 0 || walk_amount == 0 || vtable == 0 || IsBadReadPtr((void*)vtable, sizeof(void*) * walk_amount)) {
+            return std::nullopt;
+        }
+
+        std::optional<uintptr_t> result{};
+
+        for (size_t i = 0; i < walk_amount; ++i) {
+            const auto fn = *(uintptr_t*)(vtable + (sizeof(void*) * i));
+            if (fn == 0 || IsBadReadPtr((void*)fn, 8)) {
+                continue;
+            }
+
+            utility::exhaustive_decode((uint8_t*)fn, 200, [&](INSTRUX& ix, uintptr_t ip) -> utility::ExhaustionResult {
+                if (result) {
+                    return utility::ExhaustionResult::BREAK;
+                }
+
+                if (middle >= ip && middle < ip + ix.Length) {
+                    result = fn;
+                    SPDLOG_INFO("Found encapsulating function at 0x{:x} for {:x} within vtable {:x}", fn, middle, vtable);
+                    return utility::ExhaustionResult::BREAK;
+                }
+
+                return utility::ExhaustionResult::CONTINUE;
+            });
+        }
+
+        return result;
+    }
 
     std::optional<uintptr_t> resolve_displacement(uintptr_t ip) {
         const auto ix = decode_one((uint8_t*)ip);
