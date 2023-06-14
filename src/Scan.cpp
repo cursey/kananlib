@@ -462,7 +462,7 @@ namespace utility {
                 }
 
                 INSTRUX ix{};
-                const auto status = NdDecodeEx(&ix, ip, 1000, ND_CODE_64, ND_DATA_64);
+                const auto status = NdDecodeEx(&ix, ip, 64, ND_CODE_64, ND_DATA_64);
 
                 if (!ND_SUCCESS(status)) {
                     break;
@@ -508,6 +508,37 @@ namespace utility {
                         } else {
                             SPDLOG_ERROR("Failed to resolve displacement for {:x}", (uintptr_t)ip);
                             SPDLOG_ERROR(" TODO: Fix this");
+                        }
+                    }
+                } else if (ix.IsRipRelative && ip[0] == 0xFF && ip[1] == 0x25) { // jmp qword ptr [rip+0xdeadbeef]
+                    SPDLOG_INFO("Indirect jmp detected: {:x}", (uintptr_t)ip);
+                    const auto dest = utility::calculate_absolute((uintptr_t)ip + 2);
+
+                    if (dest != 0 && dest != (uintptr_t)ip && !IsBadReadPtr((void*)dest, sizeof(void*))) {
+                        const auto real_dest = *(uintptr_t*)dest;
+
+                        // Cannot step over jmps
+                        if (real_dest != 0 && real_dest != (uintptr_t)ip && !IsBadReadPtr((void*)real_dest, sizeof(void*))) {
+                            //branches.push_back((uint8_t*)real_dest);
+                            SPDLOG_INFO("Indirect jmp destination: {:x}", (uintptr_t)real_dest);
+                            ip = (uint8_t*)real_dest;
+                            continue;
+                        }
+                    }
+
+                    SPDLOG_ERROR("Failed to resolve indirect jmp destination: {:x}", (uintptr_t)ip);
+                    break;
+                } else if (ix.IsRipRelative && ip[0] == 0xFF && ip[1] == 0x15) { // call qword ptr [rip+0xdeadbeef]
+                    SPDLOG_INFO("Indirect call detected: {:x}", (uintptr_t)ip);
+
+                    const auto dest = utility::calculate_absolute((uintptr_t)ip + 2);
+
+                    if (dest != 0 && dest != (uintptr_t)ip && !IsBadReadPtr((void*)dest, sizeof(void*))) {
+                        const auto real_dest = *(uintptr_t*)dest;
+
+                        if (real_dest != 0 && real_dest != (uintptr_t)ip && !IsBadReadPtr((void*)real_dest, sizeof(void*)) && result != ExhaustionResult::STEP_OVER) {
+                            branches.push_back((uint8_t*)real_dest);
+                            SPDLOG_INFO("Indirect call destination: {:x}", (uintptr_t)real_dest);
                         }
                     }
                 } else if (ix.BranchInfo.IsBranch && !ix.BranchInfo.IsConditional) {
