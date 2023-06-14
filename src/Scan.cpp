@@ -725,6 +725,7 @@ namespace utility {
         }
 
         std::optional<uintptr_t> result{};
+        std::unordered_set<uintptr_t> seen{};
 
         for (size_t i = 0; i < walk_amount; ++i) {
             const auto fn = *(uintptr_t*)(vtable + (sizeof(void*) * i));
@@ -740,6 +741,14 @@ namespace utility {
                 if (result) {
                     return utility::ExhaustionResult::BREAK;
                 }
+
+                // We don't treat every new function as a valid path, we need to check if we've seen it before
+                // or else execution times will balloon
+                if (seen.contains(ip)) {
+                    return utility::ExhaustionResult::BREAK;
+                }
+
+                seen.insert(ip);
 
                 if (middle >= ip && middle < ip + ix.Length) {
                     result = fn;
