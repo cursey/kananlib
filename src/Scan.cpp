@@ -732,6 +732,10 @@ namespace utility {
                 continue;
             }
 
+            if (result) {
+                break;
+            }
+
             utility::exhaustive_decode((uint8_t*)fn, 200, [&](INSTRUX& ix, uintptr_t ip) -> utility::ExhaustionResult {
                 if (result) {
                     return utility::ExhaustionResult::BREAK;
