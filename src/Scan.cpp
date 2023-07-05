@@ -704,6 +704,84 @@ namespace utility {
         return func_start;
     }
 
+    std::optional<uintptr_t> find_function_with_string_refs(HMODULE module, std::wstring_view a, std::wstring_view b, bool follow_calls) {
+        SPDLOG_INFO("Scanning module {} for string references {} and {}", utility::get_module_path(module).value_or("UNKNOWN"), utility::narrow(a), utility::narrow(b));
+
+        // We're not going to bother finding the b strings, we will just disassemble the function that contains the a string
+        // until we run into a reference to the b string
+        const auto a_datas = utility::scan_strings(module, a.data(), false);
+
+        if (a_datas.empty()) {
+            SPDLOG_ERROR("Failed to find strings for {}", utility::narrow(a.data()));
+            return std::nullopt;
+        }
+
+        std::unordered_set<uintptr_t> seen_ips{};
+
+        for (auto a_data : a_datas) {
+            const auto a_refs = utility::scan_displacement_references(module, a_data);
+
+            if (a_refs.empty()) {
+                SPDLOG_ERROR("Failed to find references to string for {}", utility::narrow(a.data()));
+                continue;
+            }
+
+            for (auto a_ref : a_refs) {
+                const auto func_start = find_function_start(a_ref);
+
+                if (!func_start) {
+                    SPDLOG_ERROR("Failed to find function start for {}", utility::narrow(a.data()));
+                    continue;
+                }
+
+                bool is_correct_function = false;
+
+                utility::exhaustive_decode((uint8_t*)*func_start, 1000, [&](INSTRUX& ix, uintptr_t ip) -> ExhaustionResult {
+                    if (!follow_calls && std::string_view{ix.Mnemonic}.starts_with("CALL")) {
+                        return ExhaustionResult::STEP_OVER;
+                    }
+
+                    if (seen_ips.contains(ip) || is_correct_function) {
+                        return ExhaustionResult::BREAK;
+                    }
+
+                    seen_ips.insert(ip);
+
+                    const auto displacement = utility::resolve_displacement(ip);
+
+                    if (!displacement) {
+                        return ExhaustionResult::CONTINUE;
+                    }
+
+                    try {
+                        const auto potential_string = (wchar_t*)*displacement;
+
+                        if (IsBadReadPtr(potential_string, b.length() * sizeof(wchar_t))) {
+                            return ExhaustionResult::CONTINUE;
+                        }
+
+                        if (std::memcmp(potential_string, b.data(), b.length() * sizeof(wchar_t)) == 0) {
+                            SPDLOG_INFO("Found correct displacement at 0x{:x}", ip);
+                            is_correct_function = true;
+                            return ExhaustionResult::BREAK;
+                        }
+                    } catch(...) {
+
+                    }
+
+                    return ExhaustionResult::CONTINUE;
+                });
+
+                if (is_correct_function) {
+                    return func_start;
+                }
+            }
+        }
+
+        SPDLOG_ERROR("Failed to find function for {} and {}", utility::narrow(a.data()), utility::narrow(b.data()));
+        return std::nullopt;
+    }
+
     // Same as the previous, but it keeps going upwards until utility::scan_ptr returns something
     std::optional<uintptr_t> find_virtual_function_start(uintptr_t middle) {
         auto module = utility::get_module_within(middle).value_or(nullptr);

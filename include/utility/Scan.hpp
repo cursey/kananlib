@@ -67,6 +67,10 @@ namespace utility {
     std::optional<uintptr_t> find_function_start_with_call(uintptr_t middle);
     std::optional<uintptr_t> find_function_from_string_ref(HMODULE module, std::wstring_view str, bool zero_terminated = false);
 
+    // finds the function(s) containing the A string, and then
+    // disassembles each one looking for a reference to data that contains the B string
+    std::optional<uintptr_t> find_function_with_string_refs(HMODULE module, std::wstring_view a, std::wstring_view b, bool follow_calls = false);
+
     // Same as the previous, but it keeps going upwards until utility::scan_ptr returns something
     std::optional<uintptr_t> find_virtual_function_start(uintptr_t middle);
     std::optional<uintptr_t> find_virtual_function_from_string_ref(HMODULE module, std::wstring_view str, bool zero_terminated = false);
