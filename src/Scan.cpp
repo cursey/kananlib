@@ -930,4 +930,36 @@ namespace utility {
 
         return std::nullopt;
     }
+
+    std::vector<Resolved> get_disassembly_behind(uintptr_t middle) {
+        const auto reference_point = find_function_start(middle);
+
+        if (!reference_point) {
+            SPDLOG_ERROR("Failed to find function start for 0x{:x}, cannot resolve instruction", middle);
+            return {};
+        }
+
+        std::vector<Resolved> out{};
+
+        SPDLOG_INFO("Reference point for {:x}: {:x}", middle, *reference_point);
+
+        for (auto ip = (uint8_t*)*reference_point;;) {
+            const auto ix = decode_one(ip);
+
+            if (!ix) {
+                SPDLOG_ERROR("Failed to decode instruction at 0x{:x}, cannot resolve instruction", (uintptr_t)ip);
+                return {};
+            }
+
+            if (middle >= (uintptr_t)ip && middle < (uintptr_t)ip + ix->Length) {
+                break;
+            }
+            
+            out.push_back(Resolved{(uintptr_t)ip, *ix});
+
+            ip += ix->Length;
+        }
+
+        return out;
+    }
 }

@@ -86,4 +86,8 @@ namespace utility {
         INSTRUX instrux{};
     };
     std::optional<Resolved> resolve_instruction(uintptr_t middle); // finds the start of the instruction given an address in the middle of the instruction 
+
+    // Finds the function start given the middle, and then disassembles and stores all instructions until it hits the middle
+    // We can use this to "disassemble" backwards from the middle of an instruction
+    std::vector<Resolved> get_disassembly_behind(uintptr_t middle);
 }
