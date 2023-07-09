@@ -446,6 +446,8 @@ namespace utility {
     // exhaustive_decode decodes until it hits something like a return, int3, fails, etc
     // except when it notices a conditional jmp, it will decode both branches separately
     void exhaustive_decode(uint8_t* start, size_t max_size, std::function<ExhaustionResult(INSTRUX&, uintptr_t)> callback) {
+        SPDLOG_INFO("Running exhaustive_decode on {:x}", (uintptr_t)start);
+
         std::unordered_set<uint8_t*> seen_addresses{};
         std::deque<uint8_t*> branches{};
 
@@ -483,7 +485,7 @@ namespace utility {
                     if (ix.BranchInfo.IsBranch && ix.BranchInfo.IsConditional) {
                         // Determine how to get the destination address from the ix
                         // and push it to the branches deque
-                        SPDLOG_INFO("Conditional Branch detected: {:x}", (uintptr_t)ip);
+                        SPDLOG_DEBUG("Conditional Branch detected: {:x}", (uintptr_t)ip);
 
                         if (auto dest = utility::resolve_displacement((uintptr_t)ip); dest) {
                             if (result != ExhaustionResult::STEP_OVER) {
@@ -494,7 +496,7 @@ namespace utility {
                             SPDLOG_ERROR(" TODO: Fix this");
                         }
                     } else if (ix.BranchInfo.IsBranch && !ix.BranchInfo.IsConditional) {
-                        SPDLOG_INFO("Unconditional Branch detected: {:x}", (uintptr_t)ip);
+                        SPDLOG_DEBUG("Unconditional Branch detected: {:x}", (uintptr_t)ip);
 
                         if (auto dest = utility::resolve_displacement((uintptr_t)ip); dest) {
                             if (std::string_view{ix.Mnemonic}.starts_with("JMP")) {
@@ -511,7 +513,7 @@ namespace utility {
                         }
                     }
                 } else if (ix.IsRipRelative && ip[0] == 0xFF && ip[1] == 0x25) { // jmp qword ptr [rip+0xdeadbeef]
-                    SPDLOG_INFO("Indirect jmp detected: {:x}", (uintptr_t)ip);
+                    SPDLOG_DEBUG("Indirect jmp detected: {:x}", (uintptr_t)ip);
                     const auto dest = utility::calculate_absolute((uintptr_t)ip + 2);
 
                     if (dest != 0 && dest != (uintptr_t)ip && !IsBadReadPtr((void*)dest, sizeof(void*))) {
@@ -520,7 +522,7 @@ namespace utility {
                         // Cannot step over jmps
                         if (real_dest != 0 && real_dest != (uintptr_t)ip && !IsBadReadPtr((void*)real_dest, sizeof(void*))) {
                             //branches.push_back((uint8_t*)real_dest);
-                            SPDLOG_INFO("Indirect jmp destination: {:x}", (uintptr_t)real_dest);
+                            SPDLOG_DEBUG("Indirect jmp destination: {:x}", (uintptr_t)real_dest);
                             ip = (uint8_t*)real_dest;
                             continue;
                         }
@@ -529,7 +531,7 @@ namespace utility {
                     SPDLOG_ERROR("Failed to resolve indirect jmp destination: {:x}", (uintptr_t)ip);
                     break;
                 } else if (ix.IsRipRelative && ip[0] == 0xFF && ip[1] == 0x15) { // call qword ptr [rip+0xdeadbeef]
-                    SPDLOG_INFO("Indirect call detected: {:x}", (uintptr_t)ip);
+                    SPDLOG_DEBUG("Indirect call detected: {:x}", (uintptr_t)ip);
 
                     const auto dest = utility::calculate_absolute((uintptr_t)ip + 2);
 
@@ -538,7 +540,7 @@ namespace utility {
 
                         if (real_dest != 0 && real_dest != (uintptr_t)ip && !IsBadReadPtr((void*)real_dest, sizeof(void*)) && result != ExhaustionResult::STEP_OVER) {
                             branches.push_back((uint8_t*)real_dest);
-                            SPDLOG_INFO("Indirect call destination: {:x}", (uintptr_t)real_dest);
+                            SPDLOG_DEBUG("Indirect call destination: {:x}", (uintptr_t)real_dest);
                         }
                     }
                 } else if (ix.BranchInfo.IsBranch && !ix.BranchInfo.IsConditional) {
