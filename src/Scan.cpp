@@ -445,13 +445,18 @@ namespace utility {
 
     // exhaustive_decode decodes until it hits something like a return, int3, fails, etc
     // except when it notices a conditional jmp, it will decode both branches separately
-    void exhaustive_decode(uint8_t* start, size_t max_size, std::function<ExhaustionResult(INSTRUX&, uintptr_t)> callback) {
+    void exhaustive_decode(uint8_t* start, size_t max_size, std::function<ExhaustionResult(ExhaustionContext&)> callback) {
         SPDLOG_INFO("Running exhaustive_decode on {:x}", (uintptr_t)start);
 
         std::unordered_set<uint8_t*> seen_addresses{};
         std::deque<uint8_t*> branches{};
 
         auto decode_branch = [&](uint8_t* ip) {
+            const auto branch_start = (uintptr_t)ip;
+
+            ExhaustionContext ctx{};
+            ctx.branch_start = branch_start;
+
             for (size_t i = 0; i < max_size; ++i) {
                 if (seen_addresses.contains(ip)) {
                     break;
@@ -474,11 +479,15 @@ namespace utility {
                     break;
                 }
 
-                const auto result = callback(ix, (uintptr_t)ip);
+                ctx.addr = (uintptr_t)ip;
+                ctx.instrux = ix;
+                const auto result = callback(ctx);
 
                 if (result == ExhaustionResult::BREAK) {
                     return;
                 }
+
+                const auto prev_branches_count = branches.size();
 
                 // We dont want to follow indirect branches, we aren't emulating
                 if (ix.IsRipRelative && !ix.BranchInfo.IsIndirect) {
@@ -501,6 +510,7 @@ namespace utility {
                         if (auto dest = utility::resolve_displacement((uintptr_t)ip); dest) {
                             if (std::string_view{ix.Mnemonic}.starts_with("JMP")) {
                                 ip = (uint8_t*)*dest;
+                                ctx.branch_start = (uintptr_t)*dest;
                                 continue;
                             } else {
                                 if (result != ExhaustionResult::STEP_OVER) {
@@ -524,6 +534,7 @@ namespace utility {
                             //branches.push_back((uint8_t*)real_dest);
                             SPDLOG_DEBUG("Indirect jmp destination: {:x}", (uintptr_t)real_dest);
                             ip = (uint8_t*)real_dest;
+                            ctx.branch_start = (uintptr_t)real_dest;
                             continue;
                         }
                     }
@@ -550,6 +561,10 @@ namespace utility {
                 }
 
                 ip += ix.Length;
+
+                if (branches.size() != prev_branches_count) {
+                    ctx.branch_start = (uintptr_t)ip;
+                }
             }
         };
 
@@ -565,6 +580,40 @@ namespace utility {
                 break;
             }
         }
+    }
+
+    void exhaustive_decode(uint8_t* start, size_t max_size, std::function<ExhaustionResult(INSTRUX&, uintptr_t)> callback) {
+        return exhaustive_decode(start, max_size, [&](ExhaustionContext& ctx) {
+            return callback(ctx.instrux, ctx.addr);
+        });
+    }
+
+    std::vector<BasicBlock> collect_basic_blocks(uintptr_t start, size_t max_size) {
+        std::vector<BasicBlock> blocks{};
+        uintptr_t previous_branch_start = start;
+        uintptr_t last_instruction_addr = start;
+
+        utility::exhaustive_decode((uint8_t*)start, max_size, [&](utility::ExhaustionContext& ctx) {
+            if (ctx.branch_start != previous_branch_start) {
+                blocks.push_back({previous_branch_start, last_instruction_addr});
+                SPDLOG_INFO("Found basic block from {:x} to {:x}", previous_branch_start, last_instruction_addr);
+
+                previous_branch_start = ctx.branch_start;
+            }
+
+            last_instruction_addr = ctx.addr;
+
+            const auto ip = (uint8_t*)ctx.addr;
+
+            // Skip over calls
+            if (std::string_view{ctx.instrux.Mnemonic}.starts_with("CALL")) {
+                return utility::ExhaustionResult::STEP_OVER;
+            }
+
+            return ExhaustionResult::CONTINUE;
+        });
+
+        return blocks;
     }
 
     PIMAGE_RUNTIME_FUNCTION_ENTRY find_function_entry(uintptr_t middle) {
