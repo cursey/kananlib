@@ -591,17 +591,24 @@ namespace utility {
     std::vector<BasicBlock> collect_basic_blocks(uintptr_t start, size_t max_size) {
         std::vector<BasicBlock> blocks{};
         uintptr_t previous_branch_start = start;
-        uintptr_t last_instruction_addr = start;
+
+        BasicBlock last_block{};
+        last_block.start = start;
+        last_block.end = start;
 
         utility::exhaustive_decode((uint8_t*)start, max_size, [&](utility::ExhaustionContext& ctx) {
             if (ctx.branch_start != previous_branch_start) {
-                blocks.push_back({previous_branch_start, last_instruction_addr});
-                SPDLOG_INFO("Found basic block from {:x} to {:x}", previous_branch_start, last_instruction_addr);
+                blocks.push_back(last_block);
+                SPDLOG_INFO("Found basic block from {:x} to {:x}", last_block.start, last_block.end);
 
                 previous_branch_start = ctx.branch_start;
+                last_block.instructions.clear();
+                last_block.start = ctx.branch_start;
+                last_block.end = ctx.branch_start;
             }
 
-            last_instruction_addr = ctx.addr;
+            last_block.end = ctx.addr;
+            last_block.instructions.push_back(ctx.instrux);
 
             const auto ip = (uint8_t*)ctx.addr;
 
