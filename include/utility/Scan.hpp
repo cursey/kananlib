@@ -72,6 +72,7 @@ namespace utility {
         uintptr_t start{};
         uintptr_t end{};
         std::vector<Instruction> instructions{};
+        std::vector<uintptr_t> branches{}; // the addresses they branch to, not the addresses of the instructions themselves
     };
     struct BasicBlockCollectOptions {
         size_t max_size{1000};
@@ -97,6 +98,13 @@ namespace utility {
     // Given any address/instruction within a function, walk a virtual table and disassemble to see if
     // any of the given functions contain the address/instruction
     std::optional<uintptr_t> find_encapsulating_virtual_function(uintptr_t vtable, size_t walk_amount, uintptr_t middle);
+
+    // Given any address/instruction within a function, disassemble forwards until we hit a call
+    // then disassemble the called function's instructions to see if any of them contain the address/instruction
+    // Is a bit naive, it could be improved by checking the function calls within the function too,
+    // but it only finds the top level function that contains the address/instruction
+    // It DOES check the function calls within the function, but it doesn't treat those as the encapsulating function, only the top level one
+    std::optional<uintptr_t> find_encapsulating_function(uintptr_t start_instruction, uintptr_t middle);
 
     std::optional<uintptr_t> resolve_displacement(uintptr_t ip);
 

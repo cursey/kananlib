@@ -944,6 +944,62 @@ namespace utility {
         return result;
     }
 
+    std::optional<uintptr_t> find_encapsulating_function(uintptr_t start_instruction, uintptr_t middle) {
+        if (middle == 0 || start_instruction == 0 || IsBadReadPtr((void*)start_instruction, sizeof(void*))) {
+            return std::nullopt;
+        }
+
+        std::optional<uintptr_t> result{};
+        std::unordered_set<uintptr_t> seen{};
+
+        utility::exhaustive_decode((uint8_t*)start_instruction, 200, [&](INSTRUX& top_ix, uintptr_t top_ip) -> utility::ExhaustionResult {
+            if (result) {
+                return utility::ExhaustionResult::BREAK;
+            }
+
+            if (!std::string_view{top_ix.Mnemonic}.starts_with("CALL")) {
+                return utility::ExhaustionResult::CONTINUE;
+            }
+
+            const auto possible_fn = utility::resolve_displacement(top_ip);
+
+            if (!possible_fn) {
+                return utility::ExhaustionResult::CONTINUE;
+            }
+
+            utility::exhaustive_decode((uint8_t*)*possible_fn, 500, [&](INSTRUX& ix, uintptr_t ip) -> utility::ExhaustionResult {
+                if (result) {
+                    return utility::ExhaustionResult::BREAK;
+                }
+
+                // We don't treat every new function as a valid path, we need to check if we've seen it before
+                // or else execution times will balloon
+                if (seen.contains(ip)) {
+                    return utility::ExhaustionResult::BREAK;
+                }
+
+                seen.insert(ip);
+
+                if (middle >= ip && middle < ip + ix.Length) {
+                    result = *possible_fn;
+                    SPDLOG_INFO("Found encapsulating function at 0x{:x} for {:x}", *possible_fn, middle);
+                    return utility::ExhaustionResult::BREAK;
+                }
+
+                return utility::ExhaustionResult::CONTINUE;
+            });
+
+            if (result) {
+                return utility::ExhaustionResult::BREAK;
+            }
+
+            // Step over the call we just analyzed.
+            return utility::ExhaustionResult::STEP_OVER;
+        });
+
+        return result;
+    }
+
     std::optional<uintptr_t> resolve_displacement(uintptr_t ip) {
         const auto ix = decode_one((uint8_t*)ip);
 
