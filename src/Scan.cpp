@@ -451,6 +451,8 @@ namespace utility {
         std::unordered_set<uint8_t*> seen_addresses{};
         std::deque<uint8_t*> branches{};
 
+        uint32_t total_branches_seen = 0;
+
         auto decode_branch = [&](uint8_t* ip) {
             const auto branch_start = (uintptr_t)ip;
 
@@ -475,10 +477,6 @@ namespace utility {
                     break;
                 }
 
-                if (ix.Instruction == ND_INS_RETN || ix.Instruction == ND_INS_INT3) {
-                    break;
-                }
-
                 ctx.addr = (uintptr_t)ip;
                 ctx.instrux = ix;
                 const auto result = callback(ctx);
@@ -487,7 +485,12 @@ namespace utility {
                     return;
                 }
 
-                const auto prev_branches_count = branches.size();
+                // Allows the callback to at least process that we hit a ret or int3, but we will stop here.
+                if (ix.Instruction == ND_INS_RETN || ix.Instruction == ND_INS_INT3) {
+                    break;
+                }
+
+                const auto prev_branches_count = total_branches_seen;
 
                 // We dont want to follow indirect branches, we aren't emulating
                 if (ix.IsRipRelative && !ix.BranchInfo.IsIndirect) {
@@ -499,6 +502,7 @@ namespace utility {
                         if (auto dest = utility::resolve_displacement((uintptr_t)ip); dest) {
                             if (result != ExhaustionResult::STEP_OVER) {
                                 branches.push_back((uint8_t*)*dest);
+                                ++total_branches_seen;
                             }
                         } else {
                             SPDLOG_ERROR("Failed to resolve displacement for {:x}", (uintptr_t)ip);
@@ -511,10 +515,12 @@ namespace utility {
                             if (std::string_view{ix.Mnemonic}.starts_with("JMP")) {
                                 ip = (uint8_t*)*dest;
                                 ctx.branch_start = (uintptr_t)*dest;
+                                ++total_branches_seen;
                                 continue;
                             } else {
                                 if (result != ExhaustionResult::STEP_OVER) {
                                     branches.push_back((uint8_t*)*dest);
+                                    ++total_branches_seen;
                                 }
                             }
                         } else {
@@ -535,6 +541,7 @@ namespace utility {
                             SPDLOG_DEBUG("Indirect jmp destination: {:x}", (uintptr_t)real_dest);
                             ip = (uint8_t*)real_dest;
                             ctx.branch_start = (uintptr_t)real_dest;
+                            ++total_branches_seen;
                             continue;
                         }
                     }
@@ -551,6 +558,7 @@ namespace utility {
 
                         if (real_dest != 0 && real_dest != (uintptr_t)ip && !IsBadReadPtr((void*)real_dest, sizeof(void*)) && result != ExhaustionResult::STEP_OVER) {
                             branches.push_back((uint8_t*)real_dest);
+                            ++total_branches_seen;
                             SPDLOG_DEBUG("Indirect call destination: {:x}", (uintptr_t)real_dest);
                         }
                     }
@@ -562,7 +570,7 @@ namespace utility {
 
                 ip += ix.Length;
 
-                if (branches.size() != prev_branches_count) {
+                if (total_branches_seen != prev_branches_count) {
                     ctx.branch_start = (uintptr_t)ip;
                 }
             }
@@ -588,7 +596,7 @@ namespace utility {
         });
     }
 
-    std::vector<BasicBlock> collect_basic_blocks(uintptr_t start, size_t max_size) {
+    std::vector<BasicBlock> collect_basic_blocks(uintptr_t start, const BasicBlockCollectOptions& options) {
         std::vector<BasicBlock> blocks{};
         uintptr_t previous_branch_start = start;
 
@@ -596,7 +604,7 @@ namespace utility {
         last_block.start = start;
         last_block.end = start;
 
-        utility::exhaustive_decode((uint8_t*)start, max_size, [&](utility::ExhaustionContext& ctx) {
+        utility::exhaustive_decode((uint8_t*)start, options.max_size, [&](utility::ExhaustionContext& ctx) {
             if (ctx.branch_start != previous_branch_start) {
                 blocks.push_back(last_block);
                 SPDLOG_INFO("Found basic block from {:x} to {:x}", last_block.start, last_block.end);
@@ -608,7 +616,7 @@ namespace utility {
             }
 
             last_block.end = ctx.addr;
-            last_block.instructions.push_back(ctx.instrux);
+            last_block.instructions.push_back({ ctx.addr, ctx.instrux });
 
             const auto ip = (uint8_t*)ctx.addr;
 
@@ -619,6 +627,12 @@ namespace utility {
 
             return ExhaustionResult::CONTINUE;
         });
+
+        if (options.sort) {
+            std::sort(blocks.begin(), blocks.end(), [](const BasicBlock& a, const BasicBlock& b) {
+                return a.start < b.start;
+            });
+        }
 
         return blocks;
     }

@@ -64,11 +64,20 @@ namespace utility {
     void exhaustive_decode(uint8_t* ip, size_t max_size, std::function<ExhaustionResult(INSTRUX&, uintptr_t)> callback);
 
     struct BasicBlock {
+        struct Instruction {
+            uintptr_t addr{};
+            INSTRUX instrux{};
+        };
+
         uintptr_t start{};
         uintptr_t end{};
-        std::vector<INSTRUX> instructions{};
+        std::vector<Instruction> instructions{};
     };
-    std::vector<BasicBlock> collect_basic_blocks(uintptr_t start, size_t max_size);
+    struct BasicBlockCollectOptions {
+        size_t max_size{1000};
+        bool sort{false};
+    };
+    std::vector<BasicBlock> collect_basic_blocks(uintptr_t start, const BasicBlockCollectOptions& options = {});
 
     PIMAGE_RUNTIME_FUNCTION_ENTRY find_function_entry(uintptr_t middle);
     std::optional<uintptr_t> find_function_start(uintptr_t middle);
