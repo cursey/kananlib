@@ -749,6 +749,33 @@ namespace utility {
         return std::nullopt;
     }
 
+    std::optional<uintptr_t> find_function_from_string_ref(HMODULE module, std::string_view str, bool zero_terminated) {
+        SPDLOG_INFO("Scanning module {} for string reference {}", utility::get_module_path(module).value_or("UNKNOWN"), str);
+
+        const auto str_data = utility::scan_string(module, str.data(), zero_terminated);
+
+        if (!str_data) {
+            SPDLOG_ERROR("Failed to find string for {}", str.data());
+            return std::nullopt;
+        }
+
+        const auto str_ref = utility::scan_displacement_reference(module, *str_data);
+
+        if (!str_ref) {
+            SPDLOG_ERROR("Failed to find reference to string for {}", str.data());
+            return std::nullopt;
+        }
+
+        const auto func_start = find_function_start(*str_ref);
+
+        if (!func_start) {
+            SPDLOG_ERROR("Failed to find function start for {}", str.data());
+            return std::nullopt;
+        }
+
+        return func_start;
+    }
+
     std::optional<uintptr_t> find_function_from_string_ref(HMODULE module, std::wstring_view str, bool zero_terminated) {
         SPDLOG_INFO("Scanning module {} for string reference {}", utility::get_module_path(module).value_or("UNKNOWN"), utility::narrow(str));
 
@@ -1027,6 +1054,31 @@ namespace utility {
         }
 
         return std::nullopt;
+    }
+
+    std::optional<ResolvedDisplacement> find_next_displacement(uintptr_t start, bool follow_calls) {
+        std::optional<ResolvedDisplacement> result{};
+
+        utility::exhaustive_decode((uint8_t*)start, 100, [&](INSTRUX& ix, uintptr_t ip) -> utility::ExhaustionResult {
+            if (result) {
+                return utility::ExhaustionResult::BREAK;
+            }
+
+            if (!follow_calls && std::string_view{ix.Mnemonic}.starts_with("CALL")) {
+                return utility::ExhaustionResult::STEP_OVER;
+            }
+
+            const auto displacement = utility::resolve_displacement(ip);
+
+            if (displacement) {
+                result = { ip, ix, *displacement };
+                return utility::ExhaustionResult::BREAK;
+            }
+
+            return utility::ExhaustionResult::CONTINUE;
+        });
+
+        return result;
     }
 
     std::optional<Resolved> resolve_instruction(uintptr_t middle) {

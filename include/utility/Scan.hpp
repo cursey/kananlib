@@ -85,6 +85,7 @@ namespace utility {
     // same as prev, but keeps going backwards until the "function" it lands on
     // is actually called somewhere within the module
     std::optional<uintptr_t> find_function_start_with_call(uintptr_t middle);
+    std::optional<uintptr_t> find_function_from_string_ref(HMODULE module, std::string_view str, bool zero_terminated = false);
     std::optional<uintptr_t> find_function_from_string_ref(HMODULE module, std::wstring_view str, bool zero_terminated = false);
 
     // finds the function(s) containing the A string, and then
@@ -112,6 +113,12 @@ namespace utility {
         uintptr_t addr{};
         INSTRUX instrux{};
     };
+
+    struct ResolvedDisplacement : Resolved {
+        uintptr_t displacement{};
+    };
+
+    std::optional<ResolvedDisplacement> find_next_displacement(uintptr_t ip, bool follow_calls = false); // stops if ret, int3
     std::optional<Resolved> resolve_instruction(uintptr_t middle); // finds the start of the instruction given an address in the middle of the instruction 
 
     // Finds the function start given the middle, and then disassembles and stores all instructions until it hits the middle
