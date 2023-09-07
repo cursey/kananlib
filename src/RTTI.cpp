@@ -6,6 +6,7 @@
 
 #include <utility/Module.hpp>
 #include <utility/RTTI.hpp>
+#include <utility/Scan.hpp>
 
 namespace utility {
 namespace rtti {
@@ -91,6 +92,31 @@ bool derives_from(const void* obj, std::string_view type_name) {
     }
 
     return false;
+}
+
+std::optional<uintptr_t> find_vtable(HMODULE m, std::string_view type_name) try {
+    const auto begin = (uintptr_t)m;
+    const auto end = begin + *utility::get_module_size(m);
+
+    for (auto i = begin; i < end - sizeof(void*); i += sizeof(void*)) try {
+        const auto fake_obj = (void*)i;
+        const auto ti = get_type_info(&fake_obj);
+
+        if (ti == nullptr) {
+            continue;
+        }
+
+        if (ti->name() == type_name || ti->raw_name() == type_name) {
+            return i;
+        }
+    } catch(...) {
+        continue;
+    }
+
+    return std::nullopt;
+} catch(...) {
+    spdlog::error("rtti::find_vtable - exception");
+    return std::nullopt;
 }
 }
 }
