@@ -106,6 +106,16 @@ std::optional<uintptr_t> find_vtable(HMODULE m, std::string_view type_name) try 
             continue;
         }
 
+        const auto rn = ti->raw_name();
+
+        if (rn[0] != '.' || rn[1] != '?') {
+            continue;
+        }
+
+        if (std::string_view{rn}.find("@") == std::string_view::npos) {
+            continue;
+        }
+
         if (ti->name() == type_name || ti->raw_name() == type_name) {
             return i;
         }
