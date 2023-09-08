@@ -14,5 +14,7 @@ namespace rtti {
     std::type_info* get_type_info(const void* obj);
     bool derives_from(const void* obj, std::string_view type_name);
     std::optional<uintptr_t> find_vtable(HMODULE m, std::string_view type_name);
+    std::optional<uintptr_t> find_vtable_partial(HMODULE m, std::string_view type_name);
+    std::optional<uintptr_t> find_vtable_regex(HMODULE m, std::string_view reg_str);
 }
 }

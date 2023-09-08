@@ -2,6 +2,8 @@
 #include <vcruntime.h>
 #include <rttidata.h>
 
+#include <regex>
+
 #include <spdlog/spdlog.h>
 
 #include <utility/Module.hpp>
@@ -126,6 +128,75 @@ std::optional<uintptr_t> find_vtable(HMODULE m, std::string_view type_name) try 
     return std::nullopt;
 } catch(...) {
     spdlog::error("rtti::find_vtable - exception");
+    return std::nullopt;
+}
+
+std::optional<uintptr_t> find_vtable_partial(HMODULE m, std::string_view type_name) try {
+    const auto begin = (uintptr_t)m;
+    const auto end = begin + *utility::get_module_size(m);
+
+    for (auto i = begin; i < end - sizeof(void*); i += sizeof(void*)) try {
+        const auto fake_obj = (void*)i;
+        const auto ti = get_type_info(&fake_obj);
+
+        if (ti == nullptr) {
+            continue;
+        }
+
+        const auto rn = ti->raw_name();
+
+        if (rn[0] != '.' || rn[1] != '?') {
+            continue;
+        }
+
+        if (std::string_view{rn}.find("@") == std::string_view::npos) {
+            continue;
+        }
+
+        if (std::string_view{ti->name()}.find(type_name) != std::string_view::npos) {
+            return i;
+        }
+    } catch(...) {
+        continue;
+    }
+
+    return std::nullopt;
+} catch(...) {
+    spdlog::error("rtti::find_vtable_partial - exception");
+    return std::nullopt;
+}
+
+std::optional<uintptr_t> find_vtable_regex(HMODULE m, std::string_view reg_str) {
+    const auto begin = (uintptr_t)m;
+    const auto end = begin + *utility::get_module_size(m);
+
+    std::regex reg{reg_str.data()};
+
+    for (auto i = begin; i < end - sizeof(void*); i += sizeof(void*)) try {
+        const auto fake_obj = (void*)i;
+        const auto ti = get_type_info(&fake_obj);
+
+        if (ti == nullptr) {
+            continue;
+        }
+
+        const auto rn = ti->raw_name();
+
+        if (rn[0] != '.' || rn[1] != '?') {
+            continue;
+        }
+
+        if (std::string_view{rn}.find("@") == std::string_view::npos) {
+            continue;
+        }
+
+        if (std::regex_match(ti->name(), reg)) {
+            return i;
+        }
+    } catch(...) {
+        continue;
+    }
+
     return std::nullopt;
 }
 }
