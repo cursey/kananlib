@@ -2,6 +2,7 @@
 
 #include <Windows.h>
 
+#include <vector>
 #include <string_view>
 #include <typeinfo>
 #include <optional>
@@ -16,5 +17,7 @@ namespace rtti {
     std::optional<uintptr_t> find_vtable(HMODULE m, std::string_view type_name);
     std::optional<uintptr_t> find_vtable_partial(HMODULE m, std::string_view type_name);
     std::optional<uintptr_t> find_vtable_regex(HMODULE m, std::string_view reg_str);
+
+    std::vector<uintptr_t*> find_vtables_derived_from(HMODULE m, std::string_view friendly_type_name);
 }
 }

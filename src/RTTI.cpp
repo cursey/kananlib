@@ -199,5 +199,45 @@ std::optional<uintptr_t> find_vtable_regex(HMODULE m, std::string_view reg_str) 
 
     return std::nullopt;
 }
+
+std::vector<uintptr_t*> find_vtables_derived_from(HMODULE m, std::string_view friendly_type_name) {
+    const auto base_vtable = find_vtable(m, friendly_type_name);
+
+    if (!base_vtable) {
+        return {};
+    }
+
+    std::vector<uintptr_t*> result{};
+
+    const auto begin = (uintptr_t)m;
+    const auto end = begin + *utility::get_module_size(m);
+
+    for (auto i = begin; i < end - sizeof(void*); i += sizeof(void*)) try {
+        const auto fake_obj = (void*)i;
+        const auto ti = get_type_info(&fake_obj);
+
+        if (ti == nullptr) {
+            continue;
+        }
+
+        const auto rn = ti->raw_name();
+
+        if (rn[0] != '.' || rn[1] != '?') {
+            continue;
+        }
+
+        if (std::string_view{rn}.find("@") == std::string_view::npos) {
+            continue;
+        }
+
+        if (derives_from(&fake_obj, friendly_type_name)) {
+            result.push_back((uintptr_t*)i);
+        }
+    } catch(...) {
+        continue;
+    }
+
+    return result;
+}
 }
 }
