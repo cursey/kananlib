@@ -334,5 +334,36 @@ std::optional<uintptr_t*> find_object_ptr(HMODULE m, std::string_view type_name)
 
     return result;
 }
+
+std::optional<uintptr_t*> find_object_ptr(HMODULE vtable_module, uintptr_t begin, uintptr_t end, std::string_view type_name) {
+    const auto vtable = find_vtable(vtable_module, type_name);
+
+    if (!vtable) {
+        spdlog::error("Failed to find object {} (Could not find vtable)", type_name);
+        return std::nullopt;
+    }
+
+    std::optional<uintptr_t*> result{};
+
+    parallelutil::parallel_for(begin, end, sizeof(void*), [&](uintptr_t addr) {
+        if (result != std::nullopt || IsBadReadPtr((void*)addr, sizeof(void*))) {
+            return;
+        }
+
+        auto& obj = *(void**)addr;
+
+        if (IsBadReadPtr((void*)obj, sizeof(void*))) {
+            return;
+        }
+
+        const auto possible_vtable = *(uintptr_t*)obj;
+
+        if (possible_vtable == *vtable) {
+            result = (uintptr_t*)addr;
+        }
+    });
+
+    return result;
+}
 }
 }
