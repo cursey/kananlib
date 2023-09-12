@@ -176,6 +176,16 @@ bool derives_from(const void* obj, std::string_view type_name) {
             continue;
         }
 
+        const auto rn = ti->raw_name();
+
+        if (rn[0] != '.' || rn[1] != '?') {
+            return false; // we ran into a bad one
+        }
+
+        if (std::string_view{rn}.find("@") == std::string_view::npos) {
+            return false; // we ran into a bad one
+        }
+
         if (ti->name() == type_name) {
             return true;
         }
