@@ -3,6 +3,8 @@
 #include <rttidata.h>
 
 #include <regex>
+#include <mutex>
+#include <unordered_map>
 
 #include <spdlog/spdlog.h>
 
@@ -12,6 +14,92 @@
 
 namespace utility {
 namespace rtti {
+namespace detail {
+struct Vtable {
+    std::type_info* ti;
+    uintptr_t vtable;
+};
+
+std::recursive_mutex s_vtable_cache_mutex{};
+std::unordered_map<HMODULE, std::vector<Vtable>> s_vtable_cache{};
+
+void for_each_uncached(HMODULE m, std::function<void(const Vtable&)> predicate) {
+    const auto begin = (uintptr_t)m;
+    const auto end = begin + *utility::get_module_size(m);
+
+    for (auto i = begin; i < end - sizeof(void*); i += sizeof(void*)) try {
+        const auto fake_obj = (void*)i;
+        const auto ti = get_type_info(&fake_obj);
+
+        if (ti == nullptr) {
+            continue;
+        }
+
+        const auto rn = ti->raw_name();
+
+        if (rn[0] != '.' || rn[1] != '?') {
+            continue;
+        }
+
+        if (std::string_view{rn}.find("@") == std::string_view::npos) {
+            continue;
+        }
+
+        predicate(Vtable{ti, i});
+    } catch(...) {
+        continue;
+    }
+}
+
+void populate(HMODULE m) {
+    std::scoped_lock _{s_vtable_cache_mutex};
+
+    if (!s_vtable_cache[m].empty()) {
+        return;
+    }
+
+    for_each_uncached(m, [&](const Vtable& vtable) {
+        s_vtable_cache[m].push_back(vtable);
+    });
+}
+
+void for_each(HMODULE m, std::function<void(const Vtable&)> predicate) {
+    populate(m);
+
+    // makes it easier for the caller to thread this
+    std::vector<Vtable> entries{};
+    {
+        std::scoped_lock _{s_vtable_cache_mutex};
+        entries = s_vtable_cache[m];
+    }
+
+    for (const auto& vtable : entries) {
+        predicate(vtable);
+    }
+}
+
+std::optional<Vtable> find(HMODULE m, std::function<bool(const Vtable&)> predicate) {
+    populate(m);
+
+    std::optional<Vtable> result{};
+
+    // makes it easier for the caller to thread this
+    std::vector<Vtable> entries{};
+    {
+        std::scoped_lock _{s_vtable_cache_mutex};
+        entries = s_vtable_cache[m];
+    }
+
+    for (const auto& vtable : entries) {
+        if (predicate(vtable)) {
+            return vtable;
+        }
+    }
+
+    return std::nullopt;
+}
+}
+
 _s_RTTICompleteObjectLocator* get_locator(const void* obj) {
     if (obj == nullptr || *(void**)obj == nullptr) {
         return nullptr;
@@ -97,32 +185,12 @@ bool derives_from(const void* obj, std::string_view type_name) {
 }
 
 std::optional<uintptr_t> find_vtable(HMODULE m, std::string_view type_name) try {
-    const auto begin = (uintptr_t)m;
-    const auto end = begin + *utility::get_module_size(m);
-
-    for (auto i = begin; i < end - sizeof(void*); i += sizeof(void*)) try {
-        const auto fake_obj = (void*)i;
-        const auto ti = get_type_info(&fake_obj);
-
-        if (ti == nullptr) {
-            continue;
-        }
-
-        const auto rn = ti->raw_name();
-
-        if (rn[0] != '.' || rn[1] != '?') {
-            continue;
-        }
-
-        if (std::string_view{rn}.find("@") == std::string_view::npos) {
-            continue;
-        }
-
-        if (ti->name() == type_name || ti->raw_name() == type_name) {
-            return i;
-        }
-    } catch(...) {
-        continue;
+    const auto result = detail::find(m, [&](const detail::Vtable& vtable) {
+        return vtable.ti->name() == type_name || vtable.ti->raw_name() == type_name;
+    });
+    
+    if (result) {
+        return result->vtable;
     }
 
     return std::nullopt;
@@ -132,32 +200,12 @@ std::optional<uintptr_t> find_vtable(HMODULE m, std::string_view type_name) try 
 }
 
 std::optional<uintptr_t> find_vtable_partial(HMODULE m, std::string_view type_name) try {
-    const auto begin = (uintptr_t)m;
-    const auto end = begin + *utility::get_module_size(m);
-
-    for (auto i = begin; i < end - sizeof(void*); i += sizeof(void*)) try {
-        const auto fake_obj = (void*)i;
-        const auto ti = get_type_info(&fake_obj);
-
-        if (ti == nullptr) {
-            continue;
-        }
-
-        const auto rn = ti->raw_name();
-
-        if (rn[0] != '.' || rn[1] != '?') {
-            continue;
-        }
-
-        if (std::string_view{rn}.find("@") == std::string_view::npos) {
-            continue;
-        }
-
-        if (std::string_view{ti->name()}.find(type_name) != std::string_view::npos) {
-            return i;
-        }
-    } catch(...) {
-        continue;
+    const auto result = detail::find(m, [&](const detail::Vtable& vtable) {
+        return std::string_view{vtable.ti->name()}.find(type_name) != std::string_view::npos;
+    });
+    
+    if (result) {
+        return result->vtable;
     }
 
     return std::nullopt;
@@ -167,34 +215,14 @@ std::optional<uintptr_t> find_vtable_partial(HMODULE m, std::string_view type_na
 }
 
 std::optional<uintptr_t> find_vtable_regex(HMODULE m, std::string_view reg_str) {
-    const auto begin = (uintptr_t)m;
-    const auto end = begin + *utility::get_module_size(m);
-
     std::regex reg{reg_str.data()};
 
-    for (auto i = begin; i < end - sizeof(void*); i += sizeof(void*)) try {
-        const auto fake_obj = (void*)i;
-        const auto ti = get_type_info(&fake_obj);
+    const auto result = detail::find(m, [&](const detail::Vtable& vtable) {
+        return std::regex_match(vtable.ti->name(), reg);
+    });
 
-        if (ti == nullptr) {
-            continue;
-        }
-
-        const auto rn = ti->raw_name();
-
-        if (rn[0] != '.' || rn[1] != '?') {
-            continue;
-        }
-
-        if (std::string_view{rn}.find("@") == std::string_view::npos) {
-            continue;
-        }
-
-        if (std::regex_match(ti->name(), reg)) {
-            return i;
-        }
-    } catch(...) {
-        continue;
+    if (result) {
+        return result->vtable;
     }
 
     return std::nullopt;
@@ -208,34 +236,16 @@ std::vector<uintptr_t*> find_vtables_derived_from(HMODULE m, std::string_view fr
     }
 
     std::vector<uintptr_t*> result{};
-
-    const auto begin = (uintptr_t)m;
-    const auto end = begin + *utility::get_module_size(m);
-
-    for (auto i = begin; i < end - sizeof(void*); i += sizeof(void*)) try {
-        const auto fake_obj = (void*)i;
-        const auto ti = get_type_info(&fake_obj);
-
-        if (ti == nullptr) {
-            continue;
+    detail::for_each(m, [&](const detail::Vtable& vtable) {
+        // trycatch block because sometimes bad entries get into the array.
+        try {
+            if (derives_from((void*)&vtable.vtable, friendly_type_name)) {
+                result.push_back((uintptr_t*)vtable.vtable);
+            }
+        } catch(...) {
+            return;
         }
-
-        const auto rn = ti->raw_name();
-
-        if (rn[0] != '.' || rn[1] != '?') {
-            continue;
-        }
-
-        if (std::string_view{rn}.find("@") == std::string_view::npos) {
-            continue;
-        }
-
-        if (derives_from(&fake_obj, friendly_type_name)) {
-            result.push_back((uintptr_t*)i);
-        }
-    } catch(...) {
-        continue;
-    }
+    });
 
     return result;
 }
