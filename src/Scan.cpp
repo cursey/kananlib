@@ -1,8 +1,6 @@
 #include <cstdint>
 #include <unordered_set>
 #include <deque>
-#include <omp.h>
-#include <ppl.h>
 
 #include <spdlog/spdlog.h>
 
@@ -10,6 +8,7 @@
 #include <utility/String.hpp>
 #include <utility/Module.hpp>
 #include <utility/Scan.hpp>
+#include <utility/thirdparty/parallel-util.hpp>
 
 using namespace std;
 
@@ -671,11 +670,7 @@ namespace utility {
 
         std::mutex mtx{};
 
-        Concurrency::CurrentScheduler::Create(Concurrency::SchedulerPolicy(2,
-        Concurrency::MinConcurrency, std::thread::hardware_concurrency(),
-        Concurrency::MaxConcurrency, std::thread::hardware_concurrency()));
-                       
-        concurrency::parallel_for<size_t>(0, exception_directory_entries, [&](size_t i) {
+        parallelutil::parallel_for<size_t>(0, exception_directory_entries, [&](size_t i) {
             auto& entry = exception_directory_ptr[i];
 
             if (module + entry.EndAddress >= module_end || entry.EndAddress >= module_size) {
@@ -707,8 +702,6 @@ namespace utility {
                 }
             }
         });
-
-        Concurrency::CurrentScheduler::Detach();
 
         return last;
     }

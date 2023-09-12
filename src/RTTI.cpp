@@ -1,5 +1,3 @@
-#include <ppl.h>
-
 // Include MSVC internal RTTI headers
 #include <vcruntime.h>
 #include <rttidata.h>
@@ -13,6 +11,8 @@
 #include <utility/Module.hpp>
 #include <utility/RTTI.hpp>
 #include <utility/Scan.hpp>
+
+#include <utility/thirdparty/parallel-util.hpp>
 
 namespace utility {
 namespace rtti {
@@ -277,13 +277,9 @@ std::optional<uintptr_t> find_object_inline(HMODULE m, std::string_view type_nam
         return std::nullopt;
     }
 
-    Concurrency::CurrentScheduler::Create(Concurrency::SchedulerPolicy(2,
-    Concurrency::MinConcurrency, std::thread::hardware_concurrency(),
-    Concurrency::MaxConcurrency, std::thread::hardware_concurrency()));
-
     std::optional<uintptr_t> result{};
 
-    concurrency::parallel_for(begin, end, sizeof(void*), [&](uintptr_t addr) {
+    parallelutil::parallel_for(begin, end, sizeof(void*), [&](uintptr_t addr) {
         if (result != std::nullopt || IsBadReadPtr((void*)addr, sizeof(void*))) {
             return;
         }
@@ -301,8 +297,6 @@ std::optional<uintptr_t> find_object_inline(HMODULE m, std::string_view type_nam
         }
     });
 
-    Concurrency::CurrentScheduler::Detach();
-
     return result;
 }
 
@@ -317,13 +311,10 @@ std::optional<uintptr_t*> find_object_ptr(HMODULE m, std::string_view type_name)
         return std::nullopt;
     }
 
-    Concurrency::CurrentScheduler::Create(Concurrency::SchedulerPolicy(2,
-    Concurrency::MinConcurrency, std::thread::hardware_concurrency(),
-    Concurrency::MaxConcurrency, std::thread::hardware_concurrency()));
 
     std::optional<uintptr_t*> result{};
 
-    concurrency::parallel_for(begin, end, sizeof(void*), [&](uintptr_t addr) {
+    parallelutil::parallel_for(begin, end, sizeof(void*), [&](uintptr_t addr) {
         if (result != std::nullopt || IsBadReadPtr((void*)addr, sizeof(void*))) {
             return;
         }
@@ -340,8 +331,6 @@ std::optional<uintptr_t*> find_object_ptr(HMODULE m, std::string_view type_name)
             result = (uintptr_t*)addr;
         }
     });
-
-    Concurrency::CurrentScheduler::Detach();
 
     return result;
 }
