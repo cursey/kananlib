@@ -1,3 +1,5 @@
+#include <ppl.h>
+
 // Include MSVC internal RTTI headers
 #include <vcruntime.h>
 #include <rttidata.h>
@@ -16,8 +18,8 @@ namespace utility {
 namespace rtti {
 namespace detail {
 struct Vtable {
-    std::type_info* ti;
-    uintptr_t vtable;
+    std::type_info* ti{nullptr};
+    uintptr_t vtable{};
 };
 
 std::recursive_mutex s_vtable_cache_mutex{};
@@ -58,6 +60,8 @@ void populate(HMODULE m) {
         return;
     }
 
+    s_vtable_cache[m].reserve(4192);
+
     for_each_uncached(m, [&](const Vtable& vtable) {
         s_vtable_cache[m].push_back(vtable);
     });
@@ -70,7 +74,8 @@ void for_each(HMODULE m, std::function<void(const Vtable&)> predicate) {
     std::vector<Vtable> entries{};
     {
         std::scoped_lock _{s_vtable_cache_mutex};
-        entries = s_vtable_cache[m];
+        //entries = s_vtable_cache[m];
+        entries.insert(entries.end(), s_vtable_cache[m].begin(), s_vtable_cache[m].end());
     }
 
     for (const auto& vtable : entries) {
@@ -87,7 +92,8 @@ std::optional<Vtable> find(HMODULE m, std::function<bool(const Vtable&)> predica
     std::vector<Vtable> entries{};
     {
         std::scoped_lock _{s_vtable_cache_mutex};
-        entries = s_vtable_cache[m];
+        //entries = s_vtable_cache[m];
+        entries.insert(entries.end(), s_vtable_cache[m].begin(), s_vtable_cache[m].end());
     }
 
     for (const auto& vtable : entries) {
@@ -256,6 +262,86 @@ std::vector<uintptr_t*> find_vtables_derived_from(HMODULE m, std::string_view fr
             return;
         }
     });
+
+    return result;
+}
+
+std::optional<uintptr_t> find_object_inline(HMODULE m, std::string_view type_name) {
+    const auto begin = (uintptr_t)m;
+    const auto end = begin + *utility::get_module_size(m);
+
+    const auto vtable = find_vtable(m, type_name);
+
+    if (!vtable) {
+        spdlog::error("Failed to find object {} (Could not find vtable)", type_name);
+        return std::nullopt;
+    }
+
+    Concurrency::CurrentScheduler::Create(Concurrency::SchedulerPolicy(2,
+    Concurrency::MinConcurrency, std::thread::hardware_concurrency(),
+    Concurrency::MaxConcurrency, std::thread::hardware_concurrency()));
+
+    std::optional<uintptr_t> result{};
+
+    concurrency::parallel_for(begin, end, sizeof(void*), [&](uintptr_t addr) {
+        if (result != std::nullopt || IsBadReadPtr((void*)addr, sizeof(void*))) {
+            return;
+        }
+
+        auto obj = (void*)addr;
+
+        if (IsBadReadPtr((void*)obj, sizeof(void*))) {
+            return;
+        }
+
+        const auto possible_vtable = *(uintptr_t*)obj;
+
+        if (possible_vtable == *vtable) {
+            result = addr;
+        }
+    });
+
+    Concurrency::CurrentScheduler::Detach();
+
+    return result;
+}
+
+std::optional<uintptr_t*> find_object_ptr(HMODULE m, std::string_view type_name) {
+    const auto begin = (uintptr_t)m;
+    const auto end = begin + *utility::get_module_size(m);
+
+    const auto vtable = find_vtable(m, type_name);
+
+    if (!vtable) {
+        spdlog::error("Failed to find object {} (Could not find vtable)", type_name);
+        return std::nullopt;
+    }
+
+    Concurrency::CurrentScheduler::Create(Concurrency::SchedulerPolicy(2,
+    Concurrency::MinConcurrency, std::thread::hardware_concurrency(),
+    Concurrency::MaxConcurrency, std::thread::hardware_concurrency()));
+
+    std::optional<uintptr_t*> result{};
+
+    concurrency::parallel_for(begin, end, sizeof(void*), [&](uintptr_t addr) {
+        if (result != std::nullopt || IsBadReadPtr((void*)addr, sizeof(void*))) {
+            return;
+        }
+
+        auto& obj = *(void**)addr;
+
+        if (IsBadReadPtr((void*)obj, sizeof(void*))) {
+            return;
+        }
+
+        const auto possible_vtable = *(uintptr_t*)obj;
+
+        if (possible_vtable == *vtable) {
+            result = (uintptr_t*)addr;
+        }
+    });
+
+    Concurrency::CurrentScheduler::Detach();
 
     return result;
 }

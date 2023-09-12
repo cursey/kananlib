@@ -19,5 +19,8 @@ namespace rtti {
     std::optional<uintptr_t> find_vtable_regex(HMODULE m, std::string_view reg_str);
 
     std::vector<uintptr_t*> find_vtables_derived_from(HMODULE m, std::string_view friendly_type_name);
+
+    std::optional<uintptr_t> find_object_inline(HMODULE m, std::string_view type_name); // level 0 only
+    std::optional<uintptr_t*> find_object_ptr(HMODULE m, std::string_view type_name); // level 1 pointers (Obj*)
 }
 }
