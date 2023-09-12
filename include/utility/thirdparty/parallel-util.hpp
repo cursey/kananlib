@@ -54,7 +54,7 @@ namespace parallelutil
     void parallel_for(int n, Callable function, int target_concurrency = 0)
     {
         const int hint      = (target_concurrency == 0) ? std::thread::hardware_concurrency() : target_concurrency;
-        const int n_threads = std::min(n, (hint == 0) ? 4 : hint);
+        const int n_threads = std::min<int>(n, (hint == 0) ? 4 : hint);
 #ifdef PARALLELUTIL_VERBOSE
         std::mutex io_mutex;
 #endif
@@ -64,7 +64,7 @@ namespace parallelutil
 
         auto inner_loop = [&](const int thread_index)
         {
-            const int n_lacking_tasks_so_far = std::max(thread_index - n_threads + n_lacking_tasks, 0);
+            const int n_lacking_tasks_so_far = std::max<int>(thread_index - n_threads + n_lacking_tasks, 0);
             const int inclusive_start_index  = thread_index * n_max_tasks_per_thread - n_lacking_tasks_so_far;
             const int exclusive_end_index    = inclusive_start_index + n_max_tasks_per_thread - (thread_index - n_threads + n_lacking_tasks >= 0 ? 1 : 0);
 
@@ -88,11 +88,17 @@ namespace parallelutil
         for (auto& t : threads) { t.join(); }
     }
 
-    template<typename Callable>
-    void parallel_for(size_t begin, size_t end, size_t step, Callable function, int target_concurrency = 0)
+    template<typename N, typename Callable>
+    void parallel_for(N begin, N end, N step, Callable function, int target_concurrency = 0)
     {
         const auto n = (end - begin) / step;
-        parallel_for(n, [&](int i) { function(begin + i * step); }, target_concurrency);
+        parallel_for(n, [&](int i) { function(begin + (N)i * step); }, target_concurrency);
+    }
+
+    template<typename N, typename Callable>
+    void parallel_for(N begin, N end, Callable function, int target_concurrency = 0)
+    {
+        parallel_for<N, Callable>(begin, end, 1, function, target_concurrency);
     }
 
     /// \brief Execute a for-loop process for a 2D array (e.g., a bitmap image data) in parallel
@@ -104,7 +110,7 @@ namespace parallelutil
     void parallel_for_2d(int width, int height, Callable function, int target_concurrency = 0)
     {
         const int hint      = (target_concurrency == 0) ? std::thread::hardware_concurrency() : target_concurrency;
-        const int n_threads = std::min(width * height, (hint == 0) ? 4 : hint);
+        const int n_threads = std::min<int>(width * height, (hint == 0) ? 4 : hint);
 
         auto inner_loop = [width, height, n_threads, function](const int thread_index)
         {
@@ -129,7 +135,7 @@ namespace parallelutil
     void queue_based_parallel_for(int n, Callable function, int target_concurrency = 0)
     {
         const int hint      = (target_concurrency == 0) ? std::thread::hardware_concurrency() : target_concurrency;
-        const int n_threads = std::min(n, (hint == 0) ? 4 : hint);
+        const int n_threads = std::min<int>(n, (hint == 0) ? 4 : hint);
 
         // Mutex object for queue manipulation
         std::mutex queue_mutex;
