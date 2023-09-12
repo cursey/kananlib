@@ -671,6 +671,10 @@ namespace utility {
 
         std::mutex mtx{};
 
+        Concurrency::CurrentScheduler::Create(Concurrency::SchedulerPolicy(2,
+        Concurrency::MinConcurrency, std::thread::hardware_concurrency(),
+        Concurrency::MaxConcurrency, std::thread::hardware_concurrency()));
+                       
         concurrency::parallel_for<size_t>(0, exception_directory_entries, [&](size_t i) {
             auto& entry = exception_directory_ptr[i];
 
@@ -703,6 +707,8 @@ namespace utility {
                 }
             }
         });
+
+        Concurrency::CurrentScheduler::Detach();
 
         return last;
     }
