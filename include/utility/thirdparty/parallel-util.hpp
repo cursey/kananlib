@@ -85,7 +85,7 @@ namespace parallelutil
         };
         std::vector<std::thread> threads;
         for (int j = 0; j < n_threads; ++ j) { threads.push_back(std::thread(inner_loop, j)); }
-        for (auto& t : threads) { t.join(); }
+        for (auto& t : threads) { if (t.joinable()) t.join(); }
     }
 
     template<typename N, typename Callable>
