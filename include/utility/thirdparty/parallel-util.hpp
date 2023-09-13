@@ -83,9 +83,10 @@ namespace parallelutil
             io_mutex.unlock();
 #endif
         };
-        std::vector<std::thread> threads;
-        for (int j = 0; j < n_threads; ++ j) { threads.push_back(std::thread(inner_loop, j)); }
-        for (auto& t : threads) { if (t.joinable()) t.join(); }
+        std::vector<std::unique_ptr<std::thread>> threads{};
+        threads.reserve(n_threads);
+        for (int j = 0; j < n_threads; ++ j) { threads.push_back(std::make_unique<std::thread>(inner_loop, j)); }
+        for (auto& t : threads) { if (t->joinable()) t->join(); }
     }
 
     template<typename N, typename Callable>
