@@ -215,6 +215,18 @@ std::optional<uintptr_t> find_vtable(HMODULE m, std::string_view type_name) try 
     return std::nullopt;
 }
 
+std::vector<uintptr_t> find_vtables(HMODULE m, std::string_view type_name) {
+    std::vector<uintptr_t> result{};
+
+    detail::for_each(m, [&](const detail::Vtable& vtable) {
+        if (vtable.ti->name() == type_name || vtable.ti->raw_name() == type_name) {
+            result.push_back(vtable.vtable);
+        }
+    });
+
+    return result;
+}
+
 std::optional<uintptr_t> find_vtable_partial(HMODULE m, std::string_view type_name) try {
     const auto result = detail::find(m, [&](const detail::Vtable& vtable) {
         return std::string_view{vtable.ti->name()}.find(type_name) != std::string_view::npos;
@@ -304,9 +316,9 @@ std::optional<uintptr_t*> find_object_ptr(HMODULE m, std::string_view type_name)
     const auto begin = (uintptr_t)m;
     const auto end = begin + *utility::get_module_size(m);
 
-    const auto vtable = find_vtable(m, type_name);
+    const auto vtables = find_vtables(m, type_name);
 
-    if (!vtable) {
+    if (vtables.empty()) {
         spdlog::error("Failed to find object {} (Could not find vtable)", type_name);
         return std::nullopt;
     }
@@ -327,7 +339,7 @@ std::optional<uintptr_t*> find_object_ptr(HMODULE m, std::string_view type_name)
 
         const auto possible_vtable = *(uintptr_t*)obj;
 
-        if (possible_vtable == *vtable) {
+        if (std::find(vtables.begin(), vtables.end(), possible_vtable) != vtables.end()) {
             result = (uintptr_t*)addr;
         }
     });
@@ -336,9 +348,9 @@ std::optional<uintptr_t*> find_object_ptr(HMODULE m, std::string_view type_name)
 }
 
 std::optional<uintptr_t*> find_object_ptr(HMODULE vtable_module, uintptr_t begin, uintptr_t end, std::string_view type_name) {
-    const auto vtable = find_vtable(vtable_module, type_name);
+    const auto vtables = find_vtables(vtable_module, type_name);
 
-    if (!vtable) {
+    if (vtables.empty()) {
         spdlog::error("Failed to find object {} (Could not find vtable)", type_name);
         return std::nullopt;
     }
@@ -358,7 +370,7 @@ std::optional<uintptr_t*> find_object_ptr(HMODULE vtable_module, uintptr_t begin
 
         const auto possible_vtable = *(uintptr_t*)obj;
 
-        if (possible_vtable == *vtable) {
+        if (std::find(vtables.begin(), vtables.end(), possible_vtable) != vtables.end()) {
             result = (uintptr_t*)addr;
         }
     });
