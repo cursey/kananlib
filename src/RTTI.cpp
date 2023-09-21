@@ -224,6 +224,14 @@ std::vector<uintptr_t> find_vtables(HMODULE m, std::string_view type_name) {
         }
     });
 
+    // Sort the vtables by the offset into each vtable (_s_RTTICompleteObjectLocator)
+    std::sort(result.begin(), result.end(), [](uintptr_t a, uintptr_t b) {
+        const auto locator_a = *(_s_RTTICompleteObjectLocator**)(a - sizeof(void*));
+        const auto locator_b = *(_s_RTTICompleteObjectLocator**)(b - sizeof(void*));
+
+        return locator_a->offset < locator_b->offset;
+    });
+
     return result;
 }
 
