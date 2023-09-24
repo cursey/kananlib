@@ -133,6 +133,18 @@ std::type_info* get_type_info(const void* obj) {
     return ti;
 }
 
+std::type_info* get_type_info(HMODULE m, std::string_view type_name) {
+    const auto result = detail::find(m, [&](const detail::Vtable& vtable) {
+        return vtable.ti->name() == type_name;
+    });
+
+    if (result) {
+        return result->ti;
+    }
+
+    return nullptr;
+}
+
 bool derives_from(const void* obj, std::string_view type_name) {
     if (obj == nullptr) {
         return false;
@@ -193,6 +205,59 @@ bool derives_from(const void* obj, std::string_view type_name) {
         }
 
         if (ti->name() == type_name) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+bool derives_from(const void* obj, std::type_info* ti_compare) {
+    if (obj == nullptr) {
+        return false;
+    }
+
+    const auto locator = *(_s_RTTICompleteObjectLocator**)(*(uintptr_t*)obj - sizeof(void*));
+
+    if (locator == nullptr) {
+        return false;
+    }
+
+    const auto module_within = ::utility::get_module_within(locator);
+
+    if (!module_within) {
+        return false;
+    }
+
+    const auto module = (uintptr_t)*module_within;
+    const auto class_hierarchy = (_s_RTTIClassHierarchyDescriptor*)(module + locator->pClassDescriptor);
+
+    if (class_hierarchy == nullptr) {
+        return false;
+    }
+
+    const auto base_classes = (_s_RTTIBaseClassArray*)(module + class_hierarchy->pBaseClassArray);
+
+    if (base_classes == nullptr) {
+        return false;
+    }
+
+    for (auto i = 0; i < class_hierarchy->numBaseClasses; ++i) {
+        const auto desc_offset = base_classes->arrayOfBaseClassDescriptors[i];
+
+        if (desc_offset == 0) {
+            continue;
+        }
+
+        const auto desc = (_s_RTTIBaseClassDescriptor*)(module + desc_offset);
+
+        if (desc == nullptr) {
+            continue;
+        }
+
+        const auto ti = (std::type_info*)(module + desc->pTypeDescriptor);
+
+        if (ti == ti_compare) {
             return true;
         }
     }

@@ -13,7 +13,9 @@ namespace utility {
 namespace rtti {
     _s_RTTICompleteObjectLocator* get_locator(const void* obj);
     std::type_info* get_type_info(const void* obj);
+    std::type_info* get_type_info(HMODULE m, std::string_view type_name);
     bool derives_from(const void* obj, std::string_view type_name);
+    bool derives_from(const void* obj, std::type_info* ti);
     std::optional<uintptr_t> find_vtable(HMODULE m, std::string_view type_name);
     std::vector<uintptr_t> find_vtables(HMODULE m, std::string_view type_name); // sometimes vtables can be duplicated
     std::optional<uintptr_t> find_vtable_partial(HMODULE m, std::string_view type_name);

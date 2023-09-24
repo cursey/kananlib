@@ -35,6 +35,8 @@ SOFTWARE.
 
 // #define PARALLELUTIL_VERBOSE
 
+#include <spdlog/spdlog.h>
+
 #include <functional>
 #include <mutex>
 #include <queue>
@@ -86,7 +88,7 @@ namespace parallelutil
         std::vector<std::unique_ptr<std::thread>> threads{};
         threads.reserve(n_threads);
         for (int j = 0; j < n_threads; ++ j) { threads.push_back(std::make_unique<std::thread>(inner_loop, j)); }
-        for (auto& t : threads) { if (t->joinable()) t->join(); }
+        for (auto& t : threads) try { if (t->joinable()) t->join(); } catch(...) { spdlog::error("Exception occurred trying to join a thread"); } // do we not care? lets find out.
     }
 
     template<typename N, typename Callable>
