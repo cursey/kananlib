@@ -106,7 +106,7 @@ namespace utility {
     // but it only finds the top level function that contains the address/instruction
     // It DOES check the function calls within the function, but it doesn't treat those as the encapsulating function, only the top level one
     std::optional<uintptr_t> find_encapsulating_function(uintptr_t start_instruction, uintptr_t middle);
-    std::optional<uintptr_t> find_encapsulating_function_disp(uintptr_t start_instruction, uintptr_t disp);
+    std::optional<uintptr_t> find_encapsulating_function_disp(uintptr_t start_instruction, uintptr_t disp, bool follow_calls = true);
 
     std::optional<uintptr_t> resolve_displacement(uintptr_t ip);
 

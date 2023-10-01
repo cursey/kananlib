@@ -1026,7 +1026,7 @@ namespace utility {
         return result;
     }
 
-    std::optional<uintptr_t> find_encapsulating_function_disp(uintptr_t start_instruction, uintptr_t disp) {
+    std::optional<uintptr_t> find_encapsulating_function_disp(uintptr_t start_instruction, uintptr_t disp, bool follow_calls) {
         if (disp == 0 || start_instruction == 0 || IsBadReadPtr((void*)start_instruction, sizeof(void*))) {
             return std::nullopt;
         }
@@ -1058,6 +1058,10 @@ namespace utility {
                 // or else execution times will balloon
                 if (seen.contains(ip)) {
                     return utility::ExhaustionResult::BREAK;
+                }
+
+                if (!follow_calls && std::string_view{ix.Mnemonic}.starts_with("CALL")) {
+                    return utility::ExhaustionResult::STEP_OVER;
                 }
 
                 seen.insert(ip);
