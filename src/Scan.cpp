@@ -1,3 +1,5 @@
+#include <ppl.h>
+
 #include <cstdint>
 #include <unordered_set>
 #include <deque>
@@ -670,7 +672,7 @@ namespace utility {
 
         std::mutex mtx{};
 
-        parallelutil::parallel_for<size_t>(0, exception_directory_entries, [&](size_t i) {
+        concurrency::parallel_for<size_t>(0, exception_directory_entries, [&](size_t i) {
             auto& entry = exception_directory_ptr[i];
 
             if (module + entry.EndAddress >= module_end || entry.EndAddress >= module_size) {
