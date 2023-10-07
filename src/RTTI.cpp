@@ -366,7 +366,7 @@ std::optional<uintptr_t> find_object_inline(HMODULE m, std::string_view type_nam
 
     std::optional<uintptr_t> result{};
 
-    concurrency::parallel_for(begin, end, sizeof(void*), [&](uintptr_t addr) {
+    parallelutil::parallel_for(begin, end, sizeof(void*), [&](uintptr_t addr) {
         if (result != std::nullopt || IsBadReadPtr((void*)addr, sizeof(void*))) {
             return;
         }
@@ -401,7 +401,7 @@ std::optional<uintptr_t*> find_object_ptr(HMODULE m, std::string_view type_name)
 
     std::optional<uintptr_t*> result{};
 
-    concurrency::parallel_for(begin, end, sizeof(void*), [&](uintptr_t addr) {
+    parallelutil::parallel_for(begin, end, sizeof(void*), [&](uintptr_t addr) {
         if (result != std::nullopt || IsBadReadPtr((void*)addr, sizeof(void*))) {
             return;
         }
@@ -432,7 +432,7 @@ std::optional<uintptr_t*> find_object_ptr(HMODULE vtable_module, uintptr_t begin
 
     std::optional<uintptr_t*> result{};
 
-    concurrency::parallel_for(begin, end, sizeof(void*), [&](uintptr_t addr) {
+    parallelutil::parallel_for(begin, end, sizeof(void*), [&](uintptr_t addr) {
         if (result != std::nullopt || IsBadReadPtr((void*)addr, sizeof(void*))) {
             return;
         }
