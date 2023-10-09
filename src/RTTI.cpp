@@ -465,6 +465,7 @@ std::vector<uintptr_t*> find_objects_ptr(HMODULE m, std::string_view type_name) 
     }
 
     std::vector<uintptr_t*> result{};
+    std::mutex result_mutex{};
 
     concurrency::parallel_for(begin, end, sizeof(void*), [&](uintptr_t addr) {
         if (IsBadReadPtr((void*)addr, sizeof(void*))) {
@@ -480,6 +481,7 @@ std::vector<uintptr_t*> find_objects_ptr(HMODULE m, std::string_view type_name) 
         const auto possible_vtable = *(uintptr_t*)obj;
 
         if (std::find(vtables.begin(), vtables.end(), possible_vtable) != vtables.end()) {
+            std::scoped_lock _{result_mutex};
             result.push_back((uintptr_t*)addr);
         }
     });
