@@ -26,5 +26,7 @@ namespace rtti {
     std::optional<uintptr_t> find_object_inline(HMODULE m, std::string_view type_name); // level 0 only
     std::optional<uintptr_t*> find_object_ptr(HMODULE m, std::string_view type_name); // level 1 pointers (Obj*)
     std::optional<uintptr_t*> find_object_ptr(HMODULE vtable_module, uintptr_t start, uintptr_t end, std::string_view type_name); // level 1 pointers (Obj*)
+
+    std::vector<uintptr_t*> find_objects_ptr(HMODULE m, std::string_view type_name); // level 1 pointers (Obj*)
 }
 }
