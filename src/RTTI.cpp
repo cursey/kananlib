@@ -452,5 +452,45 @@ std::optional<uintptr_t*> find_object_ptr(HMODULE vtable_module, uintptr_t begin
 
     return result;
 }
+
+std::vector<uintptr_t*> find_objects_ptr(HMODULE m, std::string_view type_name) {
+    const auto begin = (uintptr_t)m;
+    const auto end = begin + *utility::get_module_size(m);
+
+    const auto vtables = find_vtables(m, type_name);
+
+    if (vtables.empty()) {
+        spdlog::error("Failed to find object {} (Could not find vtable)", type_name);
+        return {};
+    }
+
+    std::vector<uintptr_t*> result{};
+    std::mutex result_mutex{};
+
+    concurrency::parallel_for(begin, end, sizeof(void*), [&](uintptr_t addr) {
+        if (IsBadReadPtr((void*)addr, sizeof(void*))) {
+            return;
+        }
+
+        auto& obj = *(void**)addr;
+
+        if (IsBadReadPtr((void*)obj, sizeof(void*))) {
+            return;
+        }
+
+        const auto possible_vtable = *(uintptr_t*)obj;
+
+        if (std::find(vtables.begin(), vtables.end(), possible_vtable) != vtables.end()) {
+            std::scoped_lock _{result_mutex};
+            result.push_back((uintptr_t*)addr);
+        }
+    });
+
+    std::sort(result.begin(), result.end(), [](uintptr_t* a, uintptr_t* b) {
+        return (uintptr_t)a < (uintptr_t)b;
+    });
+
+    return result;
+}
 }
 }
