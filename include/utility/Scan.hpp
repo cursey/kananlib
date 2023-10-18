@@ -99,6 +99,7 @@ namespace utility {
     // Given any address/instruction within a function, walk a virtual table and disassemble to see if
     // any of the given functions contain the address/instruction
     std::optional<uintptr_t> find_encapsulating_virtual_function(uintptr_t vtable, size_t walk_amount, uintptr_t middle);
+    std::optional<uintptr_t> find_encapsulating_virtual_function_disp(uintptr_t vtable, size_t walk_amount, uintptr_t disp, bool follow_calls = true);
 
     // Given any address/instruction within a function, disassemble forwards until we hit a call
     // then disassemble the called function's instructions to see if any of them contain the address/instruction

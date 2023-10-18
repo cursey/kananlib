@@ -972,6 +972,60 @@ namespace utility {
         return result;
     }
 
+    std::optional<uintptr_t> find_encapsulating_virtual_function_disp(uintptr_t vtable, size_t walk_amount, uintptr_t disp, bool follow_calls) {
+        if (walk_amount == 0 || vtable == 0 || IsBadReadPtr((void*)vtable, sizeof(void*) * walk_amount)) {
+            return std::nullopt;
+        }
+
+        std::optional<uintptr_t> result{};
+        std::unordered_set<uintptr_t> seen{};
+
+        for (size_t i = 0; i < walk_amount; ++i) {
+            const auto fn = *(uintptr_t*)(vtable + (sizeof(void*) * i));
+            if (fn == 0 || IsBadReadPtr((void*)fn, 8)) {
+                continue;
+            }
+
+            if (result) {
+                break;
+            }
+
+            utility::exhaustive_decode((uint8_t*)fn, 200, [&](INSTRUX& ix, uintptr_t ip) -> utility::ExhaustionResult {
+                if (result) {
+                    return utility::ExhaustionResult::BREAK;
+                }
+
+                // We don't treat every new function as a valid path, we need to check if we've seen it before
+                // or else execution times will balloon
+                if (seen.contains(ip)) {
+                    return utility::ExhaustionResult::BREAK;
+                }
+
+                if (!follow_calls && std::string_view{ix.Mnemonic}.starts_with("CALL")) {
+                    return utility::ExhaustionResult::STEP_OVER;
+                }
+
+                seen.insert(ip);
+
+                const auto displacement = utility::resolve_displacement(ip);
+
+                if (!displacement) {
+                    return utility::ExhaustionResult::CONTINUE;
+                }
+
+                if (*displacement == disp) {
+                    result = fn;
+                    SPDLOG_INFO("Found encapsulating virtual function at 0x{:x} for {:x} (displacement)", fn, disp);
+                    return utility::ExhaustionResult::BREAK;
+                }
+
+                return utility::ExhaustionResult::CONTINUE;
+            });
+        }
+
+        return result;
+    }
+
     std::optional<uintptr_t> find_encapsulating_function(uintptr_t start_instruction, uintptr_t middle) {
         if (middle == 0 || start_instruction == 0 || IsBadReadPtr((void*)start_instruction, sizeof(void*))) {
             return std::nullopt;
