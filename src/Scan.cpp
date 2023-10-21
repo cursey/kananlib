@@ -1307,6 +1307,33 @@ namespace utility {
         return result;
     }
 
+    std::optional<Resolved> find_mnemonic_in_path(uintptr_t start_instruction, uint32_t num_instructions, std::string_view mnemonic, bool follow_calls) {
+        if (mnemonic.empty() || IsBadReadPtr((void*)start_instruction, sizeof(void*))) {
+            return std::nullopt;
+        }
+
+        std::optional<Resolved> result{};
+
+        utility::exhaustive_decode((uint8_t*)start_instruction, num_instructions, [&](INSTRUX& ix, uintptr_t ip) -> utility::ExhaustionResult {
+            if (result) {
+                return utility::ExhaustionResult::BREAK;
+            }
+
+            if (std::string_view{ix.Mnemonic}.starts_with(mnemonic)) {
+                result = Resolved{ ip, ix };
+                return utility::ExhaustionResult::BREAK;
+            }
+
+            if (!follow_calls && std::string_view{ix.Mnemonic}.starts_with("CALL")) {
+                return utility::ExhaustionResult::STEP_OVER;
+            }
+
+            return utility::ExhaustionResult::CONTINUE;
+        });
+
+        return result;
+    }
+
     std::vector<Resolved> get_disassembly_behind(uintptr_t middle) {
         const auto reference_point = find_function_start(middle);
 
