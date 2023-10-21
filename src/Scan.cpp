@@ -1232,6 +1232,81 @@ namespace utility {
         return std::nullopt;
     }
 
+
+    std::optional<ResolvedDisplacement> find_string_reference_in_path(uintptr_t start_instruction, std::string_view str, bool follow_calls) {
+        if (str.empty() || IsBadReadPtr((void*)start_instruction, sizeof(void*))) {
+            return std::nullopt;
+        }
+
+        std::optional<ResolvedDisplacement> result{};
+
+        utility::exhaustive_decode((uint8_t*)start_instruction, 200, [&](INSTRUX& ix, uintptr_t ip) -> utility::ExhaustionResult {
+            if (result) {
+                return utility::ExhaustionResult::BREAK;
+            }
+
+            if (!follow_calls && std::string_view{ix.Mnemonic}.starts_with("CALL")) {
+                return utility::ExhaustionResult::STEP_OVER;
+            }
+
+            const auto disp = utility::resolve_displacement(ip);
+
+            if (!disp) {
+                return utility::ExhaustionResult::CONTINUE;
+            }
+
+            if (IsBadReadPtr((void*)*disp, str.length() * sizeof(wchar_t))) {
+                return utility::ExhaustionResult::CONTINUE;
+            }
+
+            if (str == (const char*)*disp) {
+                result = ResolvedDisplacement{ ip, ix, *disp };
+                return utility::ExhaustionResult::BREAK;
+            }
+
+            return utility::ExhaustionResult::CONTINUE;
+        });
+
+        return result;
+    }
+
+    std::optional<ResolvedDisplacement> find_string_reference_in_path(uintptr_t start_instruction, std::wstring_view str, bool follow_calls) {
+        if (str.empty() || IsBadReadPtr((void*)start_instruction, sizeof(void*))) {
+            return std::nullopt;
+        }
+
+        std::optional<ResolvedDisplacement> result{};
+
+        utility::exhaustive_decode((uint8_t*)start_instruction, 200, [&](INSTRUX& ix, uintptr_t ip) -> utility::ExhaustionResult {
+            if (result) {
+                return utility::ExhaustionResult::BREAK;
+            }
+
+            if (!follow_calls && std::string_view{ix.Mnemonic}.starts_with("CALL")) {
+                return utility::ExhaustionResult::STEP_OVER;
+            }
+
+            const auto disp = utility::resolve_displacement(ip);
+
+            if (!disp) {
+                return utility::ExhaustionResult::CONTINUE;
+            }
+
+            if (IsBadReadPtr((void*)*disp, str.length() * sizeof(wchar_t))) {
+                return utility::ExhaustionResult::CONTINUE;
+            }
+
+            if (str == (const wchar_t*)*disp) {
+                result = ResolvedDisplacement{ ip, ix, *disp };
+                return utility::ExhaustionResult::BREAK;
+            }
+
+            return utility::ExhaustionResult::CONTINUE;
+        });
+
+        return result;
+    }
+
     std::vector<Resolved> get_disassembly_behind(uintptr_t middle) {
         const auto reference_point = find_function_start(middle);
 
