@@ -350,13 +350,23 @@ namespace utility {
     }
 
     std::optional<uintptr_t> scan_displacement_reference(uintptr_t start, size_t length, uintptr_t ptr) {
-        const auto results = scan_displacement_references(start, length, ptr);
+        const auto end = (start + length) - sizeof(void*);
 
-        if (results.empty()) {
-            return {};
+        for (auto i = (uintptr_t)start; i + 4 < end; i += sizeof(uint8_t)) {
+            if (calculate_absolute(i, 4) == ptr) {
+                const auto resolved = utility::resolve_instruction(i);
+
+                if (resolved) {
+                    const auto displacement = utility::resolve_displacement(resolved->addr);
+
+                    if (displacement && *displacement == ptr) {
+                        return i;
+                    }
+                }
+            }
         }
 
-        return results[0];
+        return std::nullopt;
     }
     
     std::optional<uintptr_t> scan_opcode(uintptr_t ip, size_t num_instructions, uint8_t opcode) {
