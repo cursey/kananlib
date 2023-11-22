@@ -5,13 +5,15 @@ cmake-before="""
 add_compile_options($<$<CXX_COMPILER_ID:MSVC>:/MP>)
 """
 
-[vcpkg]
-version = "2022.07.25"
-packages = ["spdlog", "bddisasm"]
+[fetch-content.bddisasm]
+git = "https://github.com/bitdefender/bddisasm"
+tag = "v1.37.0"
+shallow = true
 
-[find-package]
-spdlog = { required = false }
-bddisasm = { required = false }
+[fetch-content.spdlog]
+git = "https://github.com/gabime/spdlog"
+tag = "v1.12.0"
+shallow = true
 
 [template.kananlib-template]
 type = "static"
