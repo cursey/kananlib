@@ -56,11 +56,14 @@ namespace utility {
 
     optional<uintptr_t> scan_data(HMODULE module, const uint8_t* data, size_t size) {
         const auto module_size = get_module_size(module).value_or(0);
-        const auto end = (uintptr_t)module + module_size;
+        auto it = (uint8_t*)module;
+        const auto end = (uint8_t*)module + module_size;
 
-        for (auto i = (uintptr_t)module; i < end; i += sizeof(uint8_t)) {
-            if (memcmp((void*)i, data, size) == 0) {
-                return i;
+        while (end != (it = std::find(it, end, *data))) {
+            if (memcmp(it, data, size) == 0) {
+                return (uintptr_t)it;
+            } else {
+                it++;
             }
         }
 
@@ -72,9 +75,13 @@ namespace utility {
             return {};
         }
 
-        for (auto i = start; i < start + length; i += sizeof(uint8_t)) {
-            if (memcmp((void*)i, data, size) == 0) {
-                return i;
+        auto it = (uint8_t*)start;
+        const auto end = (uint8_t*)start + length;
+        while (end != (it = std::find(it, end, *data))) {
+            if (memcmp(it, data, size) == 0) {
+                return (uintptr_t)it;
+            } else {
+                it++;
             }
         }
 
