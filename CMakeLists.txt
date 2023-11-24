@@ -27,27 +27,54 @@ if(CMKR_ROOT_PROJECT)
 	configure_file(cmake.toml cmake.toml COPYONLY)
 endif()
 
+# Options
+option(KANANLIB_FETCH_BDDISASM "" OFF)
+option(KANANLIB_FETCH_SPDLOG "" OFF)
+option(KANANLIB_STANDALONE_BUILD "" OFF)
+
  
 add_compile_options($<$<CXX_COMPILER_ID:MSVC>:/MP>)
 
 project(kananlib)
 
-if(CMKR_ROOT_PROJECT AND NOT CMKR_DISABLE_VCPKG)
-	include(FetchContent)
-	message(STATUS "Fetching vcpkg (2022.07.25)...")
-	FetchContent_Declare(vcpkg URL "https://github.com/microsoft/vcpkg/archive/refs/tags/2022.07.25.tar.gz")
-	FetchContent_GetProperties(vcpkg)
-	if(NOT vcpkg_POPULATED)
-		FetchContent_Populate(vcpkg)
-		include("${vcpkg_SOURCE_DIR}/scripts/buildsystems/vcpkg.cmake")
-	endif()
+if(CMAKE_SOURCE_DIR STREQUAL PROJECT_SOURCE_DIR)
+    # The project is being built standalone
+    message(STATUS "kananlib: Building standalone")
+    set(KANANLIB_STANDALONE_BUILD ON)
+else()
+    # The project is being included as part of another project
+    message(STATUS "kananlib: Building as part of another project")
+    set(KANANLIB_STANDALONE_BUILD OFF)
 endif()
 
-# Packages
-find_package(spdlog)
+include(FetchContent)
 
-find_package(bddisasm)
+if(KANANLIB_FETCH_BDDISASM OR KANANLIB_STANDALONE_BUILD) # fetch-bddisasm
+	message(STATUS "Fetching bddisasm (v1.37.0)...")
+	FetchContent_Declare(bddisasm
+		GIT_REPOSITORY
+			"https://github.com/bitdefender/bddisasm"
+		GIT_TAG
+			v1.37.0
+		GIT_SHALLOW
+			ON
+	)
+	FetchContent_MakeAvailable(bddisasm)
 
+endif()
+if(KANANLIB_FETCH_SPDLOG OR KANANLIB_STANDALONE_BUILD) # fetch-spdlog
+	message(STATUS "Fetching spdlog (v1.12.0)...")
+	FetchContent_Declare(spdlog
+		GIT_REPOSITORY
+			"https://github.com/gabime/spdlog"
+		GIT_TAG
+			v1.12.0
+		GIT_SHALLOW
+			ON
+	)
+	FetchContent_MakeAvailable(spdlog)
+
+endif()
 # Target kananlib
 set(CMKR_TARGET kananlib)
 set(kananlib_SOURCES "")
@@ -84,6 +111,7 @@ list(APPEND kananlib_SOURCES
 	"include/utility/String.hpp"
 	"include/utility/Thread.hpp"
 	"include/utility/VtableHook.hpp"
+	"include/utility/thirdparty/parallel-util.hpp"
 )
 
 list(APPEND kananlib_SOURCES
@@ -154,6 +182,7 @@ list(APPEND kananlib-nolog_SOURCES
 	"include/utility/String.hpp"
 	"include/utility/Thread.hpp"
 	"include/utility/VtableHook.hpp"
+	"include/utility/thirdparty/parallel-util.hpp"
 )
 
 list(APPEND kananlib-nolog_SOURCES

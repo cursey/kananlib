@@ -4,13 +4,35 @@ name = "kananlib"
 cmake-before=""" 
 add_compile_options($<$<CXX_COMPILER_ID:MSVC>:/MP>)
 """
+cmake-after="""
+if(CMAKE_SOURCE_DIR STREQUAL PROJECT_SOURCE_DIR)
+    # The project is being built standalone
+    message(STATUS "kananlib: Building standalone")
+    set(KANANLIB_STANDALONE_BUILD ON)
+else()
+    # The project is being included as part of another project
+    message(STATUS "kananlib: Building as part of another project")
+    set(KANANLIB_STANDALONE_BUILD OFF)
+endif()
+"""
+
+[options]
+KANANLIB_FETCH_BDDISASM = false
+KANANLIB_FETCH_SPDLOG = false
+KANANLIB_STANDALONE_BUILD = false
+
+[conditions]
+fetch-bddisasm = "KANANLIB_FETCH_BDDISASM OR KANANLIB_STANDALONE_BUILD"
+fetch-spdlog = "KANANLIB_FETCH_SPDLOG OR KANANLIB_STANDALONE_BUILD"
 
 [fetch-content.bddisasm]
+condition = "fetch-bddisasm"
 git = "https://github.com/bitdefender/bddisasm"
 tag = "v1.37.0"
 shallow = true
 
 [fetch-content.spdlog]
+condition = "fetch-spdlog"
 git = "https://github.com/gabime/spdlog"
 tag = "v1.12.0"
 shallow = true
