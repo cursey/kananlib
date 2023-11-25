@@ -1,0 +1,49 @@
+# Reference: https://build-cpp.github.io/cmkr/cmake-toml
+[project]
+name = "kananlibtest"
+cmake-before=""" 
+add_compile_options($<$<CXX_COMPILER_ID:MSVC>:/MP>)
+
+# mklink the parent dir as kananlib/ with command line stuff
+set(TARGET_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
+
+execute_process(
+    COMMAND cmd /c mklink /J kananlib ..
+    WORKING_DIRECTORY ${TARGET_DIR}
+    RESULT_VARIABLE result
+    OUTPUT_VARIABLE output
+    ERROR_VARIABLE error_output
+)
+"""
+cmake-after="""
+message(STATUS ${PROJECT_SOURCE_DIR})
+"""
+
+[fetch-content.bddisasm]
+git = "https://github.com/bitdefender/bddisasm"
+tag = "v1.37.0"
+shallow = true
+
+[fetch-content.spdlog]
+git = "https://github.com/gabime/spdlog"
+tag = "v1.12.0"
+shallow = true
+
+[template.kananlib-test-template]
+type = "executable"
+sources = ["Main.cpp"]
+include-directories = ["include"]
+compile-features = ["cxx_std_20"]
+compile-options = ["/EHa"]
+link-libraries = [
+    "bddisasm::bddisasm", 
+    "spdlog::spdlog", 
+    "shlwapi",
+    "kananlib"
+]
+cmake-before="""
+add_subdirectory(kananlib)
+"""
+
+[target.kananlib-test]
+type = "kananlib-test-template"
