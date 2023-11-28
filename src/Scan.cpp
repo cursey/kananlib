@@ -1336,22 +1336,34 @@ namespace utility {
                 return utility::ExhaustionResult::BREAK;
             }
 
+            auto check_if_pointer = [&]() -> bool {
+                const auto disp = utility::resolve_displacement(ip);
+
+                if (!disp) {
+                    return false;
+                }
+
+                if (IsBadReadPtr((void*)*disp, sizeof(void*))) {
+                    return false;
+                }
+
+                if (pointer == *(void**)*disp) {
+                    result = ResolvedDisplacement{ ip, ix, *disp };
+                    return true;
+                }
+
+                return false;
+            };
+
             if (!follow_calls && std::string_view{ix.Mnemonic}.starts_with("CALL")) {
+                if (check_if_pointer()) {
+                    return utility::ExhaustionResult::BREAK;
+                }
+
                 return utility::ExhaustionResult::STEP_OVER;
             }
 
-            const auto disp = utility::resolve_displacement(ip);
-
-            if (!disp) {
-                return utility::ExhaustionResult::CONTINUE;
-            }
-
-            if (IsBadReadPtr((void*)*disp, sizeof(void*))) {
-                return utility::ExhaustionResult::CONTINUE;
-            }
-
-            if (pointer == *(void**)*disp) {
-                result = ResolvedDisplacement{ ip, ix, *disp };
+            if (check_if_pointer()) {
                 return utility::ExhaustionResult::BREAK;
             }
 
