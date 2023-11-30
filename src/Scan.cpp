@@ -56,11 +56,14 @@ namespace utility {
 
     optional<uintptr_t> scan_data(HMODULE module, const uint8_t* data, size_t size) {
         const auto module_size = get_module_size(module).value_or(0);
-        const auto end = (uintptr_t)module + module_size;
+        auto it = (uint8_t*)module;
+        const auto end = (uint8_t*)module + module_size;
 
-        for (auto i = (uintptr_t)module; i < end; i += sizeof(uint8_t)) {
-            if (memcmp((void*)i, data, size) == 0) {
-                return i;
+        while (end != (it = std::find(it, end, *data))) {
+            if (memcmp(it, data, size) == 0) {
+                return (uintptr_t)it;
+            } else {
+                it++;
             }
         }
 
@@ -72,9 +75,13 @@ namespace utility {
             return {};
         }
 
-        for (auto i = start; i < start + length; i += sizeof(uint8_t)) {
-            if (memcmp((void*)i, data, size) == 0) {
-                return i;
+        auto it = (uint8_t*)start;
+        const auto end = (uint8_t*)start + length;
+        while (end != (it = std::find(it, end, *data))) {
+            if (memcmp(it, data, size) == 0) {
+                return (uintptr_t)it;
+            } else {
+                it++;
             }
         }
 
@@ -350,13 +357,23 @@ namespace utility {
     }
 
     std::optional<uintptr_t> scan_displacement_reference(uintptr_t start, size_t length, uintptr_t ptr) {
-        const auto results = scan_displacement_references(start, length, ptr);
+        const auto end = (start + length) - sizeof(void*);
 
-        if (results.empty()) {
-            return {};
+        for (auto i = (uintptr_t)start; i + 4 < end; i += sizeof(uint8_t)) {
+            if (calculate_absolute(i, 4) == ptr) {
+                const auto resolved = utility::resolve_instruction(i);
+
+                if (resolved) {
+                    const auto displacement = utility::resolve_displacement(resolved->addr);
+
+                    if (displacement && *displacement == ptr) {
+                        return i;
+                    }
+                }
+            }
         }
 
-        return results[0];
+        return std::nullopt;
     }
     
     std::optional<uintptr_t> scan_opcode(uintptr_t ip, size_t num_instructions, uint8_t opcode) {
@@ -1230,6 +1247,193 @@ namespace utility {
         }
 
         return std::nullopt;
+    }
+
+
+    std::optional<ResolvedDisplacement> find_string_reference_in_path(uintptr_t start_instruction, std::string_view str, bool follow_calls) {
+        if (str.empty() || IsBadReadPtr((void*)start_instruction, sizeof(void*))) {
+            return std::nullopt;
+        }
+
+        std::optional<ResolvedDisplacement> result{};
+
+        utility::exhaustive_decode((uint8_t*)start_instruction, 200, [&](INSTRUX& ix, uintptr_t ip) -> utility::ExhaustionResult {
+            if (result) {
+                return utility::ExhaustionResult::BREAK;
+            }
+
+            if (!follow_calls && std::string_view{ix.Mnemonic}.starts_with("CALL")) {
+                return utility::ExhaustionResult::STEP_OVER;
+            }
+
+            const auto disp = utility::resolve_displacement(ip);
+
+            if (!disp) {
+                return utility::ExhaustionResult::CONTINUE;
+            }
+
+            if (IsBadReadPtr((void*)*disp, str.length() * sizeof(wchar_t))) {
+                return utility::ExhaustionResult::CONTINUE;
+            }
+
+            if (str == (const char*)*disp) {
+                result = ResolvedDisplacement{ ip, ix, *disp };
+                return utility::ExhaustionResult::BREAK;
+            }
+
+            return utility::ExhaustionResult::CONTINUE;
+        });
+
+        return result;
+    }
+
+    std::optional<ResolvedDisplacement> find_string_reference_in_path(uintptr_t start_instruction, std::wstring_view str, bool follow_calls) {
+        if (str.empty() || IsBadReadPtr((void*)start_instruction, sizeof(void*))) {
+            return std::nullopt;
+        }
+
+        std::optional<ResolvedDisplacement> result{};
+
+        utility::exhaustive_decode((uint8_t*)start_instruction, 200, [&](INSTRUX& ix, uintptr_t ip) -> utility::ExhaustionResult {
+            if (result) {
+                return utility::ExhaustionResult::BREAK;
+            }
+
+            if (!follow_calls && std::string_view{ix.Mnemonic}.starts_with("CALL")) {
+                return utility::ExhaustionResult::STEP_OVER;
+            }
+
+            const auto disp = utility::resolve_displacement(ip);
+
+            if (!disp) {
+                return utility::ExhaustionResult::CONTINUE;
+            }
+
+            if (IsBadReadPtr((void*)*disp, str.length() * sizeof(wchar_t))) {
+                return utility::ExhaustionResult::CONTINUE;
+            }
+
+            if (str == (const wchar_t*)*disp) {
+                result = ResolvedDisplacement{ ip, ix, *disp };
+                return utility::ExhaustionResult::BREAK;
+            }
+
+            return utility::ExhaustionResult::CONTINUE;
+        });
+
+        return result;
+    }
+
+    std::optional<ResolvedDisplacement> find_pointer_in_path(uintptr_t start_instruction, const void* pointer, bool follow_calls) {
+        if (IsBadReadPtr((void*)start_instruction, sizeof(void*))) {
+            return std::nullopt;
+        }
+
+        std::optional<ResolvedDisplacement> result{};
+
+        utility::exhaustive_decode((uint8_t*)start_instruction, 200, [&](INSTRUX& ix, uintptr_t ip) -> utility::ExhaustionResult {
+            if (result) {
+                return utility::ExhaustionResult::BREAK;
+            }
+
+            auto check_if_pointer = [&]() -> bool {
+                const auto disp = utility::resolve_displacement(ip);
+
+                if (!disp) {
+                    return false;
+                }
+
+                if (IsBadReadPtr((void*)*disp, sizeof(void*))) {
+                    return false;
+                }
+
+                if (pointer == *(void**)*disp) {
+                    result = ResolvedDisplacement{ ip, ix, *disp };
+                    return true;
+                }
+
+                return false;
+            };
+
+            if (!follow_calls && std::string_view{ix.Mnemonic}.starts_with("CALL")) {
+                if (check_if_pointer()) {
+                    return utility::ExhaustionResult::BREAK;
+                }
+
+                return utility::ExhaustionResult::STEP_OVER;
+            }
+
+            if (check_if_pointer()) {
+                return utility::ExhaustionResult::BREAK;
+            }
+
+            return utility::ExhaustionResult::CONTINUE;
+        });
+
+        return result;
+    }
+
+    std::optional<Resolved> find_mnemonic_in_path(uintptr_t start_instruction, uint32_t num_instructions, std::string_view mnemonic, bool follow_calls) {
+        if (mnemonic.empty() || IsBadReadPtr((void*)start_instruction, sizeof(void*))) {
+            return std::nullopt;
+        }
+
+        std::optional<Resolved> result{};
+
+        utility::exhaustive_decode((uint8_t*)start_instruction, num_instructions, [&](INSTRUX& ix, uintptr_t ip) -> utility::ExhaustionResult {
+            if (result) {
+                return utility::ExhaustionResult::BREAK;
+            }
+
+            if (std::string_view{ix.Mnemonic}.starts_with(mnemonic)) {
+                result = Resolved{ ip, ix };
+                return utility::ExhaustionResult::BREAK;
+            }
+
+            if (!follow_calls && std::string_view{ix.Mnemonic}.starts_with("CALL")) {
+                return utility::ExhaustionResult::STEP_OVER;
+            }
+
+            return utility::ExhaustionResult::CONTINUE;
+        });
+
+        return result;
+    }
+
+    std::optional<Resolved> find_register_usage_in_path(uintptr_t start_instruction, uint32_t num_instructions, uint32_t reg, bool follow_calls) {
+        if (IsBadReadPtr((void*)start_instruction, sizeof(void*))) {
+            return std::nullopt;
+        }
+
+        std::optional<Resolved> result{};
+
+        utility::exhaustive_decode((uint8_t*)start_instruction, num_instructions, [&](INSTRUX& ix, uintptr_t ip) -> utility::ExhaustionResult {
+            if (result) {
+                return utility::ExhaustionResult::BREAK;
+            }
+
+            for (auto i = 0; i < ix.OperandsCount; ++i) {
+                const auto& operand = ix.Operands[i];
+
+                if (operand.Type == ND_OP_REG && operand.Info.Register.Reg == reg) {
+                    result = Resolved{ ip, ix };
+                    return utility::ExhaustionResult::BREAK;
+                }
+
+                if (operand.Type == ND_OP_MEM && operand.Info.Memory.HasBase && operand.Info.Memory.Base == reg) {
+                    result = Resolved{ ip, ix };
+                    return utility::ExhaustionResult::BREAK;
+                }
+            }
+
+            if (!follow_calls && std::string_view{ix.Mnemonic}.starts_with("CALL")) {
+                return utility::ExhaustionResult::STEP_OVER;
+            }
+
+            return utility::ExhaustionResult::CONTINUE;
+        });
+
+        return result;
     }
 
     std::vector<Resolved> get_disassembly_behind(uintptr_t middle) {

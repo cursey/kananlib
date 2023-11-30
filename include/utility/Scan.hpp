@@ -123,6 +123,12 @@ namespace utility {
     std::optional<ResolvedDisplacement> find_next_displacement(uintptr_t ip, bool follow_calls = false); // stops if ret, int3
     std::optional<Resolved> resolve_instruction(uintptr_t middle); // finds the start of the instruction given an address in the middle of the instruction 
 
+    std::optional<ResolvedDisplacement> find_string_reference_in_path(uintptr_t start_instruction, std::string_view str, bool follow_calls = true);
+    std::optional<ResolvedDisplacement> find_string_reference_in_path(uintptr_t start_instruction, std::wstring_view str, bool follow_calls = true);
+    std::optional<ResolvedDisplacement> find_pointer_in_path(uintptr_t start_instruction, const void* pointer, bool follow_calls = true);
+    std::optional<Resolved> find_mnemonic_in_path(uintptr_t start_instruction, uint32_t num_instructions, std::string_view mnemonic, bool follow_calls = true);
+    std::optional<Resolved> find_register_usage_in_path(uintptr_t start_instruction, uint32_t num_instructions, uint32_t reg, bool follow_calls = true);
+
     // Finds the function start given the middle, and then disassembles and stores all instructions until it hits the middle
     // We can use this to "disassemble" backwards from the middle of an instruction
     std::vector<Resolved> get_disassembly_behind(uintptr_t middle);
