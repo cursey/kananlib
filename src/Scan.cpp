@@ -1373,6 +1373,51 @@ namespace utility {
         return result;
     }
 
+    std::optional<ResolvedDisplacement> find_displacement_in_path(uintptr_t start_instruction, uintptr_t displacement, bool follow_calls) {
+        if (IsBadReadPtr((void*)start_instruction, sizeof(void*))) {
+            return std::nullopt;
+        }
+
+        std::optional<ResolvedDisplacement> result{};
+
+        utility::exhaustive_decode((uint8_t*)start_instruction, 200, [&](INSTRUX& ix, uintptr_t ip) -> utility::ExhaustionResult {
+            if (result) {
+                return utility::ExhaustionResult::BREAK;
+            }
+
+            auto check_if_pointer = [&]() -> bool {
+                const auto disp = utility::resolve_displacement(ip);
+
+                if (!disp) {
+                    return false;
+                }
+
+                if (*disp == displacement) {
+                    result = ResolvedDisplacement{ ip, ix, *disp };
+                    return true;
+                }
+
+                return false;
+            };
+
+            if (!follow_calls && std::string_view{ix.Mnemonic}.starts_with("CALL")) {
+                if (check_if_pointer()) {
+                    return utility::ExhaustionResult::BREAK;
+                }
+
+                return utility::ExhaustionResult::STEP_OVER;
+            }
+
+            if (check_if_pointer()) {
+                return utility::ExhaustionResult::BREAK;
+            }
+
+            return utility::ExhaustionResult::CONTINUE;
+        });
+
+        return result;
+    }
+
     std::optional<Resolved> find_mnemonic_in_path(uintptr_t start_instruction, uint32_t num_instructions, std::string_view mnemonic, bool follow_calls) {
         if (mnemonic.empty() || IsBadReadPtr((void*)start_instruction, sizeof(void*))) {
             return std::nullopt;
