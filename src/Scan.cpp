@@ -1481,6 +1481,33 @@ namespace utility {
         return result;
     }
 
+    std::optional<Resolved> find_pattern_in_path(uint8_t* ip, size_t max_size, bool follow_calls, const std::string& pattern) {
+        if (IsBadReadPtr(ip, sizeof(void*))) {
+            return std::nullopt;
+        }
+
+        std::optional<Resolved> result{};
+
+        exhaustive_decode(ip, max_size, [&](INSTRUX& instrux, uintptr_t addr) {
+            if (result.has_value()) {
+                return BREAK;
+            }
+
+            if (!follow_calls && std::string_view{instrux.Mnemonic}.starts_with("CALL")) {
+                return STEP_OVER;
+            }
+
+            if (const auto s = utility::scan(addr, 64, pattern); s.has_value() && *s == addr) {
+                result = Resolved{ addr, instrux };
+                return BREAK;
+            }
+
+            return CONTINUE;
+        });
+
+        return result;
+    }
+
     std::vector<Resolved> get_disassembly_behind(uintptr_t middle) {
         const auto reference_point = find_function_start(middle);
 

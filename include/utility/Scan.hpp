@@ -130,6 +130,9 @@ namespace utility {
     std::optional<Resolved> find_mnemonic_in_path(uintptr_t start_instruction, uint32_t num_instructions, std::string_view mnemonic, bool follow_calls = true);
     std::optional<Resolved> find_register_usage_in_path(uintptr_t start_instruction, uint32_t num_instructions, uint32_t reg, bool follow_calls = true);
 
+    // This is scan_disasm but it will stop whenever execution fully exhausts all branches and hits a return, int3, etc
+    std::optional<Resolved> find_pattern_in_path(uint8_t* ip, size_t max_size, bool follow_calls, const std::string& pattern);
+
     // Finds the function start given the middle, and then disassembles and stores all instructions until it hits the middle
     // We can use this to "disassemble" backwards from the middle of an instruction
     std::vector<Resolved> get_disassembly_behind(uintptr_t middle);
