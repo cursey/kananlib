@@ -53,4 +53,6 @@ namespace utility {
     size_t get_module_count(std::wstring_view name);
     void unlink_duplicate_modules();
     void spoof_module_paths_in_exe_dir();
+
+    std::vector<std::wstring> get_loaded_module_names();
 }

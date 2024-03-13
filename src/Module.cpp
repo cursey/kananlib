@@ -491,4 +491,29 @@ namespace utility {
 
         return {};
     }
+
+    std::vector<std::wstring> get_loaded_module_names() {
+        std::vector<HMODULE> modules{};
+        std::vector<std::wstring> out{};
+        
+        foreach_module([&](LIST_ENTRY* entry, _LDR_DATA_TABLE_ENTRY* ldr_entry) {
+            modules.push_back((HMODULE)ldr_entry->DllBase);
+        });
+
+        for (auto& module : modules) {
+            if (module == nullptr) {
+                continue;
+            }
+
+            const auto path = get_module_pathw(module);
+
+            if (!path) {
+                continue;
+            }
+
+            out.push_back(*path);
+        }
+
+        return out;
+    }
 }
