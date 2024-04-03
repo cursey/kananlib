@@ -292,6 +292,19 @@ namespace utility {
         if (peb == nullptr) {
             return;
         }
+
+        typedef NTSTATUS (WINAPI* PFN_LdrLockLoaderLock)(ULONG Flags, ULONG *State, ULONG_PTR *Cookie);
+        typedef NTSTATUS (WINAPI* PFN_LdrUnlockLoaderLock)(ULONG Flags, ULONG_PTR Cookie);
+
+        const auto ntdll = GetModuleHandleW(L"ntdll.dll");
+        auto lock_loader = ntdll != nullptr ? (PFN_LdrLockLoaderLock)GetProcAddress(ntdll, "LdrLockLoaderLock") : nullptr;
+        auto unlock_loader = ntdll != nullptr ? (PFN_LdrUnlockLoaderLock)GetProcAddress(ntdll, "LdrUnlockLoaderLock") : nullptr;
+
+        ULONG_PTR loader_magic = 0;
+
+        if (lock_loader != nullptr && unlock_loader != nullptr) {
+            lock_loader(0, NULL, &loader_magic);
+        }
         
         for (auto entry = peb->Ldr->InMemoryOrderModuleList.Flink; entry != &peb->Ldr->InMemoryOrderModuleList && entry != nullptr; entry = entry->Flink) {
             if (IsBadReadPtr(entry, sizeof(LIST_ENTRY))) {
@@ -305,8 +318,12 @@ namespace utility {
                 SPDLOG_ERROR("[PEB] ldr entry {:x} is a bad pointer", (uintptr_t)ldr_entry);
                 break;
             }
-
+            
             callback(entry, ldr_entry);
+        }
+
+        if (lock_loader != nullptr && unlock_loader != nullptr) {
+            unlock_loader(0, loader_magic);
         }
     } catch(std::exception& e) {
         SPDLOG_ERROR("[PEB] exception while iterating modules: {}", e.what());
