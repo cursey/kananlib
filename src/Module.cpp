@@ -451,7 +451,15 @@ namespace utility {
                 try {
                     if (std::filesystem::exists(path)) {
                         std::filesystem::create_directory(std::filesystem::path{new_path}.parent_path());
-                        std::filesystem::copy_file(path, new_path, std::filesystem::copy_options::overwrite_existing);
+
+                        std::error_code ec{};
+                        std::filesystem::copy_file(path, new_path, std::filesystem::copy_options::overwrite_existing, ec);
+
+                        if (ec) {
+                            spdlog::error("Failed to copy DLL file: {}", ec.message());
+                        }
+
+                        ec.clear();
                     }
                 } catch(...) {
                     SPDLOG_ERROR("Failed to copy {} to {}", utility::narrow(path.wstring()), utility::narrow(new_path));
