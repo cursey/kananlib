@@ -66,9 +66,28 @@ void resume_threads(const ThreadStates& states) {
     }
 }
 
+typedef NTSTATUS (WINAPI* PFN_LdrLockLoaderLock)(ULONG Flags, ULONG *State, ULONG_PTR *Cookie);
+typedef NTSTATUS (WINAPI* PFN_LdrUnlockLoaderLock)(ULONG Flags, ULONG_PTR Cookie);
+
 ThreadSuspender::ThreadSuspender()  {
+    auto ntdll = GetModuleHandleA("ntdll.dll");
+    
+    auto lock_loader = ntdll != nullptr ? (PFN_LdrLockLoaderLock)GetProcAddress(ntdll, "LdrLockLoaderLock") : nullptr;
+    auto unlock_loader = ntdll != nullptr ? (PFN_LdrUnlockLoaderLock)GetProcAddress(ntdll, "LdrUnlockLoaderLock") : nullptr;
+
+    ULONG_PTR loader_magic = 0;
+    if (lock_loader != nullptr && unlock_loader != nullptr) {
+        SPDLOG_INFO("Locking loader lock...");
+        lock_loader(0, NULL, &loader_magic);
+    }
+
     detail::g_suspend_mutex.lock();
     states = suspend_threads();
+
+    if (lock_loader != nullptr && unlock_loader != nullptr) {
+        unlock_loader(0, loader_magic);
+        SPDLOG_INFO("Unlocked loader lock.");
+    }
 }
 
 ThreadSuspender::~ThreadSuspender() {
