@@ -807,7 +807,7 @@ namespace utility {
                     Bucket bucket{};
                     const auto bucket_index = i * NUM_BUCKETS;
                     bucket.start_range = sorted_entries[bucket_index]->BeginAddress;
-                    const auto next_index = std::min<size_t>((i + 1) * NUM_BUCKETS, sorted_entries.size() - 1);
+                    const auto next_index = std::min<size_t>((i + 1) * NUM_BUCKETS, sorted_entries.size());
 
                     uint32_t highest_end = 0;
                     for (size_t j = bucket_index; j < next_index; ++j) {
