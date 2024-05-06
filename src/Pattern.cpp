@@ -32,7 +32,8 @@ namespace utility {
 
     optional<uintptr_t> Pattern::find(uintptr_t start, size_t length) {
         auto patternLength = m_pattern.size();
-        auto end = start + length - patternLength;
+        auto actual_end = start + length;
+        auto end_scan_from = actual_end - patternLength;
 
         int32_t first_non_wildcard_index{-1};
 
@@ -50,17 +51,17 @@ namespace utility {
 
         auto it_wildcard = (uint8_t*)start;
 
-        while (it_wildcard < (uint8_t*)end) try {
+        do try {
             // std::find can throw an exception if the memory is not readable.
             // std::find also appears to be highly optimized compared to a manual loop which is why we use it.
-            it_wildcard = std::find((uint8_t*)it_wildcard, (uint8_t*)end, (uint8_t)m_pattern[first_non_wildcard_index]);
-
-            // Reached the end.
-            if (it_wildcard >= (uint8_t*)end) {
-                return {};
-            }
+            it_wildcard = std::find((uint8_t*)it_wildcard, (uint8_t*)actual_end, (uint8_t)m_pattern[first_non_wildcard_index]);
 
             auto it = it_wildcard - first_non_wildcard_index;
+
+            // Reached the end.
+            if (it > (uint8_t*)end_scan_from) {
+                return {};
+            }
 
             // Do the normal pattern matching.
             auto j = it;
@@ -91,7 +92,7 @@ namespace utility {
         } catch(...) { // MAKE SURE YOU HAVE EXCEPTION HANDLING FOR ACCESS VIOLATIONS!!!!!!!!
             ++it_wildcard;
             continue;
-        }
+        } while ((it_wildcard - first_non_wildcard_index) < (uint8_t*)end_scan_from);
 
         return {};
     }
