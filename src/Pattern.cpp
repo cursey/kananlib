@@ -34,15 +34,45 @@ namespace utility {
         auto patternLength = m_pattern.size();
         auto end = start + length - patternLength;
 
-        for (auto i = start; i <= end; ++i) {
-            auto j = i;
+        int32_t first_non_wildcard_index{-1};
+
+        for (size_t p = 0; p < m_pattern.size(); ++p) {
+            const auto k = m_pattern[p];
+            if (k != -1) {
+                first_non_wildcard_index = p;
+                break;
+            }
+        }
+
+        if (first_non_wildcard_index == -1) {
+            return start; // Pattern is all wildcards, return the start address.
+        }
+
+        auto it_wildcard = (uint8_t*)start;
+
+        while (it_wildcard < (uint8_t*)end) try {
+            // std::find can throw an exception if the memory is not readable.
+            // std::find also appears to be highly optimized compared to a manual loop which is why we use it.
+            it_wildcard = std::find((uint8_t*)it_wildcard, (uint8_t*)end, (uint8_t)m_pattern[first_non_wildcard_index]);
+
+            // Reached the end.
+            if (it_wildcard >= (uint8_t*)end) {
+                return {};
+            }
+
+            auto it = it_wildcard - first_non_wildcard_index;
+
+            // Do the normal pattern matching.
+            auto j = it;
             auto failedToMatch = false;
 
             // Make sure the address is readable.
-            if (IsBadReadPtr((const void*)i, patternLength) != FALSE) {
-                i += patternLength - 1;
+            // Actually, don't do this. It's overhead (indirectly calls through a ptr)
+            // Our exception handler should be fine.
+            /*if (IsBadReadPtr((const void*)it, patternLength) != FALSE) {
+                it_wildcard += patternLength - 1;
                 continue;
-            }
+            }*/
 
             for (auto& k : m_pattern) {
                 if (k != -1 && k != *(uint8_t*)j) {
@@ -54,8 +84,13 @@ namespace utility {
             }
 
             if (!failedToMatch) {
-                return i;
+                return (uintptr_t)it;
             }
+
+            ++it_wildcard;
+        } catch(...) { // MAKE SURE YOU HAVE EXCEPTION HANDLING FOR ACCESS VIOLATIONS!!!!!!!!
+            ++it_wildcard;
+            continue;
         }
 
         return {};
