@@ -1,6 +1,7 @@
 #define NOMINMAX
 
 #include <ppl.h>
+#include <intrin.h>
 
 #include <cstdint>
 #include <unordered_set>
@@ -14,6 +15,7 @@
 #include <utility/Module.hpp>
 #include <utility/Scan.hpp>
 #include <utility/thirdparty/parallel-util.hpp>
+#include <utility/thirdparty/InstructionSet.hpp>
 #include <utility/ScopeGuard.hpp>
 
 using namespace std;
@@ -48,6 +50,8 @@ namespace utility {
     }
 
     optional<uintptr_t> scan(uintptr_t start, size_t length, const string& pattern) {
+        KANANLIB_BENCH();
+
         if (start == 0 || length == 0) {
             return {};
         }
@@ -58,6 +62,8 @@ namespace utility {
     }
 
     std::optional<uintptr_t> scan_reverse(uintptr_t start, size_t length, const std::string& pattern) {
+        KANANLIB_BENCH();
+
         if (start == 0 || length == 0) {
             return {};
         }
@@ -396,7 +402,7 @@ namespace utility {
         std::vector<uintptr_t> results{};
         const auto end = (start + length) - sizeof(void*);
 
-        for (auto i = (uintptr_t)start; i + 4 < end; i += sizeof(uint8_t)) {
+        /*for (auto i = (uintptr_t)start; i + 4 < end; i += sizeof(uint8_t)) {
             if (calculate_absolute(i, 4) == ptr) {
                 const auto resolved = utility::resolve_instruction(i);
 
@@ -408,12 +414,16 @@ namespace utility {
                     }
                 }
             }
+        }*/
+
+        for (auto ref = scan_displacement_reference(start, length, ptr); ref; ref = scan_displacement_reference(*ref + 4, end - (*ref + 4), ptr)) {
+            results.push_back(*ref);
         }
 
         return results;
     }
 
-    std::optional<uintptr_t> scan_displacement_reference(uintptr_t start, size_t length, uintptr_t ptr) {
+    std::optional<uintptr_t> scan_displacement_reference_scalar(uintptr_t start, size_t length, uintptr_t ptr) {
         KANANLIB_BENCH();
 
         const auto end = (start + length) - sizeof(void*);
@@ -429,6 +439,220 @@ namespace utility {
                         return i;
                     }
                 }
+            }
+        }
+
+        return std::nullopt;
+    }
+
+    std::optional<uintptr_t> scan_displacement_reference(uintptr_t start, size_t length, uintptr_t ptr) {
+        KANANLIB_BENCH();
+
+        if (!kananlib::utility::thirdparty::InstructionSet::AVX2() || length <= sizeof(__m256i) * 4) {
+            return scan_displacement_reference_scalar(start, length, ptr);
+        }
+
+        const auto end = (start + length) - sizeof(uintptr_t);
+
+        constexpr auto SHIFT_SCALAR = 8;
+        constexpr auto GRANULARITY = sizeof(__m256i) / SHIFT_SCALAR; // 4
+
+        const __m256i target = _mm256_set1_epi64x(ptr);
+        const __m256i post_ip_constant = _mm256_set1_epi64x(4); // Usually true most of the time. *rel32 + &rel32 + 4 = target unless it's some weird instruction
+        const __m256i shift_amount = _mm256_set1_epi64x(SHIFT_SCALAR);
+
+        const __m256i shuffle_mask_lo = _mm256_set_epi8(
+            -1, -1, -1, -1,
+            -1, -1, -1, -1,
+            -1, -1, -1, -1,
+            -1, -1, -1, -1,
+            6, 5, 4, 3,
+            5, 4, 3, 2,
+            4, 3, 2, 1,
+            3, 2, 1, 0
+        );
+
+        const __m256i shuffle_mask_hi = _mm256_set_epi8(
+            -1, -1, -1, -1,
+            -1, -1, -1, -1,
+            -1, -1, -1, -1,
+            -1, -1, -1, -1,
+            10, 9, 8, 7,
+            9, 8, 7, 6,
+            8, 7, 6, 5,
+            7, 6, 5, 4
+        );
+
+        const __m256i upper_addition_mask = _mm256_add_epi64(_mm256_set_epi64x(7, 6, 5, 4), post_ip_constant);
+        const __m256i lower_addition_mask = _mm256_add_epi64(_mm256_set_epi64x(3, 2, 1, 0), post_ip_constant);
+
+        constexpr int mask_0 = 0b11111111;
+        constexpr int mask_1 = mask_0 << 8;
+        constexpr int mask_2 = mask_1 << 8;
+        constexpr int mask_3 = mask_2 << 8;
+
+        constexpr int masks[] = { mask_0, mask_1, mask_2, mask_3 };
+
+        for (auto i = start; i + sizeof(__m256i) + sizeof(__m256i) < end; i += sizeof(__m256i)) {
+            __m256i i_vectorized = _mm256_set1_epi64x(i);
+            __m256i addresses1 = _mm256_add_epi64(i_vectorized, lower_addition_mask);
+            __m256i addresses2 = _mm256_add_epi64(i_vectorized, upper_addition_mask);
+
+            for (auto shr_i = 0; shr_i < GRANULARITY; ++shr_i) {
+                const auto byte_index = shr_i * SHIFT_SCALAR;
+                const auto real_i = i + byte_index;
+
+                if (shr_i > 0) {
+                    addresses1 = _mm256_add_epi64(addresses1, shift_amount);
+                    addresses2 = _mm256_add_epi64(addresses2, shift_amount);
+                }
+
+                // TODO: Improve this to not read in 8 byte intervals
+                const __m256i data = _mm256_loadu_si256((__m256i*)(real_i));
+                const __m256i shuffled_lo = _mm256_shuffle_epi8(data, shuffle_mask_lo);
+                const __m256i shuffled_hi = _mm256_shuffle_epi8(data, shuffle_mask_hi);
+
+                // Merge the two 128-bit lanes into a single 256-bit register
+                //const __m256i shuffled = _mm256_permute2x128_si256(shuffled_lo, shuffled_hi, 32);
+
+                // Move upper and lower 128-bit lanes to separate registers
+                const __m256i displacement_lo = _mm256_cvtepi32_epi64(_mm256_extracti128_si256(shuffled_lo, 0));
+                const __m256i displacement_hi = _mm256_cvtepi32_epi64(_mm256_extracti128_si256(shuffled_hi, 0));
+
+                // Resolve the addresses
+                const __m256i vaddresses1 = _mm256_add_epi64(addresses1, displacement_lo);
+                const __m256i vaddresses2 = _mm256_add_epi64(addresses2, displacement_hi);
+
+                // Compare addresses to the target
+                const __m256i cmp_result1 = _mm256_cmpeq_epi64(vaddresses1, target);
+                const __m256i cmp_result2 = _mm256_cmpeq_epi64(vaddresses2, target);
+
+                const int mask1 = _mm256_movemask_epi8(cmp_result1);
+                const int mask2 = _mm256_movemask_epi8(cmp_result2);
+
+#ifdef KANANLIB_TESTING
+                __m256i shuffled_control = _mm256_set_epi32(
+                    *(int32_t*)(real_i + 7),
+                    *(int32_t*)(real_i + 6),
+                    *(int32_t*)(real_i + 5),
+                    *(int32_t*)(real_i + 4),
+                    *(int32_t*)(real_i + 3),
+                    *(int32_t*)(real_i + 2),
+                    *(int32_t*)(real_i + 1),
+                    *(int32_t*)(real_i + 0)
+                );
+
+                __m256i displacement_lo_control = _mm256_cvtepi32_epi64(_mm256_extracti128_si256(shuffled_control, 0));
+                __m256i displacement_hi_control = _mm256_cvtepi32_epi64(_mm256_extracti128_si256(shuffled_control, 1));
+
+                __m256i vaddresses1_control = _mm256_add_epi64(addresses1, displacement_lo_control);
+                __m256i vaddresses2_control = _mm256_add_epi64(addresses2, displacement_hi_control);
+
+                __m256i cmp_result1_control = _mm256_cmpeq_epi64(vaddresses1_control, target);
+                __m256i cmp_result2_control = _mm256_cmpeq_epi64(vaddresses2_control, target);
+                
+                int mask1_control = _mm256_movemask_epi8(cmp_result1_control);
+                int mask2_control = _mm256_movemask_epi8(cmp_result2_control);
+#endif
+
+                auto check_candidate = [&](int mask, int start_j) -> std::optional<uintptr_t> {
+                    for (int j = 0; j < 4; j++) {
+                        if (mask & masks[j]) {
+                            SPDLOG_INFO("Mask at offset {} ({} corrected) (real {:x}): {:x}", start_j + j, start_j + j + byte_index, real_i + j + start_j, (uint32_t)masks[j]);
+                        }
+
+                        if (mask & masks[j] && calculate_absolute(real_i + j + start_j, 4) == ptr) {
+                            uintptr_t candidate_addr = real_i + j + start_j;
+                            const auto resolved = utility::resolve_instruction(candidate_addr);
+
+                            if (resolved) {
+                                const auto displacement = utility::resolve_displacement(resolved->addr);
+
+                                if (displacement && *displacement == ptr) {
+                                    return candidate_addr;
+                                }
+                            }
+                        }
+                    }
+
+                    return std::nullopt;
+                };
+
+                if (mask2 != 0) {
+                    SPDLOG_INFO("Mask 2 is not zero @ {:x} (real {:x}): {:x}", i, real_i, (uint32_t)mask2);
+
+                    if (auto result = check_candidate(mask2, 4); result) {
+                        SPDLOG_INFO("Found second candidate at (block {:x}) {:x}->{:x} (mask {:x})", i, *result, ptr, (uint32_t)mask2);
+                        return result;
+                    }
+                } 
+#ifdef KANANLIB_TESTING
+                else if (mask2_control != 0) {
+                    SPDLOG_INFO("Mask 2 (control) is not zero @ {:x} (real {:x}): {:x}", i, real_i, (uint32_t)mask2_control);
+                    SPDLOG_WARN("Mask 2 (control) ({:x}) does not match shuffled mask ({:x})", (uint32_t)mask2_control, (uint32_t)mask2);
+
+                    int32_t shuffled_control_vals[8] {
+                        _mm256_extract_epi32(shuffled_control, 0),
+                        _mm256_extract_epi32(shuffled_control, 1),
+                        _mm256_extract_epi32(shuffled_control, 2),
+                        _mm256_extract_epi32(shuffled_control, 3),
+                        _mm256_extract_epi32(shuffled_control, 4),
+                        _mm256_extract_epi32(shuffled_control, 5),
+                        _mm256_extract_epi32(shuffled_control, 6),
+                        _mm256_extract_epi32(shuffled_control, 7)
+                    };
+
+                    int32_t shuffled_vals[8] {
+                        _mm256_extract_epi32(shuffled, 0),
+                        _mm256_extract_epi32(shuffled, 1),
+                        _mm256_extract_epi32(shuffled, 2),
+                        _mm256_extract_epi32(shuffled, 3),
+                        _mm256_extract_epi32(shuffled, 4),
+                        _mm256_extract_epi32(shuffled, 5),
+                        _mm256_extract_epi32(shuffled, 6),
+                        _mm256_extract_epi32(shuffled, 7)
+                    };
+
+                    // Print out each element of each shuffled vector
+                    for (int j = 0; j < 8; j++) {
+                        int32_t shuffled_control_val = shuffled_control_vals[j];
+                        int32_t shuffled_val = shuffled_vals[j];
+
+                        SPDLOG_INFO("[{}] Shuffled control: {:x}, shuffled: {:x}", j, shuffled_control_val, shuffled_val);
+
+                        if (shuffled_control_val != shuffled_val) {
+                            SPDLOG_WARN(" Mismatch at index {}", j);
+                        }
+                    }
+                }
+#endif
+
+                if (mask1 != 0) {
+                    SPDLOG_INFO("Mask 1 is not zero @ {:x} (real {:x}): {:x}", i, real_i, (uint32_t)mask1);
+
+                    if (auto result = check_candidate(mask1, 0); result) {
+                        SPDLOG_INFO("Found first candidate at (block {:x}) {:x}->{:x} (mask {:x})", i, *result, ptr, (uint32_t)mask1);
+                        return result;
+                    }
+                } 
+#ifdef KANANLIB_TESTING
+                else if (mask1_control != 0) {
+                    SPDLOG_INFO("Mask 1 (control) is not zero @ {:x} (real {:x}): {:x}", i, real_i, (uint32_t)mask1_control);
+                    SPDLOG_WARN("Mask 1 (control) ({:x}) does not match shuffled mask ({:x})", (uint32_t)mask1_control, (uint32_t)mask1);
+
+                    // Print out each element of each shuffled vector
+                    for (int j = 0; j < 8; j++) {
+                        int32_t shuffled_control_val = *(int32_t*)(&shuffled_control + j);
+                        int32_t shuffled_val = *(int32_t*)(&shuffled + j);
+
+                        SPDLOG_INFO("[{}] Shuffled control: {:x}, shuffled: {:x}", j, shuffled_control_val, shuffled_val);
+
+                        if (shuffled_control_val != shuffled_val) {
+                            SPDLOG_WARN(" Mismatch at index {}", j);
+                        }
+                    }
+                }
+#endif
             }
         }
 

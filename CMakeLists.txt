@@ -111,6 +111,7 @@ list(APPEND kananlib_SOURCES
 	"include/utility/String.hpp"
 	"include/utility/Thread.hpp"
 	"include/utility/VtableHook.hpp"
+	"include/utility/thirdparty/InstructionSet.hpp"
 	"include/utility/thirdparty/parallel-util.hpp"
 )
 
@@ -182,6 +183,7 @@ list(APPEND kananlib-nolog_SOURCES
 	"include/utility/String.hpp"
 	"include/utility/Thread.hpp"
 	"include/utility/VtableHook.hpp"
+	"include/utility/thirdparty/InstructionSet.hpp"
 	"include/utility/thirdparty/parallel-util.hpp"
 )
 
