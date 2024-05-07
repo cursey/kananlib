@@ -461,6 +461,7 @@ namespace utility {
         const __m256i post_ip_constant = _mm256_set1_epi64x(4); // Usually true most of the time. *rel32 + &rel32 + 4 = target unless it's some weird instruction
         const __m256i shift_amount_interval = _mm256_set1_epi64x(SHIFT_SCALAR);
         const __m256i shift_amount_upper_initial = _mm256_set1_epi64x(SHIFT_SCALAR * 2);
+        const __m256i shift_amount_after = _mm256_set1_epi64x(sizeof(__m256i) - SHIFT_SCALAR);
 
         const __m256i shuffle_mask_lo = _mm256_set_epi8(
             22, 21, 20, 19,
@@ -494,18 +495,21 @@ namespace utility {
         constexpr int mask_3 = mask_2 << 8;
 
         constexpr int masks[] = { mask_0, mask_1, mask_2, mask_3 };
+        constexpr size_t lookahead_size = sizeof(__m256i) + (sizeof(__m256i) / 4); // 32 + 8 (for the sliding window when we do a 256 load on the next iteration)
+        const size_t remaining_bytes = length % sizeof(__m256i);
 
-        for (auto i = start; i + sizeof(__m256i) + sizeof(__m256i) < end; i += sizeof(__m256i)) {
-            __m256i i_vectorized = _mm256_set1_epi64x(i);
+        const __m256i start_vectorized = _mm256_set1_epi64x(start);
 
-            // The lower 0 - 8 bytes
-            __m256i addresses1 = _mm256_add_epi64(i_vectorized, lower_addition_mask);
-            __m256i addresses2 = _mm256_add_epi64(i_vectorized, upper_addition_mask);
+        // These will be added onto every loop.
+        // The lower 0 - 8 bytes
+        __m256i addresses1 = _mm256_add_epi64(start_vectorized, lower_addition_mask);
+        __m256i addresses2 = _mm256_add_epi64(start_vectorized, upper_addition_mask);
 
-            // The upper 16 - 24 bytes
-            __m256i addresses3 = _mm256_add_epi64(addresses1, shift_amount_upper_initial);
-            __m256i addresses4 = _mm256_add_epi64(addresses2, shift_amount_upper_initial);
+        // The upper 16 - 24 bytes
+        __m256i addresses3 = _mm256_add_epi64(addresses1, shift_amount_upper_initial);
+        __m256i addresses4 = _mm256_add_epi64(addresses2, shift_amount_upper_initial);
 
+        for (auto i = start; i + lookahead_size < end; i += sizeof(__m256i)) {
             // Add 8 bytes to the addresses at every interval
             // First iteration (lo) 0 - 4, 4 - 8
             // First iteration (hi) 16 - 20, 20 - 24
@@ -615,6 +619,15 @@ namespace utility {
                     }
                 }
             }
+
+            addresses1 = _mm256_add_epi64(addresses1, shift_amount_after); // 32 - 8 = 24
+            addresses2 = _mm256_add_epi64(addresses2, shift_amount_after);
+            addresses3 = _mm256_add_epi64(addresses3, shift_amount_after);
+            addresses4 = _mm256_add_epi64(addresses4, shift_amount_after);
+        }
+
+        if (remaining_bytes > 0) {
+            return scan_displacement_reference_scalar(end - remaining_bytes, remaining_bytes, ptr);
         }
 
         return std::nullopt;
