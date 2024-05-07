@@ -459,13 +459,14 @@ namespace utility {
 
         const __m256i target = _mm256_set1_epi64x(ptr);
         const __m256i post_ip_constant = _mm256_set1_epi64x(4); // Usually true most of the time. *rel32 + &rel32 + 4 = target unless it's some weird instruction
-        const __m256i shift_amount = _mm256_set1_epi64x(SHIFT_SCALAR);
+        const __m256i shift_amount_interval = _mm256_set1_epi64x(SHIFT_SCALAR);
+        const __m256i shift_amount_upper_initial = _mm256_set1_epi64x(SHIFT_SCALAR * 2);
 
         const __m256i shuffle_mask_lo = _mm256_set_epi8(
-            -1, -1, -1, -1,
-            -1, -1, -1, -1,
-            -1, -1, -1, -1,
-            -1, -1, -1, -1,
+            22, 21, 20, 19,
+            21, 20, 19, 18,
+            20, 19, 18, 17,
+            19, 18, 17, 16,
             6, 5, 4, 3,
             5, 4, 3, 2,
             4, 3, 2, 1,
@@ -473,10 +474,10 @@ namespace utility {
         );
 
         const __m256i shuffle_mask_hi = _mm256_set_epi8(
-            -1, -1, -1, -1,
-            -1, -1, -1, -1,
-            -1, -1, -1, -1,
-            -1, -1, -1, -1,
+            26, 25, 24, 23,
+            25, 24, 23, 22,
+            24, 23, 22, 21,
+            23, 22, 21, 20,
             10, 9, 8, 7,
             9, 8, 7, 6,
             8, 7, 6, 5,
@@ -485,6 +486,7 @@ namespace utility {
 
         const __m256i upper_addition_mask = _mm256_add_epi64(_mm256_set_epi64x(7, 6, 5, 4), post_ip_constant);
         const __m256i lower_addition_mask = _mm256_add_epi64(_mm256_set_epi64x(3, 2, 1, 0), post_ip_constant);
+        //const __m256i indices = _mm256_set_epi32(7, 6, 5, 4, 3, 2, 1, 0);
 
         constexpr int mask_0 = 0b11111111;
         constexpr int mask_1 = mask_0 << 8;
@@ -495,65 +497,64 @@ namespace utility {
 
         for (auto i = start; i + sizeof(__m256i) + sizeof(__m256i) < end; i += sizeof(__m256i)) {
             __m256i i_vectorized = _mm256_set1_epi64x(i);
+
+            // The lower 0 - 8 bytes
             __m256i addresses1 = _mm256_add_epi64(i_vectorized, lower_addition_mask);
             __m256i addresses2 = _mm256_add_epi64(i_vectorized, upper_addition_mask);
 
-            for (auto shr_i = 0; shr_i < GRANULARITY; ++shr_i) {
+            // The upper 16 - 24 bytes
+            __m256i addresses3 = _mm256_add_epi64(addresses1, shift_amount_upper_initial);
+            __m256i addresses4 = _mm256_add_epi64(addresses2, shift_amount_upper_initial);
+
+            // Add 8 bytes to the addresses at every interval
+            // First iteration (lo) 0 - 4, 4 - 8
+            // First iteration (hi) 16 - 20, 20 - 24
+            // Second iteration (lo) 8 - 12, 12 - 16
+            // Second iteration (hi) 24 - 28, 28 - 32
+            // Basically a sliding window
+            for (auto shr_i = 0; shr_i < GRANULARITY / 2; ++shr_i) {
                 const auto byte_index = shr_i * SHIFT_SCALAR;
                 const auto real_i = i + byte_index;
 
                 if (shr_i > 0) {
-                    addresses1 = _mm256_add_epi64(addresses1, shift_amount);
-                    addresses2 = _mm256_add_epi64(addresses2, shift_amount);
+                    addresses1 = _mm256_add_epi64(addresses1, shift_amount_interval);
+                    addresses2 = _mm256_add_epi64(addresses2, shift_amount_interval);
+                    addresses3 = _mm256_add_epi64(addresses3, shift_amount_interval);
+                    addresses4 = _mm256_add_epi64(addresses4, shift_amount_interval);
                 }
 
-                // TODO: Improve this to not read in 8 byte intervals
                 const __m256i data = _mm256_loadu_si256((__m256i*)(real_i));
+
                 const __m256i shuffled_lo = _mm256_shuffle_epi8(data, shuffle_mask_lo);
                 const __m256i shuffled_hi = _mm256_shuffle_epi8(data, shuffle_mask_hi);
-
-                // Merge the two 128-bit lanes into a single 256-bit register
-                //const __m256i shuffled = _mm256_permute2x128_si256(shuffled_lo, shuffled_hi, 32);
 
                 // Move upper and lower 128-bit lanes to separate registers
                 const __m256i displacement_lo = _mm256_cvtepi32_epi64(_mm256_extracti128_si256(shuffled_lo, 0));
                 const __m256i displacement_hi = _mm256_cvtepi32_epi64(_mm256_extracti128_si256(shuffled_hi, 0));
+                const __m256i displacement_lo_lo = _mm256_cvtepi32_epi64(_mm256_extracti128_si256(shuffled_lo, 1));
+                const __m256i displacement_hi_hi = _mm256_cvtepi32_epi64(_mm256_extracti128_si256(shuffled_hi, 1));
+
+                // Alternative way of doing the above (much slower, for reference)
+                //const __m256i gathered = _mm256_i32gather_epi32((int32_t*)real_i, indices, 1);
+                //const __m256i displacement_lo = _mm256_cvtepi32_epi64(_mm256_extracti128_si256(gathered, 0));
+                //const __m256i displacement_hi = _mm256_cvtepi32_epi64(_mm256_extracti128_si256(gathered, 1));
 
                 // Resolve the addresses
                 const __m256i vaddresses1 = _mm256_add_epi64(addresses1, displacement_lo);
                 const __m256i vaddresses2 = _mm256_add_epi64(addresses2, displacement_hi);
+                const __m256i vaddresses3 = _mm256_add_epi64(addresses3, displacement_lo_lo);
+                const __m256i vaddresses4 = _mm256_add_epi64(addresses4, displacement_hi_hi);
 
                 // Compare addresses to the target
                 const __m256i cmp_result1 = _mm256_cmpeq_epi64(vaddresses1, target);
                 const __m256i cmp_result2 = _mm256_cmpeq_epi64(vaddresses2, target);
+                const __m256i cmp_result3 = _mm256_cmpeq_epi64(vaddresses3, target);
+                const __m256i cmp_result4 = _mm256_cmpeq_epi64(vaddresses4, target);
 
                 const int mask1 = _mm256_movemask_epi8(cmp_result1);
                 const int mask2 = _mm256_movemask_epi8(cmp_result2);
-
-#ifdef KANANLIB_TESTING
-                __m256i shuffled_control = _mm256_set_epi32(
-                    *(int32_t*)(real_i + 7),
-                    *(int32_t*)(real_i + 6),
-                    *(int32_t*)(real_i + 5),
-                    *(int32_t*)(real_i + 4),
-                    *(int32_t*)(real_i + 3),
-                    *(int32_t*)(real_i + 2),
-                    *(int32_t*)(real_i + 1),
-                    *(int32_t*)(real_i + 0)
-                );
-
-                __m256i displacement_lo_control = _mm256_cvtepi32_epi64(_mm256_extracti128_si256(shuffled_control, 0));
-                __m256i displacement_hi_control = _mm256_cvtepi32_epi64(_mm256_extracti128_si256(shuffled_control, 1));
-
-                __m256i vaddresses1_control = _mm256_add_epi64(addresses1, displacement_lo_control);
-                __m256i vaddresses2_control = _mm256_add_epi64(addresses2, displacement_hi_control);
-
-                __m256i cmp_result1_control = _mm256_cmpeq_epi64(vaddresses1_control, target);
-                __m256i cmp_result2_control = _mm256_cmpeq_epi64(vaddresses2_control, target);
-                
-                int mask1_control = _mm256_movemask_epi8(cmp_result1_control);
-                int mask2_control = _mm256_movemask_epi8(cmp_result2_control);
-#endif
+                const int mask3 = _mm256_movemask_epi8(cmp_result3);
+                const int mask4 = _mm256_movemask_epi8(cmp_result4);
 
                 auto check_candidate = [&](int mask, int start_j) -> std::optional<uintptr_t> {
                     for (int j = 0; j < 4; j++) {
@@ -578,6 +579,24 @@ namespace utility {
                     return std::nullopt;
                 };
 
+                if (mask4 != 0) {
+                    SPDLOG_INFO("Mask 4 is not zero @ {:x} (real {:x}): {:x}", i, real_i, (uint32_t)mask4);
+
+                    if (auto result = check_candidate(mask4, 20); result) {
+                        SPDLOG_INFO("Found fourth candidate at (block {:x}) {:x}->{:x} (mask {:x})", i, *result, ptr, (uint32_t)mask4);
+                        return result;
+                    }
+                }
+
+                if (mask3 != 0) {
+                    SPDLOG_INFO("Mask 3 is not zero @ {:x} (real {:x}): {:x}", i, real_i, (uint32_t)mask3);
+
+                    if (auto result = check_candidate(mask3, 16); result) {
+                        SPDLOG_INFO("Found third candidate at (block {:x}) {:x}->{:x} (mask {:x})", i, *result, ptr, (uint32_t)mask3);
+                        return result;
+                    }
+                }
+
                 if (mask2 != 0) {
                     SPDLOG_INFO("Mask 2 is not zero @ {:x} (real {:x}): {:x}", i, real_i, (uint32_t)mask2);
 
@@ -586,46 +605,6 @@ namespace utility {
                         return result;
                     }
                 } 
-#ifdef KANANLIB_TESTING
-                else if (mask2_control != 0) {
-                    SPDLOG_INFO("Mask 2 (control) is not zero @ {:x} (real {:x}): {:x}", i, real_i, (uint32_t)mask2_control);
-                    SPDLOG_WARN("Mask 2 (control) ({:x}) does not match shuffled mask ({:x})", (uint32_t)mask2_control, (uint32_t)mask2);
-
-                    int32_t shuffled_control_vals[8] {
-                        _mm256_extract_epi32(shuffled_control, 0),
-                        _mm256_extract_epi32(shuffled_control, 1),
-                        _mm256_extract_epi32(shuffled_control, 2),
-                        _mm256_extract_epi32(shuffled_control, 3),
-                        _mm256_extract_epi32(shuffled_control, 4),
-                        _mm256_extract_epi32(shuffled_control, 5),
-                        _mm256_extract_epi32(shuffled_control, 6),
-                        _mm256_extract_epi32(shuffled_control, 7)
-                    };
-
-                    int32_t shuffled_vals[8] {
-                        _mm256_extract_epi32(shuffled, 0),
-                        _mm256_extract_epi32(shuffled, 1),
-                        _mm256_extract_epi32(shuffled, 2),
-                        _mm256_extract_epi32(shuffled, 3),
-                        _mm256_extract_epi32(shuffled, 4),
-                        _mm256_extract_epi32(shuffled, 5),
-                        _mm256_extract_epi32(shuffled, 6),
-                        _mm256_extract_epi32(shuffled, 7)
-                    };
-
-                    // Print out each element of each shuffled vector
-                    for (int j = 0; j < 8; j++) {
-                        int32_t shuffled_control_val = shuffled_control_vals[j];
-                        int32_t shuffled_val = shuffled_vals[j];
-
-                        SPDLOG_INFO("[{}] Shuffled control: {:x}, shuffled: {:x}", j, shuffled_control_val, shuffled_val);
-
-                        if (shuffled_control_val != shuffled_val) {
-                            SPDLOG_WARN(" Mismatch at index {}", j);
-                        }
-                    }
-                }
-#endif
 
                 if (mask1 != 0) {
                     SPDLOG_INFO("Mask 1 is not zero @ {:x} (real {:x}): {:x}", i, real_i, (uint32_t)mask1);
@@ -634,25 +613,7 @@ namespace utility {
                         SPDLOG_INFO("Found first candidate at (block {:x}) {:x}->{:x} (mask {:x})", i, *result, ptr, (uint32_t)mask1);
                         return result;
                     }
-                } 
-#ifdef KANANLIB_TESTING
-                else if (mask1_control != 0) {
-                    SPDLOG_INFO("Mask 1 (control) is not zero @ {:x} (real {:x}): {:x}", i, real_i, (uint32_t)mask1_control);
-                    SPDLOG_WARN("Mask 1 (control) ({:x}) does not match shuffled mask ({:x})", (uint32_t)mask1_control, (uint32_t)mask1);
-
-                    // Print out each element of each shuffled vector
-                    for (int j = 0; j < 8; j++) {
-                        int32_t shuffled_control_val = *(int32_t*)(&shuffled_control + j);
-                        int32_t shuffled_val = *(int32_t*)(&shuffled + j);
-
-                        SPDLOG_INFO("[{}] Shuffled control: {:x}, shuffled: {:x}", j, shuffled_control_val, shuffled_val);
-
-                        if (shuffled_control_val != shuffled_val) {
-                            SPDLOG_WARN(" Mismatch at index {}", j);
-                        }
-                    }
                 }
-#endif
             }
         }
 
