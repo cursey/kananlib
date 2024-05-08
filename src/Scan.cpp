@@ -389,7 +389,7 @@ namespace utility {
 
         constexpr int masks[] = { mask_0, mask_1, mask_2, mask_3 };
         constexpr size_t lookahead_size = sizeof(__m256i) + (sizeof(__m256i) / 4); // 32 + 8 (for the sliding window when we do a 256 load on the next iteration)
-        const size_t remaining_bytes = std::min<size_t>((length % lookahead_size) == 0 ? 0 : sizeof(__m256i), length);
+        const size_t remaining_bytes = std::min<size_t>((length % lookahead_size) == 0 ? 0 : lookahead_size, length);
 
         const __m256i start_vectorized = _mm256_set1_epi64x(start);
 
@@ -514,7 +514,7 @@ namespace utility {
             addresses4 = _mm256_add_epi64(addresses4, shift_amount_after);
         }
 
-        // Remaining bytes is always 0 or sizeof(__m256i)
+        // Remaining bytes is always 0 or sizeof(__m256i) + 8
         // because AVX2 requires 32 bytes for a load
         if (remaining_bytes > 0) {
             SPDLOG_INFO("Remaining bytes: {}", remaining_bytes);
