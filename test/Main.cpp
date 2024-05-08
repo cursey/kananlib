@@ -1,6 +1,7 @@
 #include <cstdint>
 #include <string>
 #include <iostream>
+#include <random>
 
 #include <spdlog/spdlog.h>
 
@@ -54,28 +55,54 @@ int test_avx2_displacement_scan() {
     double effective_throughput_scalar = 0.0;
     size_t scan_time_scalar_ms{0};
 
+    std::mt19937 rng{std::random_device{}()};
+
     // Slide a window up 32 bytes to make sure it can hit the reference at each possible alignment
-    for (int32_t i = 0; i < 32; ++i) {
-        std::cout << "I = " << i << std::endl;
+    for (int32_t i = 0; i < 128; ++i) {
+        //std::cout << "I = " << i << std::endl;
         //const int32_t index_to_write_to = (int32_t)(huge_bytes.size() * 0.99f) + i;
-        const int32_t index_to_write_to = (int32_t)(huge_bytes.size() - 32 - 4) + i;
+        const int32_t index_to_write_to = (int32_t)(rng() % (huge_bytes.size() - 32 - 4)) + i;
         const uintptr_t address_to_write_to = (uintptr_t)&huge_bytes[index_to_write_to];
         const uintptr_t address_of_next_ip = address_to_write_to + 4;
-        const uintptr_t address_to_rel32_reference = (uintptr_t)huge_bytes.data();
+        const uintptr_t address_to_rel32_reference = (uintptr_t)huge_bytes.data() + (rng() % (huge_bytes.size() - 32 - 4));
+
         const int32_t delta = (std::ptrdiff_t)address_to_rel32_reference - (std::ptrdiff_t)address_of_next_ip;
         *(int32_t*)(&huge_bytes[index_to_write_to]) = delta;
 
-        std::cout << "Scanning for reference..." << std::endl;
+        if (index_to_write_to - 4 >= 0) {
+            *(int32_t*)(&huge_bytes[index_to_write_to-4]) = delta + 5;
+        }
+        
+        if (address_to_rel32_reference >= (uintptr_t)huge_bytes.data() + 4) {
+            // We need to write something that isn't zero behind the reference so it doesn't falsely match
+            *(int32_t*)(address_to_rel32_reference - 4) = 1 << 31;
+        }
+
+        std::cout << "Scanning for reference to: " << std::hex << address_to_rel32_reference << std::endl;
+
+        const auto start = (uintptr_t)huge_bytes.data();
+        const auto end = (uintptr_t)huge_bytes.data() + huge_bytes.size();
+        const auto length = end - start;
 
         const auto scan_start_avx2 = std::chrono::high_resolution_clock::now();
-        const auto scan_result = utility::scan_relative_reference((uintptr_t)huge_bytes.data(), (uintptr_t)huge_bytes.size(), address_to_rel32_reference);
+        const auto scan_results = utility::scan_relative_references(start, length, address_to_rel32_reference);
         const auto scan_end_avx2 = std::chrono::high_resolution_clock::now();
 
-        KANANLIB_ASSERT(scan_result.has_value());
-        KANANLIB_ASSERT(*scan_result == address_to_write_to);
+        KANANLIB_ASSERT(scan_results.size() > 0);
+        
+        // print all results as we aren't supposed to find more than one
+        if (scan_results.size() > 1) {
+            for (const auto& result : scan_results) {
+                std::cout << "Found reference at: " << std::hex << result << "(" << *(int32_t*)result << ")" << std::endl;
+            }
+        }
+
+        KANANLIB_ASSERT(scan_results.size() == 1);
+        const auto scan_result = scan_results[0];
+        KANANLIB_ASSERT(scan_result == address_to_write_to);
 
         // Print the result
-        std::cout << "Found reference at: " << std::hex << *scan_result << std::endl;
+        std::cout << "Found reference at: " << std::hex << scan_result << std::endl;
         std::cout << "Actual address: " << std::hex << address_to_write_to << std::endl;
 
         // Print the time taken
@@ -117,6 +144,14 @@ int test_avx2_displacement_scan() {
 
         // Erase the old data
         *(int32_t*)(&huge_bytes[index_to_write_to]) = 0;
+
+        if (index_to_write_to - 4 >= 0) {
+            *(int32_t*)(&huge_bytes[index_to_write_to-4]) = delta + 5;
+        }
+
+        if (address_to_rel32_reference >= (uintptr_t)huge_bytes.data() + 4) {
+            *(int32_t*)(address_to_rel32_reference - 4) = 0;
+        }
     }
 
     return 0;

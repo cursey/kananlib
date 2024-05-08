@@ -310,6 +310,73 @@ namespace utility {
         return results;
     }
 
+    std::vector<uintptr_t> scan_relative_references(uintptr_t start, size_t length, uintptr_t ptr, std::function<bool(uintptr_t)> filter) {
+        KANANLIB_BENCH();
+
+        std::vector<uintptr_t> results{};
+        std::mutex mutex{};
+
+        struct Segment {
+            uintptr_t start;
+            size_t length;
+        };
+
+        std::vector<Segment> segments{};
+
+        const size_t max_conc = std::max(std::thread::hardware_concurrency(), 1u);
+        const size_t base_segment_length = length / max_conc;
+        
+        const auto end = start + length;
+
+        if (base_segment_length <= 4 || max_conc == 1) {
+            //SPDLOG_INFO("Falling back to scalar scan because base segment length is less than 4 bytes");
+            for (auto result = scan_relative_reference(start, length, ptr, filter); result.has_value(); result = scan_relative_reference(result.value() + 1, end - (result.value() + 1), ptr, filter)) {
+                results.push_back(*result);
+            }
+
+            return results;
+        }
+
+        for (auto i = 0; i < max_conc; i++) {
+            const auto segment_start = start + (i * base_segment_length);
+            const auto segment_length = (i == max_conc - 1 ? end - segment_start : base_segment_length);
+
+            // Used for the last segment to make sure we don't go out of bounds
+            const auto corrected_length = (segment_start + segment_length) > (start + length) ? (start + length) - segment_start : segment_length;
+
+            segments.push_back({ segment_start, corrected_length });
+
+            //SPDLOG_INFO("Segment {}: start: {:x}, length: {}", i, segment_start, corrected_length);
+        }
+
+        concurrency::parallel_for((size_t)0, segments.size(), [&](size_t i) {
+            const auto& segment = segments[i];
+
+            const auto len = i < segments.size() - 1 ? segment.length + 4 : segment.length; // +4 because scan_relative_reference_scalar checks if i + 4 < end
+
+            if (auto result = scan_relative_reference(segment.start, len, ptr, filter); result.has_value()) {
+                std::scoped_lock lock{ mutex };
+                results.push_back(*result);
+            }
+        });
+
+        std::sort(results.begin(), results.end());
+
+        return results;
+    }
+
+    std::vector<uintptr_t> scan_relative_references(HMODULE module, uintptr_t ptr, std::function<bool(uintptr_t)> filter) {
+        KANANLIB_BENCH();
+
+        const auto module_size = get_module_size(module).value_or(0);
+
+        if (module_size == 0) {
+            return {};
+        }
+
+        return scan_relative_references((uintptr_t)module, module_size - sizeof(void*), ptr, filter);
+    }
+
     std::optional<uintptr_t> scan_relative_reference_scalar(uintptr_t start, size_t length, uintptr_t ptr, std::function<bool(uintptr_t)> filter) {
         KANANLIB_BENCH();
 
