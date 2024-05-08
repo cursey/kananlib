@@ -61,7 +61,7 @@ int test_avx2_displacement_scan() {
     for (int32_t i = 0; i < 128; ++i) {
         //std::cout << "I = " << i << std::endl;
         //const int32_t index_to_write_to = (int32_t)(huge_bytes.size() * 0.99f) + i;
-        const int32_t index_to_write_to = (int32_t)(rng() % (huge_bytes.size() - 32 - 4)) + i;
+        const int32_t index_to_write_to = ((int32_t)((rng() % (huge_bytes.size() - 32 - 4))) & ~7) + i;
         const uintptr_t address_to_write_to = (uintptr_t)&huge_bytes[index_to_write_to];
         const uintptr_t address_of_next_ip = address_to_write_to + 4;
         const uintptr_t address_to_rel32_reference = (uintptr_t)huge_bytes.data() + (rng() % (huge_bytes.size() - 32 - 4));
