@@ -345,7 +345,7 @@ namespace utility {
             return scan_relative_reference_scalar(start, length, ptr, filter);
         }
 
-        const auto end = (start + length) - sizeof(uintptr_t);
+        const auto end = (start + length);
 
         constexpr auto SHIFT_SCALAR = 8;
         constexpr auto GRANULARITY = sizeof(__m256i) / SHIFT_SCALAR; // 4
@@ -389,7 +389,7 @@ namespace utility {
 
         constexpr int masks[] = { mask_0, mask_1, mask_2, mask_3 };
         constexpr size_t lookahead_size = sizeof(__m256i) + (sizeof(__m256i) / 4); // 32 + 8 (for the sliding window when we do a 256 load on the next iteration)
-        const size_t remaining_bytes = length % sizeof(__m256i);
+        const size_t remaining_bytes = std::min<size_t>((length % lookahead_size) == 0 ? 0 : sizeof(__m256i), length);
 
         const __m256i start_vectorized = _mm256_set1_epi64x(start);
 
@@ -514,7 +514,10 @@ namespace utility {
             addresses4 = _mm256_add_epi64(addresses4, shift_amount_after);
         }
 
+        // Remaining bytes is always 0 or sizeof(__m256i)
+        // because AVX2 requires 32 bytes for a load
         if (remaining_bytes > 0) {
+            SPDLOG_INFO("Remaining bytes: {}", remaining_bytes);
             return scan_relative_reference_scalar(end - remaining_bytes, remaining_bytes, ptr, filter);
         }
 
