@@ -310,134 +310,15 @@ namespace utility {
         return results;
     }
 
-    optional<uintptr_t> scan_reference(HMODULE module, uintptr_t ptr, bool relative) {
+    std::optional<uintptr_t> scan_relative_reference_scalar(uintptr_t start, size_t length, uintptr_t ptr, std::function<bool(uintptr_t)> filter) {
         KANANLIB_BENCH();
-
-        if (!relative) {
-            return scan_ptr(module, ptr);
-        }
-
-        const auto module_size = get_module_size(module).value_or(0);
-        const auto end = (uintptr_t)module + module_size;
-        
-        for (auto i = (uintptr_t)module; i < end - sizeof(void*); i += sizeof(uint8_t)) {
-            if (calculate_absolute(i, 4) == ptr) {
-                return i;
-            }
-        }
-
-        return {};
-    }
-
-    optional<uintptr_t> scan_reference(uintptr_t start, size_t length, uintptr_t ptr, bool relative) {
-        KANANLIB_BENCH();
-
-        if (!relative) {
-            return scan_ptr(start, length, ptr);
-        }
 
         const auto end = start + length;
 
         for (auto i = start; i + 4 < end; i += sizeof(uint8_t)) {
             if (calculate_absolute(i, 4) == ptr) {
-                return i;
-            }
-        }
-
-        return {};
-    }
-
-    optional<uintptr_t> scan_relative_reference_strict(HMODULE module, uintptr_t ptr, const string& preceded_by) {
-        KANANLIB_BENCH();
-
-        if (preceded_by.empty()) {
-            return {};
-        }
-
-        const auto module_size = get_module_size(module).value_or(0);
-        const auto end = (uintptr_t)module + module_size;
-
-        // convert preceded_by (IDA style string) to bytes
-        auto pat = utility::Pattern{ preceded_by };
-        const auto pat_len = pat.pattern_len();
-
-        for (auto i = (uintptr_t)module; i + 4 < end; i += sizeof(uint8_t)) {
-            if (calculate_absolute(i, 4) == ptr) {
-                if (pat.find(i - pat_len, pat_len)) {
+                if (filter == nullptr || filter(i)) {
                     return i;
-                }
-            }
-        }
-
-        return {};
-    }
-
-    std::optional<uintptr_t> scan_displacement_reference(HMODULE module, uintptr_t ptr) {
-        KANANLIB_BENCH();
-
-        const auto module_size = get_module_size(module);
-
-        if (!module_size) {
-            return {};
-        }
-
-        return scan_displacement_reference((uintptr_t)module, *module_size, ptr);
-    }
-
-    std::vector<uintptr_t> scan_displacement_references(HMODULE module, uintptr_t ptr) {
-        KANANLIB_BENCH();
-
-        const auto module_size = get_module_size(module);
-
-        if (!module_size) {
-            return {};
-        }
-
-        return scan_displacement_references((uintptr_t)module, *module_size, ptr);
-    }
-
-    std::vector<uintptr_t> scan_displacement_references(uintptr_t start, size_t length, uintptr_t ptr) {
-        KANANLIB_BENCH();
-
-        std::vector<uintptr_t> results{};
-        const auto end = (start + length) - sizeof(void*);
-
-        /*for (auto i = (uintptr_t)start; i + 4 < end; i += sizeof(uint8_t)) {
-            if (calculate_absolute(i, 4) == ptr) {
-                const auto resolved = utility::resolve_instruction(i);
-
-                if (resolved) {
-                    const auto displacement = utility::resolve_displacement(resolved->addr);
-
-                    if (displacement && *displacement == ptr) {
-                        results.push_back(i);
-                    }
-                }
-            }
-        }*/
-
-        for (auto ref = scan_displacement_reference(start, length, ptr); ref; ref = scan_displacement_reference(*ref + 4, end - (*ref + 4), ptr)) {
-            results.push_back(*ref);
-        }
-
-        return results;
-    }
-
-    std::optional<uintptr_t> scan_displacement_reference_scalar(uintptr_t start, size_t length, uintptr_t ptr) {
-        KANANLIB_BENCH();
-
-        const auto end = (start + length) - sizeof(void*);
-
-        for (auto i = (uintptr_t)start; i + 4 < end; i += sizeof(uint8_t)) {
-            if (calculate_absolute(i, 4) == ptr) {
-                const auto resolved = utility::resolve_instruction(i);
-
-                if (resolved) {
-                    const auto displacement = utility::resolve_displacement(resolved->addr);
-
-                    if (displacement && *displacement == ptr) {
-                        return i;
-                    }
                 }
             }
         }
@@ -445,11 +326,23 @@ namespace utility {
         return std::nullopt;
     }
 
-    std::optional<uintptr_t> scan_displacement_reference(uintptr_t start, size_t length, uintptr_t ptr) {
+    std::optional<uintptr_t> scan_relative_reference(HMODULE module, uintptr_t ptr, std::function<bool(uintptr_t)> filter) {
+        KANANLIB_BENCH();
+
+        const auto module_size = get_module_size(module).value_or(0);
+
+        if (module_size == 0) {
+            return std::nullopt;
+        }
+
+        return scan_relative_reference((uintptr_t)module, module_size - sizeof(void*), ptr, filter);
+    }
+
+    std::optional<uintptr_t> scan_relative_reference(uintptr_t start, size_t length, uintptr_t ptr, std::function<bool(uintptr_t)> filter) {
         KANANLIB_BENCH();
 
         if (!kananlib::utility::thirdparty::InstructionSet::AVX2() || length <= sizeof(__m256i) * 4) {
-            return scan_displacement_reference_scalar(start, length, ptr);
+            return scan_relative_reference_scalar(start, length, ptr, filter);
         }
 
         const auto end = (start + length) - sizeof(uintptr_t);
@@ -567,15 +460,10 @@ namespace utility {
                         }
 
                         if (mask & masks[j] && calculate_absolute(real_i + j + start_j, 4) == ptr) {
-                            uintptr_t candidate_addr = real_i + j + start_j;
-                            const auto resolved = utility::resolve_instruction(candidate_addr);
+                            const uintptr_t candidate_addr = real_i + j + start_j;
 
-                            if (resolved) {
-                                const auto displacement = utility::resolve_displacement(resolved->addr);
-
-                                if (displacement && *displacement == ptr) {
-                                    return candidate_addr;
-                                }
+                            if (filter == nullptr || filter(candidate_addr)) {
+                                return candidate_addr;
                             }
                         }
                     }
@@ -627,10 +515,129 @@ namespace utility {
         }
 
         if (remaining_bytes > 0) {
-            return scan_displacement_reference_scalar(end - remaining_bytes, remaining_bytes, ptr);
+            return scan_relative_reference_scalar(end - remaining_bytes, remaining_bytes, ptr, filter);
         }
 
         return std::nullopt;
+    }
+
+    optional<uintptr_t> scan_reference(HMODULE module, uintptr_t ptr, bool relative) {
+        KANANLIB_BENCH();
+
+        if (!relative) {
+            return scan_ptr(module, ptr);
+        }
+
+        const auto module_size = get_module_size(module).value_or(0);
+        const auto end = (uintptr_t)module + module_size;
+
+        if (module_size == 0) {
+            return {};
+        }
+
+        return scan_relative_reference((uintptr_t)module, module_size - sizeof(void*), ptr, nullptr);
+    }
+
+    optional<uintptr_t> scan_reference(uintptr_t start, size_t length, uintptr_t ptr, bool relative) {
+        KANANLIB_BENCH();
+
+        if (!relative) {
+            return scan_ptr(start, length, ptr);
+        }
+
+        return scan_relative_reference(start, length, ptr, nullptr);
+    }
+
+    optional<uintptr_t> scan_relative_reference_strict(HMODULE module, uintptr_t ptr, const string& preceded_by) {
+        KANANLIB_BENCH();
+
+        if (preceded_by.empty()) {
+            return {};
+        }
+
+        const auto module_size = get_module_size(module).value_or(0);
+        const auto end = (uintptr_t)module + module_size;
+
+        // convert preceded_by (IDA style string) to bytes
+        auto pat = utility::Pattern{ preceded_by };
+        const auto pat_len = pat.pattern_len();
+
+        return scan_relative_reference((uintptr_t)module, module_size - sizeof(void*), ptr, [&](uintptr_t candidate_addr) {
+            if (pat.find(candidate_addr - pat_len, pat_len)) {
+                return true;
+            }
+
+            return false;
+        });
+    }
+
+    std::optional<uintptr_t> scan_displacement_reference(HMODULE module, uintptr_t ptr) {
+        KANANLIB_BENCH();
+
+        const auto module_size = get_module_size(module);
+
+        if (!module_size) {
+            return {};
+        }
+
+        return scan_displacement_reference((uintptr_t)module, *module_size, ptr);
+    }
+
+    std::vector<uintptr_t> scan_displacement_references(HMODULE module, uintptr_t ptr) {
+        KANANLIB_BENCH();
+
+        const auto module_size = get_module_size(module);
+
+        if (!module_size) {
+            return {};
+        }
+
+        return scan_displacement_references((uintptr_t)module, *module_size, ptr);
+    }
+
+    std::vector<uintptr_t> scan_displacement_references(uintptr_t start, size_t length, uintptr_t ptr) {
+        KANANLIB_BENCH();
+
+        std::vector<uintptr_t> results{};
+        const auto end = (start + length) - sizeof(void*);
+
+        /*for (auto i = (uintptr_t)start; i + 4 < end; i += sizeof(uint8_t)) {
+            if (calculate_absolute(i, 4) == ptr) {
+                const auto resolved = utility::resolve_instruction(i);
+
+                if (resolved) {
+                    const auto displacement = utility::resolve_displacement(resolved->addr);
+
+                    if (displacement && *displacement == ptr) {
+                        results.push_back(i);
+                    }
+                }
+            }
+        }*/
+
+        for (auto ref = scan_displacement_reference(start, length, ptr); ref; ref = scan_displacement_reference(*ref + 4, end - (*ref + 4), ptr)) {
+            results.push_back(*ref);
+        }
+
+        return results;
+    }
+
+    std::optional<uintptr_t> scan_displacement_reference(uintptr_t start, size_t length, uintptr_t ptr) {
+        KANANLIB_BENCH();
+
+        return scan_relative_reference(start, length, ptr, [ptr](uintptr_t candidate_addr) {
+            const auto resolved = utility::resolve_instruction(candidate_addr);
+
+            if (resolved) {
+                const auto displacement = utility::resolve_displacement(resolved->addr);
+
+                if (displacement && *displacement == ptr) {
+                    return true;
+                }
+            }
+
+            return false;
+        });
     }
     
     std::optional<uintptr_t> scan_opcode(uintptr_t ip, size_t num_instructions, uint8_t opcode) {

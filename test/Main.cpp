@@ -10,7 +10,7 @@
 
 #define KANANLIB_ASSERT(x) if (!(x)) { std::cout << "Assertion failed: " << #x << std::endl; return 1; }
 
-const char* HELLO_WORLD{"Hello World!"};
+constexpr char HELLO_WORLD[]{"Hello World!"};
 
 class RTTITest {
 public:
@@ -40,12 +40,108 @@ private:
 
 RTTITest* g_rtti_test{new RTTITest()};
 
-int main() {
-    std::cout << HELLO_WORLD << std::endl;
+int test_avx2_displacement_scan() {
+    std::cout << "Testing AVX2 displacement scan..." << std::endl;
+
+    // Make 1GB of data
+    std::vector<uint8_t> huge_bytes{};
+    huge_bytes.resize(1024 * 1024 * 1024);
+    memset(huge_bytes.data(), 0, huge_bytes.size());
+
+    std::cout << "Made 1GB of data..." << std::endl;
+
+    double effective_throughput_scalar_gbs = 0.0;
+    double effective_throughput_scalar = 0.0;
+    size_t scan_time_scalar_ms{0};
+
+    // Slide a window up 32 bytes to make sure it can hit the reference at each possible alignment
+    for (int32_t i = 0; i < 32; ++i) {
+        const int32_t index_to_write_to = (int32_t)(huge_bytes.size() * 0.5f) + i;
+        const uintptr_t address_to_write_to = (uintptr_t)&huge_bytes[index_to_write_to];
+        const uintptr_t address_of_next_ip = address_to_write_to + 4;
+        const uintptr_t address_to_rel32_reference = (uintptr_t)huge_bytes.data();
+        const int32_t delta = (std::ptrdiff_t)address_to_rel32_reference - (std::ptrdiff_t)address_of_next_ip;
+        *(int32_t*)(&huge_bytes[index_to_write_to]) = delta;
+
+        std::cout << "Scanning for reference..." << std::endl;
+
+        const auto scan_start_avx2 = std::chrono::high_resolution_clock::now();
+        const auto scan_result = utility::scan_relative_reference((uintptr_t)huge_bytes.data(), (uintptr_t)huge_bytes.size(), address_to_rel32_reference);
+        const auto scan_end_avx2 = std::chrono::high_resolution_clock::now();
+
+        KANANLIB_ASSERT(scan_result.has_value());
+        KANANLIB_ASSERT(*scan_result == address_to_write_to);
+
+        // Print the result
+        std::cout << "Found reference at: " << std::hex << *scan_result << std::endl;
+        std::cout << "Actual address: " << std::hex << address_to_write_to << std::endl;
+
+        // Print the time taken
+        std::cout << "AVX2 scan took: " << std::dec << std::chrono::duration_cast<std::chrono::milliseconds>(scan_end_avx2 - scan_start_avx2).count() << "ms" << std::endl;
+
+        // Print the effective throughput rate (time it took to scan 1GB of data, given the time to arrive in the middle of the data)
+        const auto scan_ratio = (double)(address_to_write_to - (uintptr_t)huge_bytes.data()) / (double)huge_bytes.size();
+        const auto scan_time_avx2_ms = std::chrono::duration_cast<std::chrono::milliseconds>(scan_end_avx2 - scan_start_avx2).count();
+
+        const auto effective_throughput_avx2 = ((double)huge_bytes.size() * scan_ratio) / (scan_time_avx2_ms / 1000.0);
+        const auto effective_throughput_avx2_gbs = effective_throughput_avx2 / (1024.0 * 1024.0 * 1024.0);
+
+        std::cout << "Effective throughput (AVX2): " << effective_throughput_avx2_gbs << "GB/s" << std::endl;
+
+        // Only check the scalar version once because it's ultra slow
+        if (i == 0) {
+            const auto scan_start_scalar = std::chrono::high_resolution_clock::now();
+            const auto scan_result_scalar = utility::scan_relative_reference_scalar((uintptr_t)huge_bytes.data(), (uintptr_t)huge_bytes.size(), address_to_rel32_reference);
+            const auto scan_end_scalar = std::chrono::high_resolution_clock::now();
+
+            scan_time_scalar_ms = std::chrono::duration_cast<std::chrono::milliseconds>(scan_end_scalar - scan_start_scalar).count();
+
+            KANANLIB_ASSERT(scan_result_scalar.has_value());
+            KANANLIB_ASSERT(*scan_result_scalar == address_to_write_to);
+
+            effective_throughput_scalar = ((double)huge_bytes.size() * scan_ratio) / (scan_time_scalar_ms / 1000.0);
+            effective_throughput_scalar_gbs = effective_throughput_scalar / (1024.0 * 1024.0 * 1024.0);
+        }
+
+        std::cout << "Scalar scan took: " << std::dec << scan_time_scalar_ms << "ms" << std::endl;
+        std::cout << "Effective throughput (Scalar): " << effective_throughput_scalar_gbs << "GB/s" << std::endl;
+
+        // calculate percentage difference
+        const auto percentage_difference = ((effective_throughput_avx2 - effective_throughput_scalar) / effective_throughput_scalar) * 100.0;
+        const auto times_faster = (double)scan_time_scalar_ms / (double)scan_time_avx2_ms;
+        const auto throughput_difference = effective_throughput_avx2_gbs - effective_throughput_scalar_gbs;
+        std::cout << percentage_difference << "% (" << times_faster << "x) faster than scalar" << std::endl;
+        std::cout << "Throughput difference: " << throughput_difference << "GB/s" << std::endl;
+
+        // Erase the old data
+        *(int32_t*)(&huge_bytes[index_to_write_to]) = 0;
+    }
+
+    return 0;
+}
+
+int main() try {
     const auto hello_world_scan = utility::scan_string(utility::get_executable(), HELLO_WORLD);
+    const auto hello_world_scans = utility::scan_strings(utility::get_executable(), HELLO_WORLD);
 
     KANANLIB_ASSERT(hello_world_scan.has_value());
     KANANLIB_ASSERT(*hello_world_scan == (uintptr_t)&HELLO_WORLD[0]);
+
+    KANANLIB_ASSERT(hello_world_scans.size() > 0);
+
+    std::cout << "Total number of strings found: " << hello_world_scans.size() << std::endl;
+
+    const auto hello_world_string_reference = utility::scan_displacement_reference(utility::get_executable(), *hello_world_scan);
+
+    KANANLIB_ASSERT(hello_world_string_reference.has_value());
+
+    std::cout << "Found string reference at: " << std::hex << *hello_world_string_reference << std::endl;
+
+    const auto resolved_instruction = utility::resolve_instruction(*hello_world_string_reference);
+
+    if (resolved_instruction) {
+        std::cout << "Resolved instruction: " << resolved_instruction->instrux.Mnemonic << std::endl;
+    }
 
     const auto rtti_test_scan = utility::rtti::find_vtable(utility::get_executable(), "class RTTITest");
 
@@ -65,8 +161,16 @@ int main() {
     using foo_t = size_t(__thiscall*)(RTTITest*);
     foo_t foo = (foo_t)*foo_function;
     KANANLIB_ASSERT(foo(g_rtti_test) == g_rtti_test->foo());
+    
+    KANANLIB_ASSERT(test_avx2_displacement_scan() == 0);
 
     SPDLOG_INFO("All tests passed.");
 
     return 0;
+} catch(const std::exception& e) {
+    std::cout << "Exception caught: " << e.what() << std::endl;
+    return 1;
+} catch(...) {
+    std::cout << "Unknown exception caught" << std::endl;
+    return 1;
 }
