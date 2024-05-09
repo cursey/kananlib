@@ -377,7 +377,8 @@ namespace utility {
         return scan_relative_references((uintptr_t)module, module_size - sizeof(void*), ptr, filter);
     }
 
-    std::optional<uintptr_t> scan_relative_reference_scalar(uintptr_t start, size_t length, uintptr_t ptr, std::function<bool(uintptr_t)> filter) {
+    // original, really stinky implementation
+    std::optional<uintptr_t> scan_relative_reference_scalar_byte_by_byte(uintptr_t start, size_t length, uintptr_t ptr, std::function<bool(uintptr_t)> filter) {
         KANANLIB_BENCH();
 
         const auto end = start + length;
@@ -389,6 +390,53 @@ namespace utility {
                 }
             }
         }
+
+        return std::nullopt;
+    }
+
+    std::optional<uintptr_t> scan_relative_reference_scalar(uintptr_t start, size_t length, uintptr_t ptr, std::function<bool(uintptr_t)> filter) {
+        KANANLIB_BENCH();
+
+        const auto end = start + length;
+
+        constexpr int32_t INT32_MASK = 0xFFFFFFFF;
+        constexpr size_t BYTE_BIT_SIZE = 8;
+        constexpr int32_t POST_IP_CONSTANT = 4;
+
+        // We can't make use of the full 8 bytes because we need to slide past sizeof(void*) / 2, which will end up going
+        // past the end of the block when reading an int32 out of it. So we'll iterate forward by 4 byte intervals.
+        for (uintptr_t i = start; i + sizeof(uint64_t) < end; i += sizeof(uint32_t)) {
+            // Reading in 8 byte chunks at a time is significantly faster than byte-by-byte (0.6-0.7GB/s vs ~2GB/s in my testing)
+            uint64_t block = *(uint64_t*)i;
+
+            for (size_t offset_i = 0; offset_i < 4; ++offset_i) {
+                const auto offset = (int32_t)((block >> (offset_i * BYTE_BIT_SIZE)) & INT32_MASK);
+                const auto landing_address = i + offset_i + POST_IP_CONSTANT + offset;
+
+                if (landing_address == ptr) {
+                    if (filter == nullptr || filter(i + offset_i)) {
+                        return i + offset_i;
+                    }
+                }
+            }
+        }
+
+        // Need to read off the remaining nibble at the end
+        const auto new_length = std::min<size_t>(length, 4);
+        if (new_length < 4) {
+            return std::nullopt;
+        }
+
+        const auto new_start = end - new_length;
+        const auto offset = *(int32_t*)new_start;
+        const auto landing_address = new_start + POST_IP_CONSTANT + offset;
+
+        if (landing_address == ptr) {
+            if (filter == nullptr || filter(new_start)) {
+                return new_start;
+            }
+        }
+        
 
         return std::nullopt;
     }

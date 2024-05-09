@@ -57,11 +57,14 @@ int test_avx2_displacement_scan() {
 
     std::mt19937 rng{std::random_device{}()};
 
+    constexpr size_t MAX_I = 128;
+
     // Slide a window up 32 bytes to make sure it can hit the reference at each possible alignment
-    for (int32_t i = 0; i < 128; ++i) {
+    for (int32_t i = 0; i < MAX_I; ++i) {
         //std::cout << "I = " << i << std::endl;
         //const int32_t index_to_write_to = (int32_t)(huge_bytes.size() * 0.99f) + i;
-        const int32_t index_to_write_to = ((int32_t)((rng() % (huge_bytes.size() - 128 - 4))) & ~7) + i;
+        const int32_t index_to_write_to = ((int32_t)((rng() % (huge_bytes.size() - MAX_I - 4))) & ~7) + i;
+        //const int32_t index_to_write_to = (int32_t)((huge_bytes.size() - 32 - 8) & ~7) + i;
         const uintptr_t address_to_write_to = (uintptr_t)&huge_bytes[index_to_write_to];
         const uintptr_t address_of_next_ip = address_to_write_to + 4;
         const uintptr_t address_to_rel32_reference = (uintptr_t)huge_bytes.data() + (rng() % (huge_bytes.size() - 32 - 4));
@@ -85,7 +88,7 @@ int test_avx2_displacement_scan() {
         const auto length = end - start;
 
         const auto scan_start_avx2 = std::chrono::high_resolution_clock::now();
-        const auto scan_results = utility::scan_relative_references(start, length, address_to_rel32_reference);
+        /*const auto scan_results = utility::scan_relative_references(start, length, address_to_rel32_reference);
         const auto scan_end_avx2 = std::chrono::high_resolution_clock::now();
 
         KANANLIB_ASSERT(scan_results.size() > 0);
@@ -98,11 +101,14 @@ int test_avx2_displacement_scan() {
         }
 
         KANANLIB_ASSERT(scan_results.size() == 1);
-        const auto scan_result = scan_results[0];
-        KANANLIB_ASSERT(scan_result == address_to_write_to);
+        const auto scan_result = scan_results[0];*/
+        const auto scan_result = utility::scan_relative_reference(start, length, address_to_rel32_reference);
+        const auto scan_end_avx2 = std::chrono::high_resolution_clock::now();
+        KANANLIB_ASSERT(scan_result.has_value());
+        KANANLIB_ASSERT(*scan_result == address_to_write_to);
 
         // Print the result
-        std::cout << "Found reference at: " << std::hex << scan_result << std::endl;
+        std::cout << "Found reference at: " << std::hex << *scan_result << std::endl;
         std::cout << "Actual address: " << std::hex << address_to_write_to << std::endl;
 
         // Print the time taken
@@ -118,7 +124,7 @@ int test_avx2_displacement_scan() {
         std::cout << "Effective throughput (AVX2): " << effective_throughput_avx2_gbs << "GB/s" << std::endl;
 
         // Only check the scalar version once because it's ultra slow
-        if (i == 0) {
+        //if (i == 0) {
             const auto scan_start_scalar = std::chrono::high_resolution_clock::now();
             const auto scan_result_scalar = utility::scan_relative_reference_scalar((uintptr_t)huge_bytes.data(), (uintptr_t)huge_bytes.size(), address_to_rel32_reference);
             const auto scan_end_scalar = std::chrono::high_resolution_clock::now();
@@ -130,7 +136,7 @@ int test_avx2_displacement_scan() {
 
             effective_throughput_scalar = ((double)huge_bytes.size() * scan_ratio) / (scan_time_scalar_ms / 1000.0);
             effective_throughput_scalar_gbs = effective_throughput_scalar / (1024.0 * 1024.0 * 1024.0);
-        }
+        //}
 
         std::cout << "Scalar scan took: " << std::dec << scan_time_scalar_ms << "ms" << std::endl;
         std::cout << "Effective throughput (Scalar): " << effective_throughput_scalar_gbs << "GB/s" << std::endl;
