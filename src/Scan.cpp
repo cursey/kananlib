@@ -558,104 +558,105 @@ namespace utility {
             // Second iteration (lo) 8 - 12, 12 - 16
             // Second iteration (hi) 24 - 28, 28 - 32
             // Basically a sliding window
-            for (auto shr_i = 0; shr_i < GRANULARITY / 2; ++shr_i) {
-                const auto byte_index = shr_i * SHIFT_SCALAR;
-                const auto real_i = i + byte_index;
-
-                if (shr_i > 0) {
-                    addresses1 = _mm256_add_epi64(addresses1, shift_amount_interval);
-                    addresses2 = _mm256_add_epi64(addresses2, shift_amount_interval);
-                    addresses3 = _mm256_add_epi64(addresses3, shift_amount_interval);
-                    addresses4 = _mm256_add_epi64(addresses4, shift_amount_interval);
-                }
-
-                const __m256i data = _mm256_loadu_si256((__m256i*)(real_i));
-
-                const __m256i shuffled_lo = _mm256_shuffle_epi8(data, shuffle_mask_lo);
-                const __m256i shuffled_hi = _mm256_shuffle_epi8(data, shuffle_mask_hi);
-
-                // Move upper and lower 128-bit lanes to separate registers
-                const __m256i displacement_lo = _mm256_cvtepi32_epi64(_mm256_extracti128_si256(shuffled_lo, 0));
-                const __m256i displacement_hi = _mm256_cvtepi32_epi64(_mm256_extracti128_si256(shuffled_hi, 0));
-                const __m256i displacement_lo_lo = _mm256_cvtepi32_epi64(_mm256_extracti128_si256(shuffled_lo, 1));
-                const __m256i displacement_hi_hi = _mm256_cvtepi32_epi64(_mm256_extracti128_si256(shuffled_hi, 1));
-
-                // Alternative way of doing the above (much slower, for reference)
-                //const __m256i gathered = _mm256_i32gather_epi32((int32_t*)real_i, indices, 1);
-                //const __m256i displacement_lo = _mm256_cvtepi32_epi64(_mm256_extracti128_si256(gathered, 0));
-                //const __m256i displacement_hi = _mm256_cvtepi32_epi64(_mm256_extracti128_si256(gathered, 1));
-
-                // Resolve the addresses
-                const __m256i vaddresses1 = _mm256_add_epi64(addresses1, displacement_lo);
-                const __m256i vaddresses2 = _mm256_add_epi64(addresses2, displacement_hi);
-                const __m256i vaddresses3 = _mm256_add_epi64(addresses3, displacement_lo_lo);
-                const __m256i vaddresses4 = _mm256_add_epi64(addresses4, displacement_hi_hi);
-
-                // Compare addresses to the target
-                const __m256i cmp_result1 = _mm256_cmpeq_epi64(vaddresses1, target);
-                const __m256i cmp_result2 = _mm256_cmpeq_epi64(vaddresses2, target);
-                const __m256i cmp_result3 = _mm256_cmpeq_epi64(vaddresses3, target);
-                const __m256i cmp_result4 = _mm256_cmpeq_epi64(vaddresses4, target);
-
-                const int mask1 = _mm256_movemask_epi8(cmp_result1);
-                const int mask2 = _mm256_movemask_epi8(cmp_result2);
-                const int mask3 = _mm256_movemask_epi8(cmp_result3);
-                const int mask4 = _mm256_movemask_epi8(cmp_result4);
-
-                auto check_candidate = [&](int mask, int start_j) -> std::optional<uintptr_t> {
-                    for (int j = 0; j < 4; j++) {
-                        if (mask & masks[j]) {
-                            SPDLOG_INFO("Mask at offset {} ({} corrected) (real {:x}): {:x}", start_j + j, start_j + j + byte_index, real_i + j + start_j, (uint32_t)masks[j]);
-                        }
-
-                        if (mask & masks[j] && calculate_absolute(real_i + j + start_j, 4) == ptr) {
-                            const uintptr_t candidate_addr = real_i + j + start_j;
-
-                            if (filter == nullptr || filter(candidate_addr)) {
-                                return candidate_addr;
-                            }
-                        }
-                    }
-
-                    return std::nullopt;
-                };
-
-                if (mask4 != 0) {
-                    SPDLOG_INFO("Mask 4 is not zero @ {:x} (real {:x}): {:x}", i, real_i, (uint32_t)mask4);
-
-                    if (auto result = check_candidate(mask4, 20); result) {
-                        SPDLOG_INFO("Found fourth candidate at (block {:x}) {:x}->{:x} (mask {:x})", i, *result, ptr, (uint32_t)mask4);
-                        return result;
-                    }
-                }
-
-                if (mask3 != 0) {
-                    SPDLOG_INFO("Mask 3 is not zero @ {:x} (real {:x}): {:x}", i, real_i, (uint32_t)mask3);
-
-                    if (auto result = check_candidate(mask3, 16); result) {
-                        SPDLOG_INFO("Found third candidate at (block {:x}) {:x}->{:x} (mask {:x})", i, *result, ptr, (uint32_t)mask3);
-                        return result;
-                    }
-                }
-
-                if (mask2 != 0) {
-                    SPDLOG_INFO("Mask 2 is not zero @ {:x} (real {:x}): {:x}", i, real_i, (uint32_t)mask2);
-
-                    if (auto result = check_candidate(mask2, 4); result) {
-                        SPDLOG_INFO("Found second candidate at (block {:x}) {:x}->{:x} (mask {:x})", i, *result, ptr, (uint32_t)mask2);
-                        return result;
-                    }
-                } 
-
-                if (mask1 != 0) {
-                    SPDLOG_INFO("Mask 1 is not zero @ {:x} (real {:x}): {:x}", i, real_i, (uint32_t)mask1);
-
-                    if (auto result = check_candidate(mask1, 0); result) {
-                        SPDLOG_INFO("Found first candidate at (block {:x}) {:x}->{:x} (mask {:x})", i, *result, ptr, (uint32_t)mask1);
-                        return result;
-                    }
-                }
+            
+            // So I know this macro is really ugly but it's a good way to unroll the loop and make it easier to read
+            // Unrolling the loop gets us an extra 1-1.5GB/s throughput
+            #define PROCESS_AVX2_BLOCK(N) \
+            { \
+                constexpr auto byte_index = N * SHIFT_SCALAR;\
+                const auto real_i = i + byte_index;\
+\
+                const __m256i data = _mm256_loadu_si256((__m256i*)(real_i));\
+\
+                const __m256i shuffled_lo = _mm256_shuffle_epi8(data, shuffle_mask_lo);\
+                const __m256i shuffled_hi = _mm256_shuffle_epi8(data, shuffle_mask_hi);\
+\
+                /* Move upper and lower 128-bit lanes to separate registers */ \
+                const __m256i displacement_lo = _mm256_cvtepi32_epi64(_mm256_extracti128_si256(shuffled_lo, 0));\
+                const __m256i displacement_hi = _mm256_cvtepi32_epi64(_mm256_extracti128_si256(shuffled_hi, 0));\
+                const __m256i displacement_lo_lo = _mm256_cvtepi32_epi64(_mm256_extracti128_si256(shuffled_lo, 1));\
+                const __m256i displacement_hi_hi = _mm256_cvtepi32_epi64(_mm256_extracti128_si256(shuffled_hi, 1));\
+\
+                /* Resolve the addresses */ \
+                const __m256i vaddresses1 = _mm256_add_epi64(addresses1, displacement_lo);\
+                const __m256i vaddresses2 = _mm256_add_epi64(addresses2, displacement_hi);\
+                const __m256i vaddresses3 = _mm256_add_epi64(addresses3, displacement_lo_lo);\
+                const __m256i vaddresses4 = _mm256_add_epi64(addresses4, displacement_hi_hi);\
+\
+                /* Compare addresses to the target */ \
+                const __m256i cmp_result1 = _mm256_cmpeq_epi64(vaddresses1, target);\
+                const __m256i cmp_result2 = _mm256_cmpeq_epi64(vaddresses2, target);\
+                const __m256i cmp_result3 = _mm256_cmpeq_epi64(vaddresses3, target);\
+                const __m256i cmp_result4 = _mm256_cmpeq_epi64(vaddresses4, target);\
+\
+                const int mask1 = _mm256_movemask_epi8(cmp_result1);\
+                const int mask2 = _mm256_movemask_epi8(cmp_result2);\
+                const int mask3 = _mm256_movemask_epi8(cmp_result3);\
+                const int mask4 = _mm256_movemask_epi8(cmp_result4);\
+\
+                auto check_candidate = [&](int mask, int start_j) -> std::optional<uintptr_t> {\
+                    for (int j = 0; j < 4; j++) {\
+                        if (mask & masks[j]) {\
+                            SPDLOG_INFO("Mask at offset {} ({} corrected) (real {:x}): {:x}", start_j + j, start_j + j + byte_index, real_i + j + start_j, (uint32_t)masks[j]);\
+                        }\
+\
+                        if (mask & masks[j] && calculate_absolute(real_i + j + start_j, 4) == ptr) {\
+                            const uintptr_t candidate_addr = real_i + j + start_j;\
+\
+                            if (filter == nullptr || filter(candidate_addr)) {\
+                                return candidate_addr;\
+                            }\
+                        }\
+                    }\
+\
+                    return std::nullopt;\
+                };\
+\
+                if (mask4 != 0) {\
+                    SPDLOG_INFO("Mask 4 is not zero @ {:x} (real {:x}): {:x}", i, real_i, (uint32_t)mask4);\
+\
+                    if (auto result = check_candidate(mask4, 20); result) {\
+                        SPDLOG_INFO("Found fourth candidate at (block {:x}) {:x}->{:x} (mask {:x})", i, *result, ptr, (uint32_t)mask4);\
+                        return result;\
+                    }\
+                }\
+\
+                if (mask3 != 0) {\
+                    SPDLOG_INFO("Mask 3 is not zero @ {:x} (real {:x}): {:x}", i, real_i, (uint32_t)mask3);\
+\
+                    if (auto result = check_candidate(mask3, 16); result) {\
+                        SPDLOG_INFO("Found third candidate at (block {:x}) {:x}->{:x} (mask {:x})", i, *result, ptr, (uint32_t)mask3);\
+                        return result;\
+                    }\
+                }\
+\
+                if (mask2 != 0) {\
+                    SPDLOG_INFO("Mask 2 is not zero @ {:x} (real {:x}): {:x}", i, real_i, (uint32_t)mask2);\
+\
+                    if (auto result = check_candidate(mask2, 4); result) {\
+                        SPDLOG_INFO("Found second candidate at (block {:x}) {:x}->{:x} (mask {:x})", i, *result, ptr, (uint32_t)mask2);\
+                        return result;\
+                    }\
+                } \
+\
+                if (mask1 != 0) {\
+                    SPDLOG_INFO("Mask 1 is not zero @ {:x} (real {:x}): {:x}", i, real_i, (uint32_t)mask1);\
+\
+                    if (auto result = check_candidate(mask1, 0); result) {\
+                        SPDLOG_INFO("Found first candidate at (block {:x}) {:x}->{:x} (mask {:x})", i, *result, ptr, (uint32_t)mask1);\
+                        return result;\
+                    }\
+                }\
             }
+
+            PROCESS_AVX2_BLOCK(0);
+
+            addresses1 = _mm256_add_epi64(addresses1, shift_amount_interval);
+            addresses2 = _mm256_add_epi64(addresses2, shift_amount_interval);
+            addresses3 = _mm256_add_epi64(addresses3, shift_amount_interval);
+            addresses4 = _mm256_add_epi64(addresses4, shift_amount_interval);
+
+            PROCESS_AVX2_BLOCK(1);
 
             addresses1 = _mm256_add_epi64(addresses1, shift_amount_after); // 32 - 8 = 24
             addresses2 = _mm256_add_epi64(addresses2, shift_amount_after);
