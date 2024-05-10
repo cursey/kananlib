@@ -408,8 +408,8 @@ namespace utility {
         for (uintptr_t i = start; i + sizeof(uint64_t) < end; i += sizeof(uint32_t)) {
             // Reading in 8 byte chunks at a time is significantly faster than byte-by-byte (0.6-0.7GB/s vs ~2GB/s in my testing)
             uint64_t block = *(uint64_t*)i;
-
-            for (size_t offset_i = 0; offset_i < 4; ++offset_i) {
+            
+            /*for (size_t offset_i = 0; offset_i < 4; ++offset_i) {
                 const auto offset = (int32_t)((block >> (offset_i * BYTE_BIT_SIZE)) & INT32_MASK);
                 const auto landing_address = i + offset_i + POST_IP_CONSTANT + offset;
 
@@ -417,6 +417,41 @@ namespace utility {
                     if (filter == nullptr || filter(i + offset_i)) {
                         return i + offset_i;
                     }
+                }
+            }*/
+
+            // Unrolled version of the loop, much faster (+ 1GB/s throughput in my testing)
+            const auto offset0 = (int32_t)((block >> (0 * BYTE_BIT_SIZE)) & INT32_MASK);
+            const auto offset1 = (int32_t)((block >> (1 * BYTE_BIT_SIZE)) & INT32_MASK);
+            const auto offset2 = (int32_t)((block >> (2 * BYTE_BIT_SIZE)) & INT32_MASK);
+            const auto offset3 = (int32_t)((block >> (3 * BYTE_BIT_SIZE)) & INT32_MASK);
+
+            const auto landing_address0 = i + 0 + POST_IP_CONSTANT + offset0;
+            const auto landing_address1 = i + 1 + POST_IP_CONSTANT + offset1;
+            const auto landing_address2 = i + 2 + POST_IP_CONSTANT + offset2;
+            const auto landing_address3 = i + 3 + POST_IP_CONSTANT + offset3;
+
+            if (landing_address0 == ptr) {
+                if (filter == nullptr || filter(i)) {
+                    return i;
+                }
+            }
+
+            if (landing_address1 == ptr) {
+                if (filter == nullptr || filter(i + 1)) {
+                    return i + 1;
+                }
+            }
+
+            if (landing_address2 == ptr) {
+                if (filter == nullptr || filter(i + 2)) {
+                    return i + 2;
+                }
+            }
+
+            if (landing_address3 == ptr) {
+                if (filter == nullptr || filter(i + 3)) {
+                    return i + 3;
                 }
             }
         }
