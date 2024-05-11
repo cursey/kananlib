@@ -116,7 +116,8 @@ int test_avx2_displacement_scan() {
 
         // Print the effective throughput rate (time it took to scan 1GB of data, given the time to arrive in the middle of the data)
         const auto scan_ratio = (double)(address_to_write_to - (uintptr_t)huge_bytes.data()) / (double)huge_bytes.size();
-        const auto scan_time_avx2_ms = std::chrono::duration_cast<std::chrono::milliseconds>(scan_end_avx2 - scan_start_avx2).count();
+        const auto scan_time_avx2_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(scan_end_avx2 - scan_start_avx2).count();
+        const auto scan_time_avx2_ms = (double)scan_time_avx2_ns / 1000000.0;
 
         const auto effective_throughput_avx2 = ((double)huge_bytes.size() * scan_ratio) / (scan_time_avx2_ms / 1000.0);
         const auto effective_throughput_avx2_gbs = effective_throughput_avx2 / (1024.0 * 1024.0 * 1024.0);
@@ -124,26 +125,28 @@ int test_avx2_displacement_scan() {
         std::cout << "Effective throughput (AVX2): " << effective_throughput_avx2_gbs << "GB/s" << std::endl;
 
         // Only check the scalar version once because it's ultra slow
-        //if (i == 0) {
+        if (i == 0) {
             const auto scan_start_scalar = std::chrono::high_resolution_clock::now();
             const auto scan_result_scalar = utility::scan_relative_reference_scalar((uintptr_t)huge_bytes.data(), (uintptr_t)huge_bytes.size(), address_to_rel32_reference);
             const auto scan_end_scalar = std::chrono::high_resolution_clock::now();
 
-            scan_time_scalar_ms = std::chrono::duration_cast<std::chrono::milliseconds>(scan_end_scalar - scan_start_scalar).count();
+            const auto scan_time_scalar_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(scan_end_scalar - scan_start_scalar).count();
+            scan_time_scalar_ms = (double)scan_time_scalar_ns / 1000000.0;
 
             KANANLIB_ASSERT(scan_result_scalar.has_value());
             KANANLIB_ASSERT(*scan_result_scalar == address_to_write_to);
 
-            effective_throughput_scalar = ((double)huge_bytes.size() * scan_ratio) / (scan_time_scalar_ms / 1000.0);
+            effective_throughput_scalar = ((double)huge_bytes.size() * scan_ratio) / ((double)scan_time_scalar_ms / 1000.0);
             effective_throughput_scalar_gbs = effective_throughput_scalar / (1024.0 * 1024.0 * 1024.0);
-        //}
+        }
 
         std::cout << "Scalar scan took: " << std::dec << scan_time_scalar_ms << "ms" << std::endl;
         std::cout << "Effective throughput (Scalar): " << effective_throughput_scalar_gbs << "GB/s" << std::endl;
 
         // calculate percentage difference
         const auto percentage_difference = ((effective_throughput_avx2 - effective_throughput_scalar) / effective_throughput_scalar) * 100.0;
-        const auto times_faster = (double)scan_time_scalar_ms / (double)scan_time_avx2_ms;
+        //const auto times_faster = (double)scan_time_scalar_ms / (double)scan_time_avx2_ms;
+        const auto times_faster = (double)effective_throughput_avx2 / (double)effective_throughput_scalar;
         const auto throughput_difference = effective_throughput_avx2_gbs - effective_throughput_scalar_gbs;
         std::cout << percentage_difference << "% (" << times_faster << "x) faster than scalar" << std::endl;
         std::cout << "Throughput difference: " << throughput_difference << "GB/s" << std::endl;

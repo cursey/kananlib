@@ -22,6 +22,12 @@ using namespace std;
 
 //#define KANANLIB_DO_BENCHMARK
 
+#ifdef KANANLIB_LOG_HIGH_PERFORMANCE_CODE
+#define KANANLIB_LOG_PERF_SENSITIVE(...) SPDLOG_INFO(__VA_ARGS__)
+#else
+#define KANANLIB_LOG_PERF_SENSITIVE(...)
+#endif
+
 #ifdef KANANLIB_DO_BENCHMARK
 #define KANANLIB_BENCH() \
     const auto KANANLIB_START_TIME = std::chrono::high_resolution_clock::now();\
@@ -542,7 +548,7 @@ namespace utility {
         constexpr int mask_7 = mask_6 << 4;
 
         constexpr int masks[] = { mask_0, mask_1, mask_2, mask_3, mask_4, mask_5, mask_6, mask_7 };
-        constexpr size_t lookahead_size = (sizeof(__m256i) * 4) + (sizeof(__m256i) / 4); // 32 + 32 (unrolled loop) + 8 (for the sliding window when we do a 256 load on the next iteration)
+        size_t lookahead_size = (sizeof(__m256i) * 4) + (sizeof(__m256i) / 4); // 32 + 32 (unrolled loop) + 8 (for the sliding window when we do a 256 load on the next iteration)
 
         const __m256i start_vectorized = _mm256_set1_epi32(0);
 
@@ -552,118 +558,109 @@ namespace utility {
         const int32_t rva_scalar = (int32_t)((intptr_t)ptr - (intptr_t)start);
         const __m256i rva = _mm256_set1_epi32(rva_scalar);
 
-        for (auto i = start; i + lookahead_size < end; i += sizeof(__m256i)) {
-            // Add 8 bytes to the addresses at every interval
-            // First iteration (lo) 0 - 4, 4 - 8
-            // First iteration (hi) 16 - 20, 20 - 24
-            // Second iteration (lo) 8 - 12, 12 - 16
-            // Second iteration (hi) 24 - 28, 28 - 32
-            // Basically a sliding window
-            
-            // So I know this macro is really ugly but it's a good way to unroll the loop and make it easier to read
-            // Unrolling the loop gets us an extra 1-1.5GB/s throughput
-            #define PROCESS_AVX2_BLOCK(N) \
-            { \
-                constexpr auto byte_index = N * SHIFT_SCALAR;\
-                const auto real_i = i + byte_index;\
+        // Add 8 bytes to the addresses at every interval
+        // First iteration (lo) 0 - 4, 4 - 8
+        // First iteration (hi) 16 - 20, 20 - 24
+        // Second iteration (lo) 8 - 12, 12 - 16
+        // Second iteration (hi) 24 - 28, 28 - 32
+        // Basically a sliding window
+        
+        // So I know this macro is really ugly but it's a good way to unroll the loop and make it easier to read
+        // Unrolling the loop gets us an extra 1-1.5GB/s throughput
+        #define PROCESS_AVX2_BLOCK(N) \
+        { \
+            constexpr auto byte_index = N * SHIFT_SCALAR;\
+            const auto real_i = i + byte_index;\
 \
-                const __m256i data = _mm256_loadu_si256((__m256i*)(real_i));\
+            const __m256i data = _mm256_loadu_si256((__m256i*)(real_i));\
 \
-                const __m256i displacement_lo = _mm256_shuffle_epi8(data, shuffle_mask_lo);\
-                const __m256i displacement_hi = _mm256_shuffle_epi8(data, shuffle_mask_hi);\
+            const __m256i displacement_lo = _mm256_shuffle_epi8(data, shuffle_mask_lo);\
+            const __m256i displacement_hi = _mm256_shuffle_epi8(data, shuffle_mask_hi);\
 \
-                /* Resolve the addresses */ \
-                const __m256i vaddresses1 = _mm256_add_epi32(addresses, displacement_lo);\
-                const __m256i vaddresses2 = _mm256_add_epi32(_mm256_add_epi32(addresses, post_ip_constant32), displacement_hi);\
+            /* Resolve the addresses */ \
+            const __m256i vaddresses1 = _mm256_add_epi32(addresses, displacement_lo);\
+            const __m256i vaddresses2 = _mm256_add_epi32(_mm256_add_epi32(addresses, post_ip_constant32), displacement_hi);\
 \
-                /* Compare addresses to the target */ \
-                const __m256i cmp_result1 = _mm256_cmpeq_epi32(vaddresses1, rva);\
-                const __m256i cmp_result2 = _mm256_cmpeq_epi32(vaddresses2, rva);\
+            /* Compare addresses to the target */ \
+            const __m256i cmp_result1 = _mm256_cmpeq_epi32(vaddresses1, rva);\
+            const __m256i cmp_result2 = _mm256_cmpeq_epi32(vaddresses2, rva);\
 \
-                const int mask1 = _mm256_movemask_epi8(cmp_result1);\
-                const int mask2 = _mm256_movemask_epi8(cmp_result2);\
+            const int mask1 = _mm256_movemask_epi8(cmp_result1);\
+            const int mask2 = _mm256_movemask_epi8(cmp_result2);\
 \
-                auto check_candidate = [&](int mask, int start_j_initial) -> std::optional<uintptr_t> {\
-                    for (int j_counter = 0; j_counter < 8; j_counter++) {\
-                        const auto start_j = start_j_initial + (j_counter > 3 ? 16 : 0);\
-                        const auto j = j_counter > 3 ? j_counter - 4 : j_counter;\
-                        if (mask & masks[j_counter]) {\
-                            SPDLOG_INFO("Mask at offset {} ({} corrected) (real {:x}): {:x}", start_j + j, start_j + j + byte_index, real_i + j + start_j, (uint32_t)masks[j_counter]);\
-                        }\
-\
-                        if (mask & masks[j_counter] && calculate_absolute(real_i + j + start_j, 4) == ptr) {\
-                            const uintptr_t candidate_addr = real_i + j + start_j;\
-\
-                            if (filter == nullptr || filter(candidate_addr)) {\
-                                return candidate_addr;\
-                            }\
-                        }\
+            auto check_candidate = [&](int mask, int start_j_initial) -> std::optional<uintptr_t> {\
+                for (int j_counter = 0; j_counter < 8; j_counter++) {\
+                    const auto start_j = start_j_initial + (j_counter > 3 ? 16 : 0);\
+                    const auto j = j_counter > 3 ? j_counter - 4 : j_counter;\
+                    if (mask & masks[j_counter]) {\
+                        KANANLIB_LOG_PERF_SENSITIVE("Mask at offset {} ({} corrected) (real {:x}): {:x}", start_j + j, start_j + j + byte_index, real_i + j + start_j, (uint32_t)masks[j_counter]);\
                     }\
 \
-                    return std::nullopt;\
-                };\
+                    if (mask & masks[j_counter] && calculate_absolute(real_i + j + start_j, 4) == ptr) {\
+                        const uintptr_t candidate_addr = real_i + j + start_j;\
 \
-                if (mask2 != 0) {\
-                    SPDLOG_INFO("Mask 2 is not zero @ {:x} (real {:x}): {:x}", i, real_i, (uint32_t)mask2);\
-\
-                    if (auto result = check_candidate(mask2, 4); result) {\
-                        SPDLOG_INFO("Found second candidate at (block {:x}) {:x}->{:x} (mask {:x})", i, *result, ptr, (uint32_t)mask2);\
-                        return result;\
-                    }\
-                } \
-\
-                if (mask1 != 0) {\
-                    SPDLOG_INFO("Mask 1 is not zero @ {:x} (real {:x}): {:x}", i, real_i, (uint32_t)mask1);\
-\
-                    if (auto result = check_candidate(mask1, 0); result) {\
-                        SPDLOG_INFO("Found first candidate at (block {:x}) {:x}->{:x} (mask {:x})", i, *result, ptr, (uint32_t)mask1);\
-                        return result;\
+                        if (filter == nullptr || filter(candidate_addr)) {\
+                            return candidate_addr;\
+                        }\
                     }\
                 }\
+\
+                return std::nullopt;\
+            };\
+\
+            if (mask2 != 0) {\
+                KANANLIB_LOG_PERF_SENSITIVE("Mask 2 is not zero @ {:x} (real {:x}): {:x}", i, real_i, (uint32_t)mask2);\
+\
+                if (auto result = check_candidate(mask2, 4); result) {\
+                    KANANLIB_LOG_PERF_SENSITIVE("Found second candidate at (block {:x}) {:x}->{:x} (mask {:x})", i, *result, ptr, (uint32_t)mask2);\
+                    return result;\
+                }\
+            } \
+\
+            if (mask1 != 0) {\
+                KANANLIB_LOG_PERF_SENSITIVE("Mask 1 is not zero @ {:x} (real {:x}): {:x}", i, real_i, (uint32_t)mask1);\
+\
+                if (auto result = check_candidate(mask1, 0); result) {\
+                    KANANLIB_LOG_PERF_SENSITIVE("Found first candidate at (block {:x}) {:x}->{:x} (mask {:x})", i, *result, ptr, (uint32_t)mask1);\
+                    return result;\
+                }\
+            }\
+        }
+
+        #define PROCESS_AVX2_BLOCKS(N, N2)\
+            PROCESS_AVX2_BLOCK(N);\
+            addresses = _mm256_add_epi32(addresses, shift_amount_interval32);\
+            /* Second half, 8-12, 12 - 16, 24 - 28, 28 - 32 */ \
+            PROCESS_AVX2_BLOCK(N2);\
+            addresses = _mm256_add_epi32(addresses, shift_amount_after32); /* 32 - 8 = 24 */ \
+            i += sizeof(__m256i);
+
+        if (length >= (sizeof(__m256i) * 12) + 8) {
+            lookahead_size = (sizeof(__m256i) * 12) + 8;
+
+            // Loop unrolled a bunch of times to increase throughput
+            for (auto i = start; i + lookahead_size < end;) {
+                PROCESS_AVX2_BLOCKS(0, 1);
+                PROCESS_AVX2_BLOCKS(0, 1);
+                PROCESS_AVX2_BLOCKS(0, 1);
+                PROCESS_AVX2_BLOCKS(0, 1);
+
+                PROCESS_AVX2_BLOCKS(0, 1);
+                PROCESS_AVX2_BLOCKS(0, 1);
+                PROCESS_AVX2_BLOCKS(0, 1);
+                PROCESS_AVX2_BLOCKS(0, 1);
+
+                PROCESS_AVX2_BLOCKS(0, 1);
+                PROCESS_AVX2_BLOCKS(0, 1);
+                PROCESS_AVX2_BLOCKS(0, 1);
+                PROCESS_AVX2_BLOCKS(0, 1);
             }
+        } else {
+            lookahead_size = (sizeof(__m256i)) + 8;
 
-            // First half, 0-4, 4-8, 16 - 20, 20 - 24
-            PROCESS_AVX2_BLOCK(0);
-
-            addresses = _mm256_add_epi32(addresses, shift_amount_interval32);
-
-            // Second half, 8-12, 12 - 16, 24 - 28, 28 - 32
-            PROCESS_AVX2_BLOCK(1);
-
-            addresses = _mm256_add_epi32(addresses, shift_amount_after32); // 32 - 8 = 24
-
-            // Unrolled loop 1
-            i += sizeof(__m256i);
-
-            PROCESS_AVX2_BLOCK(0);
-
-            addresses = _mm256_add_epi32(addresses, shift_amount_interval32);
-
-            PROCESS_AVX2_BLOCK(1);
-
-            addresses = _mm256_add_epi32(addresses, shift_amount_after32); // 32 - 8 = 24
-
-            // Unrolled loop 2
-            i += sizeof(__m256i);
-
-            PROCESS_AVX2_BLOCK(0);
-
-            addresses = _mm256_add_epi32(addresses, shift_amount_interval32);
-
-            PROCESS_AVX2_BLOCK(1);
-
-            addresses = _mm256_add_epi32(addresses, shift_amount_after32); // 32 - 8 = 24
-
-            // Unrolled loop 3
-            i += sizeof(__m256i);
-
-            PROCESS_AVX2_BLOCK(0);
-
-            addresses = _mm256_add_epi32(addresses, shift_amount_interval32);
-
-            PROCESS_AVX2_BLOCK(1);
-
-            addresses = _mm256_add_epi32(addresses, shift_amount_after32); // 32 - 8 = 24
+            for (auto i = start; i + lookahead_size < end;) {
+                PROCESS_AVX2_BLOCKS(0, 1);
+            }
         }
 
         // just do a last ditch scan on the last lookahead bytes (sizeof(__m256i) * 4)
