@@ -498,13 +498,11 @@ namespace utility {
         const auto end = (start + length);
 
         constexpr auto SHIFT_SCALAR = 8;
-        constexpr auto GRANULARITY = sizeof(__m256i) / SHIFT_SCALAR; // 4
 
-        const __m256i target = _mm256_set1_epi64x(ptr);
-        const __m256i post_ip_constant = _mm256_set1_epi64x(4); // Usually true most of the time. *rel32 + &rel32 + 4 = target unless it's some weird instruction
-        const __m256i shift_amount_interval = _mm256_set1_epi64x(SHIFT_SCALAR);
-        const __m256i shift_amount_upper_initial = _mm256_set1_epi64x(SHIFT_SCALAR * 2);
-        const __m256i shift_amount_after = _mm256_set1_epi64x(sizeof(__m256i) - SHIFT_SCALAR);
+        const __m256i post_ip_constant32 = _mm256_set1_epi32(4); // Usually true most of the time. *rel32 + &rel32 + 4 = target unless it's some weird instruction
+        const __m256i shift_amount_interval32 = _mm256_set1_epi32(SHIFT_SCALAR);
+        const __m256i shift_amount_upper_initial32 = _mm256_set1_epi32(SHIFT_SCALAR * 2);
+        const __m256i shift_amount_after32 = _mm256_set1_epi32(sizeof(__m256i) - SHIFT_SCALAR);
 
         const __m256i shuffle_mask_lo = _mm256_set_epi8(
             22, 21, 20, 19,
@@ -528,28 +526,27 @@ namespace utility {
             7, 6, 5, 4
         );
 
-        const __m256i upper_addition_mask = _mm256_add_epi64(_mm256_set_epi64x(7, 6, 5, 4), post_ip_constant);
-        const __m256i lower_addition_mask = _mm256_add_epi64(_mm256_set_epi64x(3, 2, 1, 0), post_ip_constant);
-        //const __m256i indices = _mm256_set_epi32(7, 6, 5, 4, 3, 2, 1, 0);
+        const __m256i addition_mask32 = _mm256_add_epi32(_mm256_set_epi32(19, 18, 17, 16, 3, 2, 1, 0), post_ip_constant32);
 
-        constexpr int mask_0 = 0b11111111;
-        constexpr int mask_1 = mask_0 << 8;
-        constexpr int mask_2 = mask_1 << 8;
-        constexpr int mask_3 = mask_2 << 8;
+        constexpr int mask_0 = 0b1111;
+        constexpr int mask_1 = mask_0 << 4;
+        constexpr int mask_2 = mask_1 << 4;
+        constexpr int mask_3 = mask_2 << 4;
+        constexpr int mask_4 = mask_3 << 4;
+        constexpr int mask_5 = mask_4 << 4;
+        constexpr int mask_6 = mask_5 << 4;
+        constexpr int mask_7 = mask_6 << 4;
 
-        constexpr int masks[] = { mask_0, mask_1, mask_2, mask_3 };
-        constexpr size_t lookahead_size = sizeof(__m256i) + sizeof(__m256i) + (sizeof(__m256i) / 4); // 32 + 32 (unrolled loop) + 8 (for the sliding window when we do a 256 load on the next iteration)
+        constexpr int masks[] = { mask_0, mask_1, mask_2, mask_3, mask_4, mask_5, mask_6, mask_7 };
+        constexpr size_t lookahead_size = (sizeof(__m256i) * 4) + (sizeof(__m256i) / 4); // 32 + 32 (unrolled loop) + 8 (for the sliding window when we do a 256 load on the next iteration)
 
-        const __m256i start_vectorized = _mm256_set1_epi64x(start);
+        const __m256i start_vectorized = _mm256_set1_epi32(0);
 
         // These will be added onto every loop.
-        // The lower 0 - 8 bytes
-        __m256i addresses1 = _mm256_add_epi64(start_vectorized, lower_addition_mask);
-        __m256i addresses2 = _mm256_add_epi64(start_vectorized, upper_addition_mask);
+        __m256i addresses = _mm256_add_epi32(start_vectorized, addition_mask32);
 
-        // The upper 16 - 24 bytes
-        __m256i addresses3 = _mm256_add_epi64(addresses1, shift_amount_upper_initial);
-        __m256i addresses4 = _mm256_add_epi64(addresses2, shift_amount_upper_initial);
+        const int32_t rva_scalar = (int32_t)((intptr_t)ptr - (intptr_t)start);
+        const __m256i rva = _mm256_set1_epi32(rva_scalar);
 
         for (auto i = start; i + lookahead_size < end; i += sizeof(__m256i)) {
             // Add 8 bytes to the addresses at every interval
@@ -568,39 +565,29 @@ namespace utility {
 \
                 const __m256i data = _mm256_loadu_si256((__m256i*)(real_i));\
 \
-                const __m256i shuffled_lo = _mm256_shuffle_epi8(data, shuffle_mask_lo);\
-                const __m256i shuffled_hi = _mm256_shuffle_epi8(data, shuffle_mask_hi);\
-\
-                /* Move upper and lower 128-bit lanes to separate registers */ \
-                const __m256i displacement_lo = _mm256_cvtepi32_epi64(_mm256_extracti128_si256(shuffled_lo, 0));\
-                const __m256i displacement_hi = _mm256_cvtepi32_epi64(_mm256_extracti128_si256(shuffled_hi, 0));\
-                const __m256i displacement_lo_lo = _mm256_cvtepi32_epi64(_mm256_extracti128_si256(shuffled_lo, 1));\
-                const __m256i displacement_hi_hi = _mm256_cvtepi32_epi64(_mm256_extracti128_si256(shuffled_hi, 1));\
+                const __m256i displacement_lo = _mm256_shuffle_epi8(data, shuffle_mask_lo);\
+                const __m256i displacement_hi = _mm256_shuffle_epi8(data, shuffle_mask_hi);\
 \
                 /* Resolve the addresses */ \
-                const __m256i vaddresses1 = _mm256_add_epi64(addresses1, displacement_lo);\
-                const __m256i vaddresses2 = _mm256_add_epi64(addresses2, displacement_hi);\
-                const __m256i vaddresses3 = _mm256_add_epi64(addresses3, displacement_lo_lo);\
-                const __m256i vaddresses4 = _mm256_add_epi64(addresses4, displacement_hi_hi);\
+                const __m256i vaddresses1 = _mm256_add_epi32(addresses, displacement_lo);\
+                const __m256i vaddresses2 = _mm256_add_epi32(_mm256_add_epi32(addresses, post_ip_constant32), displacement_hi);\
 \
                 /* Compare addresses to the target */ \
-                const __m256i cmp_result1 = _mm256_cmpeq_epi64(vaddresses1, target);\
-                const __m256i cmp_result2 = _mm256_cmpeq_epi64(vaddresses2, target);\
-                const __m256i cmp_result3 = _mm256_cmpeq_epi64(vaddresses3, target);\
-                const __m256i cmp_result4 = _mm256_cmpeq_epi64(vaddresses4, target);\
+                const __m256i cmp_result1 = _mm256_cmpeq_epi32(vaddresses1, rva);\
+                const __m256i cmp_result2 = _mm256_cmpeq_epi32(vaddresses2, rva);\
 \
                 const int mask1 = _mm256_movemask_epi8(cmp_result1);\
                 const int mask2 = _mm256_movemask_epi8(cmp_result2);\
-                const int mask3 = _mm256_movemask_epi8(cmp_result3);\
-                const int mask4 = _mm256_movemask_epi8(cmp_result4);\
 \
-                auto check_candidate = [&](int mask, int start_j) -> std::optional<uintptr_t> {\
-                    for (int j = 0; j < 4; j++) {\
-                        if (mask & masks[j]) {\
-                            SPDLOG_INFO("Mask at offset {} ({} corrected) (real {:x}): {:x}", start_j + j, start_j + j + byte_index, real_i + j + start_j, (uint32_t)masks[j]);\
+                auto check_candidate = [&](int mask, int start_j_initial) -> std::optional<uintptr_t> {\
+                    for (int j_counter = 0; j_counter < 8; j_counter++) {\
+                        const auto start_j = start_j_initial + (j_counter > 3 ? 16 : 0);\
+                        const auto j = j_counter > 3 ? j_counter - 4 : j_counter;\
+                        if (mask & masks[j_counter]) {\
+                            SPDLOG_INFO("Mask at offset {} ({} corrected) (real {:x}): {:x}", start_j + j, start_j + j + byte_index, real_i + j + start_j, (uint32_t)masks[j_counter]);\
                         }\
 \
-                        if (mask & masks[j] && calculate_absolute(real_i + j + start_j, 4) == ptr) {\
+                        if (mask & masks[j_counter] && calculate_absolute(real_i + j + start_j, 4) == ptr) {\
                             const uintptr_t candidate_addr = real_i + j + start_j;\
 \
                             if (filter == nullptr || filter(candidate_addr)) {\
@@ -611,24 +598,6 @@ namespace utility {
 \
                     return std::nullopt;\
                 };\
-\
-                if (mask4 != 0) {\
-                    SPDLOG_INFO("Mask 4 is not zero @ {:x} (real {:x}): {:x}", i, real_i, (uint32_t)mask4);\
-\
-                    if (auto result = check_candidate(mask4, 20); result) {\
-                        SPDLOG_INFO("Found fourth candidate at (block {:x}) {:x}->{:x} (mask {:x})", i, *result, ptr, (uint32_t)mask4);\
-                        return result;\
-                    }\
-                }\
-\
-                if (mask3 != 0) {\
-                    SPDLOG_INFO("Mask 3 is not zero @ {:x} (real {:x}): {:x}", i, real_i, (uint32_t)mask3);\
-\
-                    if (auto result = check_candidate(mask3, 16); result) {\
-                        SPDLOG_INFO("Found third candidate at (block {:x}) {:x}->{:x} (mask {:x})", i, *result, ptr, (uint32_t)mask3);\
-                        return result;\
-                    }\
-                }\
 \
                 if (mask2 != 0) {\
                     SPDLOG_INFO("Mask 2 is not zero @ {:x} (real {:x}): {:x}", i, real_i, (uint32_t)mask2);\
@@ -649,39 +618,51 @@ namespace utility {
                 }\
             }
 
+            // First half, 0-4, 8 - 12, 16 - 20, 24 - 28
             PROCESS_AVX2_BLOCK(0);
 
-            addresses1 = _mm256_add_epi64(addresses1, shift_amount_interval);
-            addresses2 = _mm256_add_epi64(addresses2, shift_amount_interval);
-            addresses3 = _mm256_add_epi64(addresses3, shift_amount_interval);
-            addresses4 = _mm256_add_epi64(addresses4, shift_amount_interval);
+            addresses = _mm256_add_epi32(addresses, shift_amount_interval32);
 
+            // Second half, 12 - 16, 28 - 32
             PROCESS_AVX2_BLOCK(1);
 
-            addresses1 = _mm256_add_epi64(addresses1, shift_amount_after); // 32 - 8 = 24
-            addresses2 = _mm256_add_epi64(addresses2, shift_amount_after);
-            addresses3 = _mm256_add_epi64(addresses3, shift_amount_after);
-            addresses4 = _mm256_add_epi64(addresses4, shift_amount_after);
+            addresses = _mm256_add_epi32(addresses, shift_amount_after32); // 32 - 8 = 24
 
             // Unrolled loop 1
             i += sizeof(__m256i);
 
             PROCESS_AVX2_BLOCK(0);
 
-            addresses1 = _mm256_add_epi64(addresses1, shift_amount_interval);
-            addresses2 = _mm256_add_epi64(addresses2, shift_amount_interval);
-            addresses3 = _mm256_add_epi64(addresses3, shift_amount_interval);
-            addresses4 = _mm256_add_epi64(addresses4, shift_amount_interval);
+            addresses = _mm256_add_epi32(addresses, shift_amount_interval32);
 
             PROCESS_AVX2_BLOCK(1);
 
-            addresses1 = _mm256_add_epi64(addresses1, shift_amount_after); // 32 - 8 = 24
-            addresses2 = _mm256_add_epi64(addresses2, shift_amount_after);
-            addresses3 = _mm256_add_epi64(addresses3, shift_amount_after);
-            addresses4 = _mm256_add_epi64(addresses4, shift_amount_after);
+            addresses = _mm256_add_epi32(addresses, shift_amount_after32); // 32 - 8 = 24
+
+            // Unrolled loop 2
+            i += sizeof(__m256i);
+
+            PROCESS_AVX2_BLOCK(0);
+
+            addresses = _mm256_add_epi32(addresses, shift_amount_interval32);
+
+            PROCESS_AVX2_BLOCK(1);
+
+            addresses = _mm256_add_epi32(addresses, shift_amount_after32); // 32 - 8 = 24
+
+            // Unrolled loop 3
+            i += sizeof(__m256i);
+
+            PROCESS_AVX2_BLOCK(0);
+
+            addresses = _mm256_add_epi32(addresses, shift_amount_interval32);
+
+            PROCESS_AVX2_BLOCK(1);
+
+            addresses = _mm256_add_epi32(addresses, shift_amount_after32); // 32 - 8 = 24
         }
 
-        // just do a last ditch scan on the last 32 + 8 bytes
+        // just do a last ditch scan on the last lookahead bytes (sizeof(__m256i) * 4)
         const auto new_length = std::min<size_t>(length, lookahead_size);
         return scan_relative_reference_scalar(end - new_length, new_length, ptr, filter);
     }
