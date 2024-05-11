@@ -538,7 +538,7 @@ namespace utility {
         constexpr int mask_3 = mask_2 << 8;
 
         constexpr int masks[] = { mask_0, mask_1, mask_2, mask_3 };
-        constexpr size_t lookahead_size = sizeof(__m256i) + (sizeof(__m256i) / 4); // 32 + 8 (for the sliding window when we do a 256 load on the next iteration)
+        constexpr size_t lookahead_size = sizeof(__m256i) + sizeof(__m256i) + (sizeof(__m256i) / 4); // 32 + 32 (unrolled loop) + 8 (for the sliding window when we do a 256 load on the next iteration)
 
         const __m256i start_vectorized = _mm256_set1_epi64x(start);
 
@@ -648,6 +648,23 @@ namespace utility {
                     }\
                 }\
             }
+
+            PROCESS_AVX2_BLOCK(0);
+
+            addresses1 = _mm256_add_epi64(addresses1, shift_amount_interval);
+            addresses2 = _mm256_add_epi64(addresses2, shift_amount_interval);
+            addresses3 = _mm256_add_epi64(addresses3, shift_amount_interval);
+            addresses4 = _mm256_add_epi64(addresses4, shift_amount_interval);
+
+            PROCESS_AVX2_BLOCK(1);
+
+            addresses1 = _mm256_add_epi64(addresses1, shift_amount_after); // 32 - 8 = 24
+            addresses2 = _mm256_add_epi64(addresses2, shift_amount_after);
+            addresses3 = _mm256_add_epi64(addresses3, shift_amount_after);
+            addresses4 = _mm256_add_epi64(addresses4, shift_amount_after);
+
+            // Unrolled loop 1
+            i += sizeof(__m256i);
 
             PROCESS_AVX2_BLOCK(0);
 
