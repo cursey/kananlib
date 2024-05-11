@@ -618,12 +618,12 @@ namespace utility {
                 }\
             }
 
-            // First half, 0-4, 8 - 12, 16 - 20, 24 - 28
+            // First half, 0-4, 4-8, 16 - 20, 20 - 24
             PROCESS_AVX2_BLOCK(0);
 
             addresses = _mm256_add_epi32(addresses, shift_amount_interval32);
 
-            // Second half, 12 - 16, 28 - 32
+            // Second half, 8-12, 12 - 16, 24 - 28, 28 - 32
             PROCESS_AVX2_BLOCK(1);
 
             addresses = _mm256_add_epi32(addresses, shift_amount_after32); // 32 - 8 = 24
