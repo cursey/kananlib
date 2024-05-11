@@ -137,12 +137,16 @@ namespace utility {
         KANANLIB_BENCH();
 
         const auto module_size = get_module_size(module).value_or(0);
-        const auto end = (uintptr_t)module + module_size;
+        auto end = (uintptr_t*)((uintptr_t)module + module_size);
 
-        for (auto i = (uintptr_t)module; i < end; i += sizeof(void*)) {
+        /*for (auto i = (uintptr_t)module; i < end; i += sizeof(void*)) {
             if (*(uintptr_t*)i == ptr) {
                 return i;
             }
+        }*/
+
+        if (auto it = std::find((uintptr_t*)module, end, ptr); it != end) {
+            return (uintptr_t)it;
         }
 
         return std::nullopt;
@@ -155,10 +159,10 @@ namespace utility {
             return {};
         }
 
-        for (auto i = start; i < start + length; i += sizeof(void*)) {
-            if (*(uintptr_t*)i == ptr) {
-                return i;
-            }
+        auto end = (uintptr_t*)(start + length);
+
+        if (auto it = std::find((uintptr_t*)start, end, ptr); it != end) {
+            return (uintptr_t)it;
         }
 
         return std::nullopt;
