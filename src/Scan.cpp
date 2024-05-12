@@ -17,29 +17,9 @@
 #include <utility/thirdparty/parallel-util.hpp>
 #include <utility/thirdparty/InstructionSet.hpp>
 #include <utility/ScopeGuard.hpp>
+#include <utility/Benchmark.hpp>
 
 using namespace std;
-
-//#define KANANLIB_DO_BENCHMARK
-
-#ifdef KANANLIB_LOG_HIGH_PERFORMANCE_CODE
-#define KANANLIB_LOG_PERF_SENSITIVE(...) SPDLOG_INFO(__VA_ARGS__)
-#else
-#define KANANLIB_LOG_PERF_SENSITIVE(...)
-#endif
-
-#ifdef KANANLIB_DO_BENCHMARK
-#define KANANLIB_BENCH() \
-    const auto KANANLIB_START_TIME = std::chrono::high_resolution_clock::now();\
-    const auto KANANLIB_FUNCTION_NAME = __FUNCTION__;\
-    utility::ScopeGuard guard{[KANANLIB_START_TIME, KANANLIB_FUNCTION_NAME] {\
-        const auto end_time = std::chrono::high_resolution_clock::now();\
-        const auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - KANANLIB_START_TIME).count();\
-        SPDLOG_INFO("{} took {} microseconds", KANANLIB_FUNCTION_NAME, duration);\
-    }};
-#else
-#define KANANLIB_BENCH()
-#endif
 
 namespace utility {
     optional<uintptr_t> scan(const string& module, const string& pattern) {
