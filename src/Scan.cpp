@@ -1162,6 +1162,12 @@ namespace utility {
                             .end_range = (uint32_t)module_size,
                             .entries = {}
                         });
+                    } else {
+                        buckets.push_back(Bucket{
+                            .start_range = sorted_entries[total_added_entries]->BeginAddress,
+                            .end_range = (uint32_t)module_size,
+                            .entries = {}
+                        });
                     }
 
                     SPDLOG_INFO("Adding remaining {} entries to last bucket for module {:x}", sorted_entries.size() - total_added_entries, module);
@@ -1172,6 +1178,11 @@ namespace utility {
                         last_bucket.entries.push_back(sorted_entries[i]);
                     }
                 }
+
+                // Re-sort the buckets because of the last minute additions
+                std::sort(buckets.begin(), buckets.end(), [](const Bucket& a, const Bucket& b) {
+                    return a.start_range < b.start_range;
+                });
             }
         }
 
@@ -1194,6 +1205,7 @@ namespace utility {
         }
 
         if (candidates.empty()) {
+            SPDLOG_ERROR("Failed to find candidates for function entry");
             return nullptr;
         }
 
