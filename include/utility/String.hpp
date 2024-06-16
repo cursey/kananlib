@@ -25,8 +25,23 @@ namespace utility {
 
         return result;
     }
+
+    static constexpr auto hash(std::wstring_view data) {
+        size_t result = 0xcbf29ce484222325;
+
+        for (wchar_t c : data) {
+            result ^= c;
+            result *= (size_t)1099511628211;
+        }
+
+        return result;
+    }
 }
 
 consteval auto operator "" _fnv(const char* s, size_t) {
+    return utility::hash(s);
+}
+
+consteval auto operator "" _fnv(const wchar_t* s, size_t) {
     return utility::hash(s);
 }
