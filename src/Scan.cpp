@@ -384,9 +384,10 @@ namespace utility {
         return std::nullopt;
     }
 
-    std::optional<uintptr_t> scan_relative_reference_scalar(uintptr_t start, size_t length, uintptr_t ptr, std::function<bool(uintptr_t)> filter) {
-        KANANLIB_BENCH();
+    constexpr uintptr_t MAX_UINTPTR_T = std::numeric_limits<uintptr_t>::max();
 
+    // This is in a separate funciton because it doesn't require unwinding for the __try/__except block
+    std::optional<uintptr_t> scan_relative_reference_scalar_impl(uintptr_t start, size_t length, uintptr_t ptr, std::function<bool(uintptr_t)>& filter) {
         const auto end = start + length;
 
         constexpr int32_t INT32_MASK = 0xFFFFFFFF;
@@ -395,21 +396,10 @@ namespace utility {
 
         // We can't make use of the full 8 bytes because we need to slide past sizeof(void*) / 2, which will end up going
         // past the end of the block when reading an int32 out of it. So we'll iterate forward by 4 byte intervals.
-        for (uintptr_t i = start; i + sizeof(uint64_t) < end; i += sizeof(uint32_t)) {
+        for (uintptr_t i = start; i + sizeof(uint64_t) < end; i += sizeof(uint32_t)) __try {
             // Reading in 8 byte chunks at a time is significantly faster than byte-by-byte (0.6-0.7GB/s vs ~2GB/s in my testing)
             uint64_t block = *(uint64_t*)i;
             
-            /*for (size_t offset_i = 0; offset_i < 4; ++offset_i) {
-                const auto offset = (int32_t)((block >> (offset_i * BYTE_BIT_SIZE)) & INT32_MASK);
-                const auto landing_address = i + offset_i + POST_IP_CONSTANT + offset;
-
-                if (landing_address == ptr) {
-                    if (filter == nullptr || filter(i + offset_i)) {
-                        return i + offset_i;
-                    }
-                }
-            }*/
-
             // Unrolled version of the loop, much faster (+ 1GB/s throughput in my testing)
             const auto offset0 = (int32_t)((block >> (0 * BYTE_BIT_SIZE)) & INT32_MASK);
             const auto offset1 = (int32_t)((block >> (1 * BYTE_BIT_SIZE)) & INT32_MASK);
@@ -444,26 +434,44 @@ namespace utility {
                     return i + 3;
                 }
             }
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            // We don't care about access violations, just move on
+            continue;
         }
 
-        // Need to read off the remaining nibble at the end
-        const auto new_length = std::min<size_t>(length, 4);
-        if (new_length < 4) {
+        __try {
+            // Need to read off the remaining nibble at the end
+            const auto new_length = std::min<size_t>(length, 4);
+            if (new_length < 4) {
+                return std::nullopt;
+            }
+
+            const auto new_start = end - new_length;
+            const auto offset = *(int32_t*)new_start;
+            const auto landing_address = new_start + POST_IP_CONSTANT + offset;
+
+            if (landing_address == ptr) {
+                if (filter == nullptr || filter(new_start)) {
+                    return new_start;
+                }
+            }
+        } __except(EXCEPTION_EXECUTE_HANDLER) {
+            // We don't care about access violations, just move on
+        }
+
+        return std::nullopt;
+    }
+
+    std::optional<uintptr_t> scan_relative_reference_scalar(uintptr_t start, size_t length, uintptr_t ptr, std::function<bool(uintptr_t)> filter) {
+        KANANLIB_BENCH();
+        
+        const auto result = scan_relative_reference_scalar_impl(start, length, ptr, filter);
+
+        if (!result.has_value()) {
             return std::nullopt;
         }
 
-        const auto new_start = end - new_length;
-        const auto offset = *(int32_t*)new_start;
-        const auto landing_address = new_start + POST_IP_CONSTANT + offset;
-
-        if (landing_address == ptr) {
-            if (filter == nullptr || filter(new_start)) {
-                return new_start;
-            }
-        }
-        
-
-        return std::nullopt;
+        return result;
     }
 
     std::optional<uintptr_t> scan_relative_reference(HMODULE module, uintptr_t ptr, std::function<bool(uintptr_t)> filter) {
@@ -478,13 +486,66 @@ namespace utility {
         return scan_relative_reference((uintptr_t)module, module_size - sizeof(void*), ptr, filter);
     }
 
-    std::optional<uintptr_t> scan_relative_reference(uintptr_t start, size_t length, uintptr_t ptr, std::function<bool(uintptr_t)> filter) {
+    /*std::optional<uintptr_t> scan_relative_reference_impl(uintptr_t start, size_t length, uintptr_t ptr, std::function<bool(uintptr_t)> filter) {
         KANANLIB_BENCH();
 
-        if (!kananlib::utility::thirdparty::InstructionSet::AVX2() || length <= sizeof(__m256i) * 4) {
-            return scan_relative_reference_scalar(start, length, ptr, filter);
+        const auto valid_regions = get_valid_regions(start, length);
+
+        if (valid_regions.empty()) {
+            return std::nullopt;
         }
 
+        const auto end = start + length;
+
+        for (const auto& region : valid_regions) {
+            const auto new_start = start > region.start ? start : region.start;
+            const auto region_end = region.start + region.length;
+            size_t new_length = region.length;
+
+            if (region_end > end) {
+                new_length = end - new_start;
+            }
+
+            if (auto result = scan_relative_reference_impl(new_start, new_length, ptr, filter); result.has_value()) {
+                return result;
+            }
+        }
+
+        return std::nullopt;
+    }*/
+
+    std::optional<uintptr_t> check_candidate(uintptr_t real_i, int mask, int start_j_initial, uintptr_t ptr, std::function<bool(uintptr_t)>& filter) {
+        static constexpr int mask_0 = 0b1111;
+        static constexpr int mask_1 = mask_0 << 4;
+        static constexpr int mask_2 = mask_1 << 4;
+        static constexpr int mask_3 = mask_2 << 4;
+        static constexpr int mask_4 = mask_3 << 4;
+        static constexpr int mask_5 = mask_4 << 4;
+        static constexpr int mask_6 = mask_5 << 4;
+        static constexpr int mask_7 = mask_6 << 4;
+        static constexpr int masks[] = { mask_0, mask_1, mask_2, mask_3, mask_4, mask_5, mask_6, mask_7 };
+
+        for (int j_counter = 0; j_counter < 8; j_counter++) {
+            const auto start_j = start_j_initial + (j_counter > 3 ? 16 : 0);
+            const auto j = j_counter > 3 ? j_counter - 4 : j_counter;
+            if (mask & masks[j_counter]) {
+                KANANLIB_LOG_PERF_SENSITIVE("Mask at offset {} ({} corrected) (real {:x}): {:x}", start_j + j, start_j + j + byte_index, real_i + j + start_j, (uint32_t)masks[j_counter]);
+            }
+
+            if (mask & masks[j_counter] && calculate_absolute(real_i + j + start_j, 4) == ptr) {
+                const uintptr_t candidate_addr = real_i + j + start_j;
+
+                if (filter == nullptr || filter(candidate_addr)) {
+                    return candidate_addr;
+                }
+            }
+        }
+
+        return std::nullopt;
+    };
+
+    // This is in a separate funciton because it doesn't require unwinding for the __try/__except block
+    std::optional<uintptr_t> scan_relative_reference_avx2(uintptr_t start, size_t length, uintptr_t ptr, std::function<bool(uintptr_t)>& filter) {
         const auto end = (start + length);
 
         constexpr auto SHIFT_SCALAR = 8;
@@ -517,17 +578,7 @@ namespace utility {
         );
 
         const __m256i addition_mask32 = _mm256_add_epi32(_mm256_set_epi32(19, 18, 17, 16, 3, 2, 1, 0), post_ip_constant32);
-
-        constexpr int mask_0 = 0b1111;
-        constexpr int mask_1 = mask_0 << 4;
-        constexpr int mask_2 = mask_1 << 4;
-        constexpr int mask_3 = mask_2 << 4;
-        constexpr int mask_4 = mask_3 << 4;
-        constexpr int mask_5 = mask_4 << 4;
-        constexpr int mask_6 = mask_5 << 4;
-        constexpr int mask_7 = mask_6 << 4;
-
-        constexpr int masks[] = { mask_0, mask_1, mask_2, mask_3, mask_4, mask_5, mask_6, mask_7 };
+        
         size_t lookahead_size = (sizeof(__m256i) * 4) + (sizeof(__m256i) / 4); // 32 + 32 (unrolled loop) + 8 (for the sliding window when we do a 256 load on the next iteration)
 
         const __m256i start_vectorized = _mm256_set1_epi32(0);
@@ -568,30 +619,10 @@ namespace utility {
             const int mask1 = _mm256_movemask_epi8(cmp_result1);\
             const int mask2 = _mm256_movemask_epi8(cmp_result2);\
 \
-            auto check_candidate = [&](int mask, int start_j_initial) -> std::optional<uintptr_t> {\
-                for (int j_counter = 0; j_counter < 8; j_counter++) {\
-                    const auto start_j = start_j_initial + (j_counter > 3 ? 16 : 0);\
-                    const auto j = j_counter > 3 ? j_counter - 4 : j_counter;\
-                    if (mask & masks[j_counter]) {\
-                        KANANLIB_LOG_PERF_SENSITIVE("Mask at offset {} ({} corrected) (real {:x}): {:x}", start_j + j, start_j + j + byte_index, real_i + j + start_j, (uint32_t)masks[j_counter]);\
-                    }\
-\
-                    if (mask & masks[j_counter] && calculate_absolute(real_i + j + start_j, 4) == ptr) {\
-                        const uintptr_t candidate_addr = real_i + j + start_j;\
-\
-                        if (filter == nullptr || filter(candidate_addr)) {\
-                            return candidate_addr;\
-                        }\
-                    }\
-                }\
-\
-                return std::nullopt;\
-            };\
-\
             if (mask2 != 0) {\
                 KANANLIB_LOG_PERF_SENSITIVE("Mask 2 is not zero @ {:x} (real {:x}): {:x}", i, real_i, (uint32_t)mask2);\
 \
-                if (auto result = check_candidate(mask2, 4); result) {\
+                if (auto result = check_candidate(real_i, mask2, 4, ptr, filter); result.has_value()) {\
                     KANANLIB_LOG_PERF_SENSITIVE("Found second candidate at (block {:x}) {:x}->{:x} (mask {:x})", i, *result, ptr, (uint32_t)mask2);\
                     return result;\
                 }\
@@ -600,7 +631,7 @@ namespace utility {
             if (mask1 != 0) {\
                 KANANLIB_LOG_PERF_SENSITIVE("Mask 1 is not zero @ {:x} (real {:x}): {:x}", i, real_i, (uint32_t)mask1);\
 \
-                if (auto result = check_candidate(mask1, 0); result) {\
+                if (auto result = check_candidate(real_i, mask1, 0, ptr, filter); result.has_value()) {\
                     KANANLIB_LOG_PERF_SENSITIVE("Found first candidate at (block {:x}) {:x}->{:x} (mask {:x})", i, *result, ptr, (uint32_t)mask1);\
                     return result;\
                 }\
@@ -614,12 +645,12 @@ namespace utility {
             PROCESS_AVX2_BLOCK(N2);\
             addresses = _mm256_add_epi32(addresses, shift_amount_after32); /* 32 - 8 = 24 */ \
             i += sizeof(__m256i);
-
+        
         if (length >= (sizeof(__m256i) * 12) + 8) {
             lookahead_size = (sizeof(__m256i) * 12) + 8;
 
             // Loop unrolled a bunch of times to increase throughput
-            for (auto i = start; i + lookahead_size < end;) {
+            for (auto i = start; i + lookahead_size < end;) __try {
                 PROCESS_AVX2_BLOCKS(0, 1);
                 PROCESS_AVX2_BLOCKS(0, 1);
                 PROCESS_AVX2_BLOCKS(0, 1);
@@ -634,18 +665,42 @@ namespace utility {
                 PROCESS_AVX2_BLOCKS(0, 1);
                 PROCESS_AVX2_BLOCKS(0, 1);
                 PROCESS_AVX2_BLOCKS(0, 1);
+            } __except (EXCEPTION_EXECUTE_HANDLER) {
+                //SPDLOG_INFO("Exception caught at {:x}", i);
+                i += sizeof(__m256i);
+                continue;
             }
         } else {
             lookahead_size = (sizeof(__m256i)) + 8;
 
-            for (auto i = start; i + lookahead_size < end;) {
+            for (auto i = start; i + lookahead_size < end;) __try {
                 PROCESS_AVX2_BLOCKS(0, 1);
+            } __except (EXCEPTION_EXECUTE_HANDLER) {
+                //SPDLOG_INFO("Exception caught at {:x}", i);
+                i += sizeof(__m256i);
+                continue;
             }
         }
 
-        // just do a last ditch scan on the last lookahead bytes (sizeof(__m256i) * 4)
-        const auto new_length = std::min<size_t>(length, lookahead_size);
-        return scan_relative_reference_scalar(end - new_length, new_length, ptr, filter);
+        return std::nullopt;
+    }
+
+    std::optional<uintptr_t> scan_relative_reference(uintptr_t start, size_t length, uintptr_t ptr, std::function<bool(uintptr_t)> filter) {
+        KANANLIB_BENCH();
+
+        if (!kananlib::utility::thirdparty::InstructionSet::AVX2() || length <= sizeof(__m256i) * 4) {
+            return scan_relative_reference_scalar(start, length, ptr, filter);
+        }
+
+        const auto result = scan_relative_reference_avx2(start, length, ptr, filter);
+
+        if (!result.has_value()) {
+            const auto new_length = std::min<size_t>(length, (sizeof(__m256i) * 12) + 8);
+            const auto end = start + length;
+            return scan_relative_reference_scalar(end - new_length, new_length, ptr, filter);
+        }
+
+        return result;
     }
 
     optional<uintptr_t> scan_reference(HMODULE module, uintptr_t ptr, bool relative) {

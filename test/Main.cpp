@@ -57,14 +57,14 @@ int test_avx2_displacement_scan() {
 
     std::mt19937 rng{std::random_device{}()};
 
-    constexpr size_t MAX_I = 128;
+    constexpr size_t MAX_I = 512;
 
     // Slide a window up 32 bytes to make sure it can hit the reference at each possible alignment
     for (int32_t i = 0; i < MAX_I; ++i) {
         //std::cout << "I = " << i << std::endl;
         //const int32_t index_to_write_to = (int32_t)(huge_bytes.size() * 0.99f) + i;
         const int32_t index_to_write_to = ((int32_t)((rng() % (huge_bytes.size() - MAX_I - 4))) & ~7) + i;
-        //const int32_t index_to_write_to = (int32_t)((huge_bytes.size() - 32 - 8) & ~7) + i;
+        //const int32_t index_to_write_to = (int32_t)((huge_bytes.size() - 32 - 4) & ~7) + i;
         const uintptr_t address_to_write_to = (uintptr_t)&huge_bytes[index_to_write_to];
         const uintptr_t address_of_next_ip = address_to_write_to + 4;
         const uintptr_t address_to_rel32_reference = (uintptr_t)huge_bytes.data() + (rng() % (huge_bytes.size() - 32 - 4));
@@ -200,6 +200,30 @@ int main() try {
     KANANLIB_ASSERT((uintptr_t)*rtti_object == (uintptr_t)&g_rtti_test);
     KANANLIB_ASSERT(**rtti_object == (uintptr_t)g_rtti_test);
 
+    // Make a really really big block of data and insert a pointer to the RTTI object in it
+    // so we can test how fast we can find it
+    {
+        SPDLOG_INFO("Testing huge scan...");
+
+        std::vector<uint8_t> huge_bytes{};
+        huge_bytes.resize(1024 * 1024 * 1024);
+        memset(huge_bytes.data(), 0, huge_bytes.size());
+
+        const auto index_to_write_to = (int32_t)(huge_bytes.size() / 2);
+        *(uintptr_t*)&huge_bytes[index_to_write_to] = (uintptr_t)g_rtti_test;
+        
+        const auto huge_start = (uintptr_t)huge_bytes.data();
+        const auto huge_end = (uintptr_t)huge_bytes.data() + huge_bytes.size();
+
+        const auto rtti_object_huge_scan = utility::rtti::find_object_ptr(utility::get_executable(), huge_start, huge_end, "class RTTITest");
+
+        KANANLIB_ASSERT(rtti_object_huge_scan.has_value());
+        KANANLIB_ASSERT((uintptr_t)*rtti_object_huge_scan == (uintptr_t)&huge_bytes[index_to_write_to]);
+        KANANLIB_ASSERT(**rtti_object_huge_scan == (uintptr_t)g_rtti_test);
+
+        SPDLOG_INFO("Huge scan passed.");
+    }
+
     const auto foo_function = utility::find_function_from_string_ref(utility::get_executable(), RTTITest::FOO_STRING());
 
     KANANLIB_ASSERT(foo_function.has_value());
@@ -207,6 +231,9 @@ int main() try {
     using foo_t = size_t(__thiscall*)(RTTITest*);
     foo_t foo = (foo_t)*foo_function;
     KANANLIB_ASSERT(foo(g_rtti_test) == g_rtti_test->foo());
+
+    // Do a BS scan on unallocated memory to see if our exception handling works
+    utility::scan_relative_reference(0, 10000, 12345);
     
     KANANLIB_ASSERT(test_avx2_displacement_scan() == 0);
 
