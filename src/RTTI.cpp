@@ -8,7 +8,13 @@
 #include <mutex>
 #include <unordered_map>
 
+#if __has_include(<spdlog/spdlog.h>)
 #include <spdlog/spdlog.h>
+#else
+#define SPDLOG_INFO(...)
+#define SPDLOG_ERROR(...)
+#define SPDLOG_DEBUG(...)
+#endif
 
 #include <utility/Module.hpp>
 #include <utility/RTTI.hpp>
@@ -283,7 +289,7 @@ std::optional<uintptr_t> find_vtable(HMODULE m, std::string_view type_name) try 
 
     return std::nullopt;
 } catch(...) {
-    spdlog::error("rtti::find_vtable - exception");
+    SPDLOG_ERROR("rtti::find_vtable - exception");
     return std::nullopt;
 }
 
@@ -322,7 +328,7 @@ std::optional<uintptr_t> find_vtable_partial(HMODULE m, std::string_view type_na
 
     return std::nullopt;
 } catch(...) {
-    spdlog::error("rtti::find_vtable_partial - exception");
+    SPDLOG_ERROR("rtti::find_vtable_partial - exception");
     return std::nullopt;
 }
 
@@ -375,7 +381,7 @@ std::optional<uintptr_t> find_object_inline(HMODULE m, std::string_view type_nam
     const auto vtable = find_vtable(m, type_name);
 
     if (!vtable) {
-        spdlog::error("Failed to find object {} (Could not find vtable)", type_name);
+        SPDLOG_ERROR("Failed to find object {} (Could not find vtable)", type_name);
         return std::nullopt;
     }
 
@@ -411,7 +417,7 @@ std::optional<uintptr_t*> find_object_ptr(HMODULE m, std::string_view type_name)
     const auto vtables = find_vtables(m, type_name);
 
     if (vtables.empty()) {
-        spdlog::error("Failed to find object {} (Could not find vtable)", type_name);
+        SPDLOG_ERROR("Failed to find object {} (Could not find vtable)", type_name);
         return std::nullopt;
     }
 
@@ -445,7 +451,7 @@ std::optional<uintptr_t*> find_object_ptr(HMODULE vtable_module, uintptr_t begin
     const auto vtables = find_vtables(vtable_module, type_name);
 
     if (vtables.empty()) {
-        spdlog::error("Failed to find object {} (Could not find vtable)", type_name);
+        SPDLOG_ERROR("Failed to find object {} (Could not find vtable)", type_name);
         return std::nullopt;
     }
 
@@ -481,7 +487,7 @@ std::vector<uintptr_t*> find_objects_ptr(HMODULE m, std::string_view type_name) 
     const auto vtables = find_vtables(m, type_name);
 
     if (vtables.empty()) {
-        spdlog::error("Failed to find object {} (Could not find vtable)", type_name);
+        SPDLOG_ERROR("Failed to find object {} (Could not find vtable)", type_name);
         return {};
     }
 
