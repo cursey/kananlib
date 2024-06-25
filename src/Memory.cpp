@@ -6,6 +6,7 @@
 
 #include <utility/String.hpp>
 #include <utility/Memory.hpp>
+#include <utility/Benchmark.hpp>
 
 using namespace std;
 
@@ -91,5 +92,34 @@ namespace utility {
         }
 
         return false;
+    }
+
+    std::vector<ValidRegion> get_valid_regions(uintptr_t start, size_t length) {
+        KANANLIB_BENCH();
+
+        const auto end = (start + length);
+
+        std::vector<ValidRegion> valid_regions{};
+
+        while (start < end) {
+            MEMORY_BASIC_INFORMATION mbi{};
+            const auto result = VirtualQuery((void*)start, &mbi, sizeof(mbi));
+
+            if (result == 0) {
+                break;
+            }
+
+            constexpr auto READ_PAGES = PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_READONLY | PAGE_READWRITE;
+
+            if (mbi.State == MEM_COMMIT && (mbi.Protect & PAGE_NOACCESS) == 0 && (mbi.Protect & READ_PAGES) != 0) {
+                valid_regions.push_back({ (uintptr_t)mbi.BaseAddress, mbi.RegionSize });
+            }
+
+            start = (uintptr_t)mbi.BaseAddress + mbi.RegionSize;
+        };
+
+        //SPDLOG_INFO("Found {} valid regions", valid_regions.size());
+
+        return valid_regions;
     }
 }
