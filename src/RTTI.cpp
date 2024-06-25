@@ -13,6 +13,7 @@
 #include <utility/Module.hpp>
 #include <utility/RTTI.hpp>
 #include <utility/Scan.hpp>
+#include <utility/Benchmark.hpp>
 
 #include <utility/thirdparty/parallel-util.hpp>
 
@@ -28,6 +29,8 @@ std::recursive_mutex s_vtable_cache_mutex{};
 std::unordered_map<HMODULE, std::vector<Vtable>> s_vtable_cache{};
 
 void for_each_uncached(HMODULE m, std::function<void(const Vtable&)> predicate) {
+    KANANLIB_BENCH();
+
     const auto begin = (uintptr_t)m;
     const auto end = begin + *utility::get_module_size(m);
 
@@ -268,6 +271,8 @@ bool derives_from(const void* obj, std::type_info* ti_compare) {
 }
 
 std::optional<uintptr_t> find_vtable(HMODULE m, std::string_view type_name) try {
+    KANANLIB_BENCH();
+
     const auto result = detail::find(m, [&](const detail::Vtable& vtable) {
         return vtable.ti->name() == type_name || vtable.ti->raw_name() == type_name;
     });
@@ -283,6 +288,8 @@ std::optional<uintptr_t> find_vtable(HMODULE m, std::string_view type_name) try 
 }
 
 std::vector<uintptr_t> find_vtables(HMODULE m, std::string_view type_name) {
+    KANANLIB_BENCH();
+
     std::vector<uintptr_t> result{};
 
     detail::for_each(m, [&](const detail::Vtable& vtable) {
@@ -303,6 +310,8 @@ std::vector<uintptr_t> find_vtables(HMODULE m, std::string_view type_name) {
 }
 
 std::optional<uintptr_t> find_vtable_partial(HMODULE m, std::string_view type_name) try {
+    KANANLIB_BENCH();
+
     const auto result = detail::find(m, [&](const detail::Vtable& vtable) {
         return std::string_view{vtable.ti->name()}.find(type_name) != std::string_view::npos;
     });
@@ -318,6 +327,8 @@ std::optional<uintptr_t> find_vtable_partial(HMODULE m, std::string_view type_na
 }
 
 std::optional<uintptr_t> find_vtable_regex(HMODULE m, std::string_view reg_str) {
+    KANANLIB_BENCH();
+
     std::regex reg{reg_str.data()};
 
     const auto result = detail::find(m, [&](const detail::Vtable& vtable) {
@@ -332,6 +343,8 @@ std::optional<uintptr_t> find_vtable_regex(HMODULE m, std::string_view reg_str) 
 }
 
 std::vector<uintptr_t*> find_vtables_derived_from(HMODULE m, std::string_view friendly_type_name) {
+    KANANLIB_BENCH();
+
     const auto base_vtable = find_vtable(m, friendly_type_name);
 
     if (!base_vtable) {
@@ -354,6 +367,8 @@ std::vector<uintptr_t*> find_vtables_derived_from(HMODULE m, std::string_view fr
 }
 
 std::optional<uintptr_t> find_object_inline(HMODULE m, std::string_view type_name) {
+    KANANLIB_BENCH();
+
     const auto begin = (uintptr_t)m;
     const auto end = begin + *utility::get_module_size(m);
 
@@ -388,6 +403,8 @@ std::optional<uintptr_t> find_object_inline(HMODULE m, std::string_view type_nam
 }
 
 std::optional<uintptr_t*> find_object_ptr(HMODULE m, std::string_view type_name) {
+    KANANLIB_BENCH();
+
     const auto begin = (uintptr_t)m;
     const auto end = begin + *utility::get_module_size(m);
 
@@ -423,6 +440,8 @@ std::optional<uintptr_t*> find_object_ptr(HMODULE m, std::string_view type_name)
 }
 
 std::optional<uintptr_t*> find_object_ptr(HMODULE vtable_module, uintptr_t begin, uintptr_t end, std::string_view type_name) {
+    KANANLIB_BENCH();
+
     const auto vtables = find_vtables(vtable_module, type_name);
 
     if (vtables.empty()) {
@@ -454,6 +473,8 @@ std::optional<uintptr_t*> find_object_ptr(HMODULE vtable_module, uintptr_t begin
 }
 
 std::vector<uintptr_t*> find_objects_ptr(HMODULE m, std::string_view type_name) {
+    KANANLIB_BENCH();
+
     const auto begin = (uintptr_t)m;
     const auto end = begin + *utility::get_module_size(m);
 
