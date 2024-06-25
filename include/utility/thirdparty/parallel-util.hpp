@@ -35,13 +35,7 @@ SOFTWARE.
 
 // #define PARALLELUTIL_VERBOSE
 
-#if __has_include(<spdlog/spdlog.h>)
-#include <spdlog/spdlog.h>
-#else
-#define SPDLOG_INFO(...)
-#define SPDLOG_ERROR(...)
-#define SPDLOG_DEBUG(...)
-#endif
+#include <utility/Logging.hpp>
 
 #include <functional>
 #include <mutex>
