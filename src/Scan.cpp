@@ -23,11 +23,20 @@ using namespace std;
 
 namespace utility {
     optional<uintptr_t> scan(const string& module, const string& pattern) {
-        return scan(GetModuleHandle(module.c_str()), pattern);
+        return scan(GetModuleHandleA(module.c_str()), pattern);
+    }
+
+    optional<uintptr_t> scan(const wstring& module, const string& pattern) {
+        return scan(GetModuleHandleW(module.c_str()), pattern);
     }
 
     optional<uintptr_t> scan(const string& module, uintptr_t start, const string& pattern) {
-        HMODULE mod = GetModuleHandle(module.c_str());
+        HMODULE mod = GetModuleHandleA(module.c_str());
+        return scan(start, (get_module_size(mod).value_or(0) - start + (uintptr_t)mod), pattern);
+    }
+
+    optional<uintptr_t> scan(const wstring& module, uintptr_t start, const string& pattern) {
+        HMODULE mod = GetModuleHandleW(module.c_str());
         return scan(start, (get_module_size(mod).value_or(0) - start + (uintptr_t)mod), pattern);
     }
 

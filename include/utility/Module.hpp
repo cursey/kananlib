@@ -22,6 +22,7 @@ namespace utility {
     // Module utilities.
     //
     std::optional<size_t> get_module_size(const std::string& module);
+    std::optional<size_t> get_module_size(const std::wstring& module);
     std::optional<size_t> get_module_size(HMODULE module);
     std::optional<HMODULE> get_module_within(Address address);
     std::optional<uintptr_t> get_dll_imagebase(Address dll);

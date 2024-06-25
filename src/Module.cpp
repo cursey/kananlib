@@ -14,11 +14,17 @@
 #include <utility/Thread.hpp>
 #include <utility/Module.hpp>
 
+#pragma comment (lib, "shlwapi.lib") // PathRemoveFileSpecW
+
 using namespace std;
 
 namespace utility {
     optional<size_t> get_module_size(const string& module) {
-        return get_module_size(GetModuleHandle(module.c_str()));
+        return get_module_size(GetModuleHandleA(module.c_str()));
+    }
+
+    optional<size_t> get_module_size(const wstring& module) {
+        return get_module_size(GetModuleHandleW(module.c_str()));
     }
 
     optional<size_t> get_module_size(HMODULE module) {
@@ -46,7 +52,7 @@ namespace utility {
 
     std::optional<HMODULE> get_module_within(Address address) {
         HMODULE module = nullptr;
-        if (GetModuleHandleEx(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, address.as<LPCSTR>(), &module)) {
+        if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, address.as<LPCSTR>(), &module)) {
             return module;
         }
 
