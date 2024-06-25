@@ -1,4 +1,10 @@
+#if __has_include(<spdlog/spdlog.h>)
 #include <spdlog/spdlog.h>
+#else
+#define SPDLOG_INFO(...)
+#define SPDLOG_ERROR(...)
+#define SPDLOG_DEBUG(...)
+#endif
 
 #include <utility/Registry.hpp>
 
@@ -7,7 +13,7 @@ std::optional<uint32_t> get_registry_dword(HKEY key, std::string_view subkey, st
     HKEY subkey_handle{};
 
     if (auto res = RegOpenKeyExA(key, subkey.data(), 0, KEY_QUERY_VALUE, &subkey_handle); res != ERROR_SUCCESS) {
-        spdlog::error("({}) Failed to open registry key {}", res, subkey);
+        SPDLOG_ERROR("({}) Failed to open registry key {}", res, subkey);
         return std::nullopt;
     }
 
@@ -15,13 +21,13 @@ std::optional<uint32_t> get_registry_dword(HKEY key, std::string_view subkey, st
     DWORD size{};
 
     if (auto res = RegQueryValueExA(subkey_handle, value.data(), nullptr, &type, nullptr, &size); res != ERROR_SUCCESS) {
-        spdlog::error("({}) Failed to query registry value {}", res, value);
+        SPDLOG_ERROR("({}) Failed to query registry value {}", res, value);
         RegCloseKey(subkey_handle);
         return std::nullopt;
     }
 
     if (type != REG_DWORD) {
-        spdlog::error("Registry value is not of type REG_DWORD: {}", value);
+        SPDLOG_ERROR("Registry value is not of type REG_DWORD: {}", value);
         RegCloseKey(subkey_handle);
         return std::nullopt;
     }
@@ -29,7 +35,7 @@ std::optional<uint32_t> get_registry_dword(HKEY key, std::string_view subkey, st
     DWORD result{};
 
     if (auto res = RegQueryValueExA(subkey_handle, value.data(), nullptr, nullptr, (LPBYTE)&result, &size); res != ERROR_SUCCESS) {
-        spdlog::error("({}) Failed to query registry value 2 {}", res, value);
+        SPDLOG_ERROR("({}) Failed to query registry value 2 {}", res, value);
         RegCloseKey(subkey_handle);
         return std::nullopt;
     }

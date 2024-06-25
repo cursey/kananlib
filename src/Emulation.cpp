@@ -2,7 +2,13 @@
 #include <bdshemu.h>
 #include <disasmtypes.h>
 
+#if __has_include(<spdlog/spdlog.h>)
 #include <spdlog/spdlog.h>
+#else
+#define SPDLOG_INFO(...)
+#define SPDLOG_ERROR(...)
+#define SPDLOG_DEBUG(...)
+#endif
 
 #include <utility/Module.hpp>
 #include <utility/Emulation.hpp>
@@ -126,7 +132,7 @@ void emulate(HMODULE module, uintptr_t ip, size_t num_instructions, ShemuContext
         const auto ix = utility::decode_one((uint8_t*)emu.ctx->Registers.RegRip);
 
         if (!ix) {
-            spdlog::error("Failed to decode instruction at {:x}", emu.ctx->Registers.RegRip);
+            SPDLOG_ERROR("Failed to decode instruction at {:x}", emu.ctx->Registers.RegRip);
             break;
         }
 
@@ -150,12 +156,12 @@ void emulate(HMODULE module, uintptr_t ip, size_t num_instructions, ShemuContext
         const auto emu_failed = emu.emulate() != SHEMU_SUCCESS;
 
         if (emu_failed) {
-            spdlog::error("Emulation failed at {:x}", emu.ctx->Registers.RegRip);
+            SPDLOG_ERROR("Emulation failed at {:x}", emu.ctx->Registers.RegRip);
 
             const auto ix_cur = utility::decode_one((uint8_t*)emu.ctx->Registers.RegRip);
 
             if (!ix_cur) {
-                spdlog::error("Failed to decode instruction at {:x}", emu.ctx->Registers.RegRip);
+                SPDLOG_ERROR("Failed to decode instruction at {:x}", emu.ctx->Registers.RegRip);
                 break;
             }
 
@@ -164,7 +170,7 @@ void emulate(HMODULE module, uintptr_t ip, size_t num_instructions, ShemuContext
             ++emu.ctx->InstructionsCount;
         }
     } catch (...) {
-        spdlog::error("Exception in emulation loop");
+        SPDLOG_ERROR("Exception in emulation loop");
         break;
     }
 }

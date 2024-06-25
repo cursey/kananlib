@@ -3,12 +3,19 @@
 #include <fstream>
 #include <filesystem>
 #include <unordered_set>
+#include <mutex>
 
 #include <shlwapi.h>
 #include <windows.h>
 #include <winternl.h>
 
+#if __has_include(<spdlog/spdlog.h>)
 #include <spdlog/spdlog.h>
+#else
+#define SPDLOG_INFO(...)
+#define SPDLOG_ERROR(...)
+#define SPDLOG_DEBUG(...)
+#endif
 
 #include <utility/String.hpp>
 #include <utility/Thread.hpp>
@@ -462,7 +469,7 @@ namespace utility {
                         std::filesystem::copy_file(path, new_path, std::filesystem::copy_options::overwrite_existing, ec);
 
                         if (ec) {
-                            spdlog::error("Failed to copy DLL file: {}", ec.message());
+                            SPDLOG_ERROR("Failed to copy DLL file: {}", ec.message());
                         }
 
                         ec.clear();
