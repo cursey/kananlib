@@ -294,7 +294,11 @@ namespace utility {
             return;
         }
 
+#if defined(_M_X64)
         auto peb = (PEB*)__readgsqword(0x60);
+#else
+        auto peb = (PEB*)__readfsdword(0x30);
+#endif
 
         if (peb == nullptr) {
             return;
