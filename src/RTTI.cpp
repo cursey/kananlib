@@ -42,7 +42,17 @@ void for_each_uncached(HMODULE m, std::function<void(const Vtable&)> predicate) 
             continue;
         }
 
+        // Using IsBadReadPtr helps us stop accidentally triggering some Vectored Exception Handlers
+        // if those get triggered, it MASSIVELY slows down this function, especially if they write mini dumps.
+        if (IsBadReadPtr(ti, sizeof(void*))) {
+            continue;
+        }
+
         const auto rn = ti->raw_name();
+
+        if (IsBadReadPtr(rn, sizeof(void*))) {
+            continue;
+        }
 
         if (rn[0] != '.' || rn[1] != '?') {
             continue;
@@ -109,6 +119,29 @@ std::optional<Vtable> find(HMODULE m, std::function<bool(const Vtable&)> predica
 
     return std::nullopt;
 }
+
+std::optional<HMODULE> cached_get_module_within(uintptr_t addr) {
+    struct ModuleInfo {
+        uintptr_t begin{};
+        uintptr_t end{};
+    };
+
+    static thread_local std::vector<ModuleInfo> cache{};
+
+    if (cache.empty()) {
+        utility::foreach_module([&](LIST_ENTRY* entry, _LDR_DATA_TABLE_ENTRY* module) {
+            cache.push_back({(uintptr_t)module->DllBase, (uintptr_t)module->DllBase + utility::get_module_size((HMODULE)module->DllBase).value_or(0)});
+        });
+    }
+
+    for (const auto& info : cache) {
+        if (addr >= info.begin && addr < info.end) {
+            return (HMODULE)info.begin;
+        }
+    }
+
+    return std::nullopt;
+}
 }
 
 _s_RTTICompleteObjectLocator* get_locator(const void* obj) {
@@ -126,7 +159,7 @@ std::type_info* get_type_info(const void* obj) {
         return nullptr;
     }
 
-    const auto module_within = ::utility::get_module_within(locator);
+    const auto module_within = detail::cached_get_module_within((uintptr_t)locator);
 
     if (!module_within) {
         return nullptr;
@@ -161,7 +194,7 @@ bool derives_from(const void* obj, std::string_view type_name) {
         return false;
     }
 
-    const auto module_within = ::utility::get_module_within(locator);
+    const auto module_within = detail::cached_get_module_within((uintptr_t)locator);
 
     if (!module_within) {
         return false;
@@ -361,6 +394,18 @@ std::vector<uintptr_t*> find_vtables_derived_from(HMODULE m, std::string_view fr
         } catch(...) {
             return;
         }
+    });
+
+    return result;
+}
+
+std::vector<uintptr_t> find_all_vtables(HMODULE m) {
+    KANANLIB_BENCH();
+
+    std::vector<uintptr_t> result{};
+
+    detail::for_each(m, [&](const detail::Vtable& vtable) {
+        result.push_back(vtable.vtable);
     });
 
     return result;
