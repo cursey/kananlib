@@ -144,6 +144,28 @@ std::optional<HMODULE> cached_get_module_within(uintptr_t addr) {
 }
 }
 
+bool is_vtable(const void* vtable) {
+    if (vtable == nullptr) {
+        return false;
+    }
+    
+    const auto module_within = detail::cached_get_module_within((uintptr_t)vtable);
+
+    if (!module_within) {
+        return false;
+    }
+
+    bool result = false;
+
+    detail::for_each(*module_within, [&](const detail::Vtable& entry) {
+        if (entry.vtable == (uintptr_t)vtable) {
+            result = true;
+        }
+    });
+
+    return result;
+}
+
 _s_RTTICompleteObjectLocator* get_locator(const void* obj) {
     if (obj == nullptr || *(void**)obj == nullptr) {
         return nullptr;

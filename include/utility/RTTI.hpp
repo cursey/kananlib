@@ -11,6 +11,7 @@ struct _s_RTTICompleteObjectLocator;
 
 namespace utility {
 namespace rtti {
+    bool is_vtable(const void* vtable);
     _s_RTTICompleteObjectLocator* get_locator(const void* obj);
     std::type_info* get_type_info(const void* obj);
     std::type_info* get_type_info(HMODULE m, std::string_view type_name);
