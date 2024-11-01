@@ -2148,6 +2148,42 @@ namespace utility {
         return result;
     }
 
+    std::optional<Resolved> find_landmark_sequence(HMODULE module, const std::string& initial_pattern, const std::vector<std::string>& patterns, bool follow_calls) {
+        KANANLIB_BENCH();
+
+        return find_landmark_sequence((uintptr_t)module, utility::get_module_size(module).value_or(0), initial_pattern, patterns, follow_calls);
+    }
+
+    std::optional<Resolved> find_landmark_sequence(uintptr_t start, size_t size, const std::string& initial_pattern, const std::vector<std::string>& patterns, bool follow_calls) {
+        const auto end = start + size;
+
+        for (auto initial = utility::scan(start, size, initial_pattern); initial.has_value(); initial = utility::scan(*initial + 1, end - (*initial + 1), initial_pattern)) {
+            const auto initial_instruction = utility::decode_one((uint8_t*)*initial);
+            if (!initial_instruction) {
+                continue;
+            }
+
+            const auto initial_size = initial_instruction->Length;
+
+            bool all_found = true;
+
+
+            for (const auto& pattern : patterns) {
+                auto resolved = utility::find_pattern_in_path((uint8_t*)(*initial + initial_size), 100, follow_calls, pattern);
+                if (!resolved) {
+                    all_found = false;
+                    break;
+                }
+            }
+
+            if (all_found) {
+                return Resolved{ *initial, *initial_instruction };
+            }
+        }
+
+        return std::nullopt;
+    }
+
     std::vector<Resolved> get_disassembly_behind(uintptr_t middle) {
         KANANLIB_BENCH();
 

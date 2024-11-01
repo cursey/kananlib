@@ -142,6 +142,8 @@ namespace utility {
 
     // This is scan_disasm but it will stop whenever execution fully exhausts all branches and hits a return, int3, etc
     std::optional<Resolved> find_pattern_in_path(uint8_t* ip, size_t max_size, bool follow_calls, const std::string& pattern);
+    std::optional<Resolved> find_landmark_sequence(HMODULE module, const std::string& initial_pattern, const std::vector<std::string>& patterns, bool follow_calls = true);
+    std::optional<Resolved> find_landmark_sequence(uintptr_t start, size_t size, const std::string& initial_pattern, const std::vector<std::string>& patterns, bool follow_calls = true);
 
     // Finds the function start given the middle, and then disassembles and stores all instructions until it hits the middle
     // We can use this to "disassemble" backwards from the middle of an instruction
