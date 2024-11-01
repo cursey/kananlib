@@ -762,6 +762,28 @@ namespace utility {
         });
     }
 
+    std::optional<uintptr_t> scan_relative_reference_strict(uintptr_t start, size_t length, uintptr_t ptr, const std::string& preceded_by) {
+        KANANLIB_BENCH();
+
+        if (preceded_by.empty()) {
+            return {};
+        }
+
+        const auto end = (uintptr_t)start + length;
+
+        // convert preceded_by (IDA style string) to bytes
+        auto pat = utility::Pattern{ preceded_by };
+        const auto pat_len = pat.pattern_len();
+
+        return scan_relative_reference((uintptr_t)start, length, ptr, [&](uintptr_t candidate_addr) {
+            if (pat.find(candidate_addr - pat_len, pat_len)) {
+                return true;
+            }
+
+            return false;
+        });
+    }
+
     std::optional<uintptr_t> scan_displacement_reference(HMODULE module, uintptr_t ptr) {
         KANANLIB_BENCH();
 

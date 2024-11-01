@@ -42,6 +42,7 @@ namespace utility {
     std::optional<uintptr_t> scan_reference(HMODULE module, uintptr_t ptr, bool relative = true);
     std::optional<uintptr_t> scan_reference(uintptr_t start, size_t length, uintptr_t ptr, bool relative = true);
     std::optional<uintptr_t> scan_relative_reference_strict(HMODULE module, uintptr_t ptr, const std::string& preceded_by);
+    std::optional<uintptr_t> scan_relative_reference_strict(uintptr_t start, size_t length, uintptr_t ptr, const std::string& preceded_by);
     std::optional<uintptr_t> scan_displacement_reference(HMODULE module, uintptr_t ptr);
     std::optional<uintptr_t> scan_displacement_reference(uintptr_t start, size_t length, uintptr_t ptr);
     std::vector<uintptr_t> scan_displacement_references(HMODULE module, uintptr_t ptr);
