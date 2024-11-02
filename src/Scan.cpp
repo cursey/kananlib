@@ -2133,13 +2133,13 @@ namespace utility {
                 return BREAK;
             }
 
-            if (!follow_calls && std::string_view{instrux.Mnemonic}.starts_with("CALL")) {
-                return STEP_OVER;
-            }
-
             if (const auto s = utility::scan(addr, 64, pattern); s.has_value() && *s == addr) {
                 result = Resolved{ addr, instrux };
                 return BREAK;
+            }
+
+            if (!follow_calls && std::string_view{instrux.Mnemonic}.starts_with("CALL")) {
+                return STEP_OVER;
             }
 
             return CONTINUE;
