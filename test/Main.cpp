@@ -20,6 +20,22 @@ public:
         return "size_t RTTITest::foo()";
     }
 
+    static consteval const char* BAR_STRING() {
+        return "void RTTITest::some_function_that_has_strings() BAR";
+    }
+
+    static consteval const char* BAZ_STRING() {
+        return "void RTTITest::some_function_that_has_strings() BAZ";
+    }
+
+    static consteval const wchar_t* BAR_STRING_W() {
+        return L"void RTTITest::some_function_that_has_strings() BAR";
+    }
+
+    static consteval const wchar_t* BAZ_STRING_W() {
+        return L"void RTTITest::some_function_that_has_strings() BAZ";
+    }
+
     RTTITest() {
         std::cout << "RTTITest::RTTITest()" << std::endl;
     }
@@ -34,6 +50,19 @@ public:
     } catch(...) {
         std::cout << "RTTITest::foo() threw unknown exception" << std::endl;
         return 0;
+    }
+
+    __declspec(noinline) static void some_function_that_has_strings() try {
+        printf("%s\n", BAR_STRING());
+        printf("%s\n", BAZ_STRING());
+        printf("%ls\n", BAR_STRING_W());
+        printf("%ls\n", BAZ_STRING_W());
+
+        throw std::runtime_error("This is a test exception");
+    } catch(const std::exception& e) {
+        std::cout << "RTTITest::some_function_that_has_strings() threw exception: " << e.what() << std::endl;
+    } catch(...) {
+        std::cout << "RTTITest::some_function_that_has_strings() threw unknown exception" << std::endl;
     }
 
 private:    
@@ -234,6 +263,18 @@ int main() try {
 
     // Do a BS scan on unallocated memory to see if our exception handling works
     utility::scan_relative_reference(0, 10000, 12345);
+
+    const auto strs = utility::collect_ascii_string_references((uintptr_t)&RTTITest::some_function_that_has_strings, 1000, utility::StringReferenceOptions{}.with_min_length(4));
+
+    for (const auto& str : strs) {
+        std::cout << "Found string reference: " << str.ascii << " @ " << std::hex << str.resolved.addr << std::endl;
+    }
+
+    const auto wstrs = utility::collect_unicode_string_references((uintptr_t)&RTTITest::some_function_that_has_strings, 1000, utility::StringReferenceOptions{}.with_min_length(4));
+    
+    for (const auto& str : wstrs) {
+        std::wcout << L"Found WIDE string reference: " << str.unicode << L" @ " << std::hex << str.resolved.addr << std::endl;
+    }
     
     KANANLIB_ASSERT(test_avx2_displacement_scan() == 0);
 

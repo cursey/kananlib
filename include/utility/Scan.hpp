@@ -148,4 +148,39 @@ namespace utility {
     // Finds the function start given the middle, and then disassembles and stores all instructions until it hits the middle
     // We can use this to "disassemble" backwards from the middle of an instruction
     std::vector<Resolved> get_disassembly_behind(uintptr_t middle);
+
+    struct StringReference {
+        Resolved resolved{};
+        union {
+            const char* ascii{nullptr};
+            const wchar_t* unicode;
+        };
+
+        StringReference(const Resolved& resolved, const char* ascii) : resolved(resolved), ascii(ascii) {}
+        StringReference(const Resolved& resolved, const wchar_t* unicode) : resolved(resolved), unicode(unicode) {}
+    };
+
+    struct StringReferenceOptions {
+        bool follow_calls{false};
+        size_t min_length{1};
+        size_t max_length{256};
+
+        StringReferenceOptions& with_follow_calls(bool follow_calls) {
+            this->follow_calls = follow_calls;
+            return *this;
+        }
+
+        StringReferenceOptions& with_min_length(size_t min_length) {
+            this->min_length = min_length;
+            return *this;
+        }
+
+        StringReferenceOptions& with_max_length(size_t max_length) {
+            this->max_length = max_length;
+            return *this;
+        }
+    };
+
+    std::vector<StringReference> collect_ascii_string_references(uintptr_t start, size_t max_size, const StringReferenceOptions& options = {});
+    std::vector<StringReference> collect_unicode_string_references(uintptr_t start, size_t max_size, const StringReferenceOptions& options = {});
 }

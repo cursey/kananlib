@@ -3,6 +3,7 @@
 #include <ppl.h>
 #include <intrin.h>
 
+#include <cwctype>
 #include <cstdint>
 #include <unordered_set>
 #include <deque>
@@ -2214,6 +2215,100 @@ namespace utility {
 
             ip += ix->Length;
         }
+
+        return out;
+    }
+
+    std::vector<StringReference> collect_ascii_string_references(uintptr_t start, size_t max_size, const StringReferenceOptions& options) {
+        std::vector<StringReference> out{};
+
+        utility::exhaustive_decode((uint8_t*)start, max_size, [&](ExhaustionContext& ctx) -> ExhaustionResult { 
+            try {
+                if (!options.follow_calls && std::string_view{ctx.instrux.Mnemonic}.starts_with("CALL")) {
+                    return ExhaustionResult::STEP_OVER;
+                }
+
+                const auto disp = utility::resolve_displacement(ctx.addr);
+
+                if (!disp) {
+                    return ExhaustionResult::CONTINUE;
+                }
+
+                if (IsBadReadPtr((void*)*disp, 2)) {
+                    return ExhaustionResult::CONTINUE;
+                }
+
+                auto c = (char*)*disp;
+
+                while (std::isprint(*c) && *c != '\0') {
+                    const auto len = (uintptr_t)c - (uintptr_t)*disp;
+
+                    if (len >= options.max_length) {
+                        return ExhaustionResult::CONTINUE;
+                    }
+
+                    ++c;
+                }
+
+                if (*c == '\0' && c != (char*)*disp) {
+                    const auto len = (uintptr_t)c - (uintptr_t)*disp;
+
+                    if (len >= options.min_length) {
+                        out.emplace_back(Resolved{ctx.addr, ctx.instrux}, (char*)*disp);
+                    }
+                }
+            } catch(...) {
+            }
+
+            return ExhaustionResult::CONTINUE;
+        });
+
+        return out;
+    }
+
+    std::vector<StringReference> collect_unicode_string_references(uintptr_t start, size_t max_size, const StringReferenceOptions& options) {
+        std::vector<StringReference> out{};
+
+        utility::exhaustive_decode((uint8_t*)start, max_size, [&](ExhaustionContext& ctx) -> ExhaustionResult { 
+            try {
+                if (!options.follow_calls && std::string_view{ctx.instrux.Mnemonic}.starts_with("CALL")) {
+                    return ExhaustionResult::STEP_OVER;
+                }
+
+                const auto disp = utility::resolve_displacement(ctx.addr);
+
+                if (!disp) {
+                    return ExhaustionResult::CONTINUE;
+                }
+
+                if (IsBadReadPtr((void*)*disp, sizeof(wchar_t) * 2)) {
+                    return ExhaustionResult::CONTINUE;
+                }
+
+                auto wc = (wchar_t*)*disp;
+
+                while (std::iswprint(*wc) && *wc != L'\0' && *wc >= 0x20 && *wc <= 0x7E) {
+                    const auto len = ((uintptr_t)wc - (uintptr_t)*disp) / sizeof(wchar_t);
+
+                    if (len >= options.max_length) {
+                        return ExhaustionResult::CONTINUE;
+                    }
+
+                    ++wc;
+                }
+
+                if (*wc == L'\0' && wc != (wchar_t*)*disp) {
+                    const auto len = ((uintptr_t)wc - (uintptr_t)*disp) / sizeof(wchar_t);
+
+                    if (len >= options.min_length) {
+                        out.emplace_back(Resolved{ctx.addr, ctx.instrux}, (wchar_t*)*disp);
+                    }
+                }
+            } catch(...) {
+            }
+
+            return ExhaustionResult::CONTINUE;
+        });
 
         return out;
     }
