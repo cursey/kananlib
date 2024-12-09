@@ -631,7 +631,7 @@ namespace utility {
 
         #define PROCESS_4_MASKS(IN) \
         {\
-            const size_t j = IN;\
+            constexpr size_t j = IN;\
             /* Load 4 masks into a 256-bit register, aligned */ \
             const __m256i vmasks = _mm256_load_si256((__m256i*)&masks[j]); \
             /* Create a mask of which 64-bit values are non-zero */ \
@@ -641,34 +641,32 @@ namespace utility {
             int mask = _mm256_movemask_pd(_mm256_castsi256_pd(cmp));\
             mask = ~mask & 0xF; /* Invert since cmpeq gives 1s for equal-to-zero */ \
 \
-            if (mask != 0) {\
-                /* Process each bit in the mask */ \
-                while (mask != 0) {\
-                    /* Find index of first set bit*/\
-                    unsigned long index{};\
-                    _BitScanForward(&index, mask);\
+            /* Process each bit in the mask */ \
+            while (mask != 0) {\
+                /* Find index of first set bit*/\
+                unsigned long index = _tzcnt_u32(mask);\
 \
-                    /* Get the actual mask value */\
-                    const auto jindex = j + index;\
-                    const uint64_t actual_mask = masks[jindex];\
-                    const auto real_i = start_i + (sizeof(__m256i) * (jindex / 2)) + ((jindex % 2) * SHIFT_SCALAR);\
+                /* Get the actual mask value */\
+                const auto jindex = j + index;\
+                const uint64_t actual_mask = masks[jindex];\
+                const auto real_i = start_i + (sizeof(__m256i) * (jindex / 2)) + ((jindex % 2) * SHIFT_SCALAR);\
 \
-                    const auto mask2 = actual_mask >> 32;\
-                    if (mask2 != 0) {\
-                        if (auto result = check_candidate(real_i, mask2, 4, ptr, filter); result.has_value()) {\
-                            return result;\
-                        }\
+                const auto mask2 = actual_mask >> 32;\
+                if (mask2 != 0) {\
+                    if (auto result = check_candidate(real_i, mask2, 4, ptr, filter); result.has_value()) {\
+                        return result;\
                     }\
-\
-                    const auto mask1 = actual_mask & 0xFFFFFFFF;\
-                    if (mask1 != 0) {\
-                        if (auto result = check_candidate(real_i, mask1, 0, ptr, filter); result.has_value()) {\
-                            return result;\
-                        }\
-                    }\
-\
-                    mask &= mask - 1; /* Clear the bit we just processed */ \
                 }\
+\
+                const auto mask1 = actual_mask & 0xFFFFFFFF;\
+                if (mask1 != 0) {\
+                    if (auto result = check_candidate(real_i, mask1, 0, ptr, filter); result.has_value()) {\
+                        return result;\
+                    }\
+                }\
+\
+                /* clear the lowest set bit */\
+                mask = _blsr_u32(mask);\
             }\
         }
 
