@@ -680,13 +680,13 @@ namespace utility {
             addresses = _mm256_add_epi32(addresses, shift_amount_after32); /* 32 - 8 = 24 */ \
             i += sizeof(__m256i);
         
+        constexpr size_t LOOKAHEAD_AMOUNT = 12;
+        // Each 64-bit mask holds two 32-bit values
+        constexpr size_t NUM_64BIT_MASKS = LOOKAHEAD_AMOUNT * 2;
+
+        __declspec(align(256)) uint64_t masks[NUM_64BIT_MASKS]{};
+
         if (length >= (sizeof(__m256i) * 12) + 8) {
-            constexpr size_t LOOKAHEAD_AMOUNT = 12;
-            // Each 64-bit mask holds two 32-bit values
-            constexpr size_t NUM_64BIT_MASKS = LOOKAHEAD_AMOUNT * 2;
-
-            __declspec(align(256)) uint64_t masks[NUM_64BIT_MASKS]{};
-
             lookahead_size = (sizeof(__m256i) * LOOKAHEAD_AMOUNT) + 8;
 
             // Loop unrolled a bunch of times to increase throughput
@@ -724,10 +724,6 @@ namespace utility {
             }
         } else {
             lookahead_size = (sizeof(__m256i)) + 8;
-
-            // We actually only really get 2 masks here
-            // but we need 4 so we don't read bad memory with the AVX2 instructions
-            std::array<uint64_t, 4> masks{};
 
             for (auto i = start; i + lookahead_size < end;) __try {
                 size_t start_i = i;
