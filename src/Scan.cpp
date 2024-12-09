@@ -626,24 +626,48 @@ namespace utility {
             const __m256i cmp_result1 = _mm256_cmpeq_epi32(vaddresses1, rva);\
             const __m256i cmp_result2 = _mm256_cmpeq_epi32(vaddresses2, rva);\
 \
-            const int mask1 = _mm256_movemask_epi8(cmp_result1);\
-            const int mask2 = _mm256_movemask_epi8(cmp_result2);\
+            masks[mask_index++] = (uint64_t)_mm256_movemask_epi8(cmp_result1) | ((uint64_t)_mm256_movemask_epi8(cmp_result2) << 32);\
+        }
+
+        #define PROCESS_4_MASKS(IN) \
+        {\
+            const size_t j = IN;\
+            /* Load 4 masks into a 256-bit register, aligned */ \
+            const __m256i vmasks = _mm256_load_si256((__m256i*)&masks[j]); \
+            /* Create a mask of which 64-bit values are non-zero */ \
+            /* We can use _mm256_cmpeq_epi64 to compare against zero */ \
+            const __m256i zero = _mm256_setzero_si256();\
+            const __m256i cmp = _mm256_cmpeq_epi64(vmasks, zero);\
+            int mask = _mm256_movemask_pd(_mm256_castsi256_pd(cmp));\
+            mask = ~mask & 0xF; /* Invert since cmpeq gives 1s for equal-to-zero */ \
 \
-            if (mask2 != 0) {\
-                KANANLIB_LOG_PERF_SENSITIVE("Mask 2 is not zero @ {:x} (real {:x}): {:x}", i, real_i, (uint32_t)mask2);\
+            if (mask != 0) {\
+                /* Process each bit in the mask */ \
+                while (mask != 0) {\
+                    /* Find index of first set bit*/\
+                    unsigned long index{};\
+                    _BitScanForward(&index, mask);\
 \
-                if (auto result = check_candidate(real_i, mask2, 4, ptr, filter); result.has_value()) {\
-                    KANANLIB_LOG_PERF_SENSITIVE("Found second candidate at (block {:x}) {:x}->{:x} (mask {:x})", i, *result, ptr, (uint32_t)mask2);\
-                    return result;\
-                }\
-            } \
+                    /* Get the actual mask value */\
+                    const auto jindex = j + index;\
+                    const uint64_t actual_mask = masks[jindex];\
+                    const auto real_i = start_i + (sizeof(__m256i) * (jindex / 2)) + ((jindex % 2) * SHIFT_SCALAR);\
 \
-            if (mask1 != 0) {\
-                KANANLIB_LOG_PERF_SENSITIVE("Mask 1 is not zero @ {:x} (real {:x}): {:x}", i, real_i, (uint32_t)mask1);\
+                    const auto mask2 = actual_mask >> 32;\
+                    if (mask2 != 0) {\
+                        if (auto result = check_candidate(real_i, mask2, 4, ptr, filter); result.has_value()) {\
+                            return result;\
+                        }\
+                    }\
 \
-                if (auto result = check_candidate(real_i, mask1, 0, ptr, filter); result.has_value()) {\
-                    KANANLIB_LOG_PERF_SENSITIVE("Found first candidate at (block {:x}) {:x}->{:x} (mask {:x})", i, *result, ptr, (uint32_t)mask1);\
-                    return result;\
+                    const auto mask1 = actual_mask & 0xFFFFFFFF;\
+                    if (mask1 != 0) {\
+                        if (auto result = check_candidate(real_i, mask1, 0, ptr, filter); result.has_value()) {\
+                            return result;\
+                        }\
+                    }\
+\
+                    mask &= mask - 1; /* Clear the bit we just processed */ \
                 }\
             }\
         }
@@ -657,14 +681,18 @@ namespace utility {
             i += sizeof(__m256i);
         
         if (length >= (sizeof(__m256i) * 12) + 8) {
-            lookahead_size = (sizeof(__m256i) * 12) + 8;
+            constexpr size_t LOOKAHEAD_AMOUNT = 12;
+            // Each 64-bit mask holds two 32-bit values
+            constexpr size_t NUM_64BIT_MASKS = LOOKAHEAD_AMOUNT * 2;
+
+            __declspec(align(256)) uint64_t masks[NUM_64BIT_MASKS]{};
+
+            lookahead_size = (sizeof(__m256i) * LOOKAHEAD_AMOUNT) + 8;
 
             // Loop unrolled a bunch of times to increase throughput
             for (auto i = start; i + lookahead_size < end;) __try {
-                PROCESS_AVX2_BLOCKS(0, 1);
-                PROCESS_AVX2_BLOCKS(0, 1);
-                PROCESS_AVX2_BLOCKS(0, 1);
-                PROCESS_AVX2_BLOCKS(0, 1);
+                size_t mask_index{0};
+                const size_t start_i = i;
 
                 PROCESS_AVX2_BLOCKS(0, 1);
                 PROCESS_AVX2_BLOCKS(0, 1);
@@ -675,6 +703,20 @@ namespace utility {
                 PROCESS_AVX2_BLOCKS(0, 1);
                 PROCESS_AVX2_BLOCKS(0, 1);
                 PROCESS_AVX2_BLOCKS(0, 1);
+
+                PROCESS_AVX2_BLOCKS(0, 1);
+                PROCESS_AVX2_BLOCKS(0, 1);
+                PROCESS_AVX2_BLOCKS(0, 1);
+                PROCESS_AVX2_BLOCKS(0, 1);
+
+                // Process 4 masks at a time using AVX2
+                // Literally increases speed from 10GB/s to almost 20GB/s
+                PROCESS_4_MASKS(0);
+                PROCESS_4_MASKS(4);
+                PROCESS_4_MASKS(8);
+                PROCESS_4_MASKS(12);
+                PROCESS_4_MASKS(16);
+                PROCESS_4_MASKS(20);
             } __except (EXCEPTION_EXECUTE_HANDLER) {
                 //SPDLOG_INFO("Exception caught at {:x}", i);
                 i += sizeof(__m256i);
@@ -683,8 +725,16 @@ namespace utility {
         } else {
             lookahead_size = (sizeof(__m256i)) + 8;
 
+            // We actually only really get 2 masks here
+            // but we need 4 so we don't read bad memory with the AVX2 instructions
+            std::array<uint64_t, 4> masks{};
+
             for (auto i = start; i + lookahead_size < end;) __try {
+                size_t start_i = i;
+                size_t mask_index{0};
+
                 PROCESS_AVX2_BLOCKS(0, 1);
+                PROCESS_4_MASKS(0);
             } __except (EXCEPTION_EXECUTE_HANDLER) {
                 //SPDLOG_INFO("Exception caught at {:x}", i);
                 i += sizeof(__m256i);
