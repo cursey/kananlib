@@ -632,15 +632,22 @@ namespace utility {
         #define PROCESS_4_MASKS(IN) \
         {\
             constexpr size_t j = IN;\
+            constexpr size_t maskindex = IN / 4;\
             /* Load 4 masks into a 256-bit register, aligned */ \
             const __m256i vmasks = _mm256_load_si256((__m256i*)&masks[j]); \
             /* Create a mask of which 64-bit values are non-zero */ \
             /* We can use _mm256_cmpeq_epi64 to compare against zero */ \
             const __m256i zero = _mm256_setzero_si256();\
             const __m256i cmp = _mm256_cmpeq_epi64(vmasks, zero);\
-            int mask = _mm256_movemask_pd(_mm256_castsi256_pd(cmp));\
-            mask = ~mask & 0xF; /* Invert since cmpeq gives 1s for equal-to-zero */ \
-\
+            /* Invert since cmpeq gives 1s for equal-to-zero */ \
+            cmpeq_masks[maskindex] = ~_mm256_movemask_pd(_mm256_castsi256_pd(cmp)) & 0b1111; \
+        }
+
+        #define PROCESS_4_MASKS_FINAL(IN) \
+        {\
+            constexpr size_t j = IN;\
+            constexpr size_t maskindex = IN / 4;\
+            int& mask = cmpeq_masks[maskindex];\
             /* Process each bit in the mask */ \
             while (mask != 0) {\
                 /* Find index of first set bit*/\
@@ -683,6 +690,7 @@ namespace utility {
         constexpr size_t NUM_64BIT_MASKS = LOOKAHEAD_AMOUNT * 2;
 
         __declspec(align(256)) uint64_t masks[NUM_64BIT_MASKS]{};
+        __declspec(align(256)) int cmpeq_masks[NUM_64BIT_MASKS]{};
 
         if (length >= (sizeof(__m256i) * 12) + 8) {
             lookahead_size = (sizeof(__m256i) * LOOKAHEAD_AMOUNT) + 8;
@@ -715,6 +723,13 @@ namespace utility {
                 PROCESS_4_MASKS(12);
                 PROCESS_4_MASKS(16);
                 PROCESS_4_MASKS(20);
+
+                PROCESS_4_MASKS_FINAL(0);
+                PROCESS_4_MASKS_FINAL(4);
+                PROCESS_4_MASKS_FINAL(8);
+                PROCESS_4_MASKS_FINAL(12);
+                PROCESS_4_MASKS_FINAL(16);
+                PROCESS_4_MASKS_FINAL(20);
             } __except (EXCEPTION_EXECUTE_HANDLER) {
                 //SPDLOG_INFO("Exception caught at {:x}", i);
                 i += sizeof(__m256i);
@@ -729,6 +744,7 @@ namespace utility {
 
                 PROCESS_AVX2_BLOCKS(0, 1);
                 PROCESS_4_MASKS(0);
+                PROCESS_4_MASKS_FINAL(0);
             } __except (EXCEPTION_EXECUTE_HANDLER) {
                 //SPDLOG_INFO("Exception caught at {:x}", i);
                 i += sizeof(__m256i);
