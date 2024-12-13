@@ -647,7 +647,7 @@ namespace utility {
         {\
             constexpr size_t j = IN;\
             constexpr size_t maskindex = IN / 4;\
-            int& mask = cmpeq_masks[maskindex];\
+            int mask = cmpeq_masks[maskindex];\
             /* Process each bit in the mask */ \
             while (mask != 0) {\
                 /* Find index of first set bit*/\
@@ -689,8 +689,8 @@ namespace utility {
         // Each 64-bit mask holds two 32-bit values
         constexpr size_t NUM_64BIT_MASKS = LOOKAHEAD_AMOUNT * 2;
 
-        __declspec(align(256)) uint64_t masks[NUM_64BIT_MASKS]{};
-        __declspec(align(256)) int cmpeq_masks[NUM_64BIT_MASKS]{};
+        alignas(__m256i) uint64_t masks[NUM_64BIT_MASKS]{};
+        alignas(__m256i) int cmpeq_masks[NUM_64BIT_MASKS]{};
 
         if (length >= (sizeof(__m256i) * 12) + 8) {
             lookahead_size = (sizeof(__m256i) * LOOKAHEAD_AMOUNT) + 8;
