@@ -184,7 +184,7 @@ int test_avx2_displacement_scan() {
         *(int32_t*)(&huge_bytes[index_to_write_to]) = 0;
 
         if (index_to_write_to - 4 >= 0) {
-            *(int32_t*)(&huge_bytes[index_to_write_to-4]) = delta + 5;
+            *(int32_t*)(&huge_bytes[index_to_write_to-4]) = 0;
         }
 
         if (address_to_rel32_reference >= (uintptr_t)huge_bytes.data() + 4) {
