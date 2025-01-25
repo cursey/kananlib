@@ -22,6 +22,28 @@
 
 using namespace std;
 
+namespace undocumented {
+    // https://learn.microsoft.com/en-us/cpp/build/exception-handling-x64?view=msvc-170
+    union UNWIND_CODE {
+        struct {
+            BYTE CodeOffset;
+            BYTE UnwindOp : 4;
+            BYTE OpInfo   : 4;
+        } u;
+        USHORT FrameOffset;
+    };
+
+    struct UNWIND_INFO {
+        BYTE Version       : 3;
+        BYTE Flags         : 5;
+        BYTE SizeOfProlog;
+        BYTE CountOfCodes;
+        BYTE FrameRegister : 4;
+        BYTE FrameOffset   : 4;
+        UNWIND_CODE UnwindCode[1];
+    };
+}
+
 namespace utility {
     optional<uintptr_t> scan(const string& module, const string& pattern) {
         return scan(GetModuleHandleA(module.c_str()), pattern);
@@ -1404,6 +1426,29 @@ namespace utility {
         if (entry != nullptr) {
             SPDLOG_INFO("Found function start for {:x} at {:x}", middle, entry->BeginAddress);
             return (uintptr_t)entry->BeginAddress + (uintptr_t)utility::get_module_within(middle).value_or(nullptr);
+        }
+
+        return std::nullopt;
+    }
+
+    std::optional<uintptr_t> find_function_start_unwind(uintptr_t middle) {
+        auto entry = find_function_entry(middle);
+
+        if (entry != nullptr) {
+            const auto module = utility::get_module_within(middle).value_or(nullptr);
+
+            if (module != nullptr) {
+                auto ui = (undocumented::UNWIND_INFO*)((uintptr_t)module + entry->UnwindData);
+                
+                while (ui->Flags & UNW_FLAG_CHAININFO) {
+                    // The chained RUNTIME_FUNCTION follows the unwind codes array
+                    // Array must be DWORD aligned, hence the (Count + 1) & ~1
+                    entry = (RUNTIME_FUNCTION*)(&ui->UnwindCode[(ui->CountOfCodes + 1) & ~1]);
+                    ui = (undocumented::UNWIND_INFO*)((uintptr_t)module + entry->UnwindData);
+                }
+
+                return (uintptr_t)entry->BeginAddress + (uintptr_t)module;
+            }
         }
 
         return std::nullopt;

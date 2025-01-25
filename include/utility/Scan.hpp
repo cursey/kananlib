@@ -92,6 +92,10 @@ namespace utility {
 
     PIMAGE_RUNTIME_FUNCTION_ENTRY find_function_entry(uintptr_t middle);
     std::optional<uintptr_t> find_function_start(uintptr_t middle);
+    // same as prev, but unwinds until the main procedure is found
+    // separate function because a lot of code depends on find_function_start
+    // finding the basic block the middle is in, and not the actual function start
+    std::optional<uintptr_t> find_function_start_unwind(uintptr_t middle);
     // same as prev, but keeps going backwards until the "function" it lands on
     // is actually called somewhere within the module
     std::optional<uintptr_t> find_function_start_with_call(uintptr_t middle);
