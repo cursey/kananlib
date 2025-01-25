@@ -1421,21 +1421,23 @@ namespace utility {
         for (auto func = find_function_start(middle); func.has_value(); func = find_function_start(*func - 1)) {
             SPDLOG_INFO(" Checking if {:x} is a real function", *func);
 
-            const auto ref = utility::scan_displacement_reference(module, *func);
+            const auto ref = utility::scan_displacement_reference(module, *func, [&](uintptr_t ref) {
+                const auto resolved = utility::resolve_instruction(ref);
 
-            if (!ref) {
-                continue;
-            }
+                if (!resolved) {
+                    SPDLOG_ERROR(" Could not resolve instruction");
+                    return false;
+                }
 
-            const auto resolved = utility::resolve_instruction(*ref);
+                if (std::string_view{resolved->instrux.Mnemonic}.starts_with("CALL")) {
+                    return true;
+                }
 
-            if (!resolved) {
-                SPDLOG_ERROR(" Could not resolve instruction");
-                continue;
-            }
+                return false;
+            });
 
-            if (std::string_view{resolved->instrux.Mnemonic}.starts_with("CALL")) {
-                return *func;
+            if (ref) {
+                return func;
             }
         }
 
