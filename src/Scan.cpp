@@ -845,7 +845,7 @@ namespace utility {
         });
     }
 
-    std::optional<uintptr_t> scan_displacement_reference(HMODULE module, uintptr_t ptr) {
+    std::optional<uintptr_t> scan_displacement_reference(HMODULE module, uintptr_t ptr, std::function<bool(uintptr_t)> filter) {
         KANANLIB_BENCH();
 
         const auto module_size = get_module_size(module);
@@ -854,7 +854,7 @@ namespace utility {
             return {};
         }
 
-        return scan_displacement_reference((uintptr_t)module, *module_size, ptr);
+        return scan_displacement_reference((uintptr_t)module, *module_size, ptr, filter);
     }
 
     std::vector<uintptr_t> scan_displacement_references(HMODULE module, uintptr_t ptr) {
@@ -896,17 +896,19 @@ namespace utility {
         return results;
     }
 
-    std::optional<uintptr_t> scan_displacement_reference(uintptr_t start, size_t length, uintptr_t ptr) {
+    std::optional<uintptr_t> scan_displacement_reference(uintptr_t start, size_t length, uintptr_t ptr, std::function<bool(uintptr_t)> filter) {
         KANANLIB_BENCH();
 
-        return scan_relative_reference(start, length, ptr, [ptr](uintptr_t candidate_addr) {
+        return scan_relative_reference(start, length, ptr, [ptr, filter](uintptr_t candidate_addr) {
             const auto resolved = utility::resolve_instruction(candidate_addr);
 
             if (resolved) {
                 const auto displacement = utility::resolve_displacement(resolved->addr);
 
                 if (displacement && *displacement == ptr) {
-                    return true;
+                    if (filter == nullptr || filter(candidate_addr)) {
+                        return true;
+                    }
                 }
             }
 
