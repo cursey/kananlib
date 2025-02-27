@@ -1627,6 +1627,68 @@ namespace utility {
         return std::nullopt;
     }
 
+    std::optional<uintptr_t> find_function_with_refs(HMODULE module, std::vector<uintptr_t> ptrs) {
+        KANANLIB_BENCH();
+
+        if (ptrs.size() < 2) {
+            return std::nullopt;
+        }
+
+        std::vector<std::vector<uintptr_t>> refs_all{};
+
+        for (auto ptr : ptrs) {
+            const auto refs = utility::scan_displacement_references(module, ptr);
+
+            if (refs.empty()) {
+                SPDLOG_ERROR("Failed to find references to 0x{:x}", ptr);
+                return std::nullopt;
+            }
+
+            auto& back = refs_all.emplace_back();
+            back = refs;
+        }
+
+        std::vector<std::vector<uintptr_t>> func_starts_all{};
+
+        for (auto& refs : refs_all) {
+            auto& back = func_starts_all.emplace_back();
+
+            for (auto ref : refs) {
+                const auto func_start = find_function_start_unwind(ref);
+
+                if (!func_start) {
+                    SPDLOG_ERROR("Failed to find function start for 0x{:x}", ref);
+                    continue;
+                }
+
+                back.push_back(*func_start);
+            }
+
+            func_starts_all.push_back(back);
+        }
+
+        // Find commonalities
+        for (auto& func_starts : func_starts_all) {
+            for (auto func_start : func_starts) {
+                bool is_common = true;
+
+                for (auto& other_func_starts : func_starts_all) {
+                    if (std::find(other_func_starts.begin(), other_func_starts.end(), func_start) == other_func_starts.end()) {
+                        is_common = false;
+                        break;
+                    }
+                }
+
+                if (is_common) {
+                    return func_start;
+                }
+            }
+        }
+
+        return std::nullopt;
+    }
+
+
     // Same as the previous, but it keeps going upwards until utility::scan_ptr returns something
     std::optional<uintptr_t> find_virtual_function_start(uintptr_t middle) {
         KANANLIB_BENCH();
