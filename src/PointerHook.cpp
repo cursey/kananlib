@@ -24,8 +24,9 @@ PointerHook::PointerHook(void** old_ptr, void* new_ptr)
 
     SPDLOG_INFO("[PointerHook] Hooking {:x}->{:x} to {:x}", (uintptr_t)old_ptr, (uintptr_t)*old_ptr, (uintptr_t)new_ptr);
 
-    m_original = *old_ptr;
-    *old_ptr = new_ptr;
+    do {
+        m_original = *old_ptr;
+    } while (InterlockedCompareExchangePointer(old_ptr, new_ptr, m_original) != m_original);
 }
 
 PointerHook::~PointerHook() {
@@ -36,7 +37,11 @@ bool PointerHook::remove() {
     if (m_replace_ptr != nullptr && !IsBadReadPtr(m_replace_ptr, sizeof(void*)) && *m_replace_ptr == m_destination) {
         try {
             ProtectionOverride overrider{m_replace_ptr, sizeof(void*), PAGE_EXECUTE_READWRITE};
-            *m_replace_ptr = m_original;
+            void* current = nullptr;
+
+            do {
+                current = *m_replace_ptr;
+            } while (InterlockedCompareExchangePointer(m_replace_ptr, m_original, current) != current);
         } catch (std::exception& e) {
             SPDLOG_ERROR("PointerHook: {}", e.what());
             return false;
@@ -50,7 +55,11 @@ bool PointerHook::restore() {
     if (m_replace_ptr != nullptr && !IsBadReadPtr(m_replace_ptr, sizeof(void*)) && *m_replace_ptr != m_destination) {
         try {
             ProtectionOverride overrider{m_replace_ptr, sizeof(void*), PAGE_EXECUTE_READWRITE};
-            *m_replace_ptr = m_destination;
+            void* current = nullptr;
+
+            do {
+                current = *m_replace_ptr;
+            } while (InterlockedCompareExchangePointer(m_replace_ptr, m_destination, current) != current);
         } catch (std::exception& e) {
             SPDLOG_ERROR("PointerHook: {}", e.what());
             return false;
