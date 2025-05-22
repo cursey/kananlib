@@ -1432,6 +1432,7 @@ namespace utility {
     }
 
     std::optional<uintptr_t> find_function_start_unwind(uintptr_t middle) {
+#if defined(_M_AMD64)
         auto entry = find_function_entry(middle);
 
         if (entry != nullptr) {
@@ -1450,6 +1451,7 @@ namespace utility {
                 return (uintptr_t)entry->BeginAddress + (uintptr_t)module;
             }
         }
+#endif
 
         return std::nullopt;
     }
@@ -1973,7 +1975,7 @@ namespace utility {
             if (operand.Type == ND_OP_MEM) {
                 const auto& mem = operand.Info.Memory;
                 if (mem.HasDisp && mem.IsRipRel) {
-                    return ip + ix->Length + mem.Disp;
+                    return ip + ix->Length + (intptr_t)mem.Disp;
                 }
             } else if (operand.Type == ND_OP_OFFS) {
                 const auto& offs = operand.Info.RelativeOffset;
