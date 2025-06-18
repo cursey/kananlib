@@ -416,8 +416,6 @@ namespace utility {
         return std::nullopt;
     }
 
-    constexpr uintptr_t MAX_UINTPTR_T = std::numeric_limits<uintptr_t>::max();
-
     // This is in a separate funciton because it doesn't require unwinding for the __try/__except block
     std::optional<uintptr_t> scan_relative_reference_scalar_impl(uintptr_t start, size_t length, uintptr_t ptr, std::function<bool(uintptr_t)>& filter) {
         const auto end = start + length;
@@ -577,6 +575,9 @@ namespace utility {
     };
 
     // This is in a separate funciton because it doesn't require unwinding for the __try/__except block
+    #ifdef __clang__
+    __attribute__((target("avx,avx2,bmi")))
+    #endif
     std::optional<uintptr_t> scan_relative_reference_avx2(uintptr_t start, size_t length, uintptr_t ptr, std::function<bool(uintptr_t)>& filter) {
         const auto end = (start + length);
 
@@ -584,7 +585,6 @@ namespace utility {
 
         const __m256i post_ip_constant32 = _mm256_set1_epi32(4); // Usually true most of the time. *rel32 + &rel32 + 4 = target unless it's some weird instruction
         const __m256i shift_amount_interval32 = _mm256_set1_epi32(SHIFT_SCALAR);
-        const __m256i shift_amount_upper_initial32 = _mm256_set1_epi32(SHIFT_SCALAR * 2);
         const __m256i shift_amount_after32 = _mm256_set1_epi32(sizeof(__m256i) - SHIFT_SCALAR);
 
         const __m256i shuffle_mask_lo = _mm256_set_epi8(
@@ -803,7 +803,6 @@ namespace utility {
         }
 
         const auto module_size = get_module_size(module).value_or(0);
-        const auto end = (uintptr_t)module + module_size;
 
         if (module_size == 0) {
             return {};
@@ -830,7 +829,6 @@ namespace utility {
         }
 
         const auto module_size = get_module_size(module).value_or(0);
-        const auto end = (uintptr_t)module + module_size;
 
         // convert preceded_by (IDA style string) to bytes
         auto pat = utility::Pattern{ preceded_by };
@@ -851,8 +849,6 @@ namespace utility {
         if (preceded_by.empty()) {
             return {};
         }
-
-        const auto end = (uintptr_t)start + length;
 
         // convert preceded_by (IDA style string) to bytes
         auto pat = utility::Pattern{ preceded_by };
@@ -1203,8 +1199,6 @@ namespace utility {
 
             last_block.end = ctx.addr;
             last_block.instructions.push_back({ ctx.addr, ctx.instrux });
-
-            const auto ip = (uint8_t*)ctx.addr;
 
             // Skip over calls
             if (std::string_view{ctx.instrux.Mnemonic}.starts_with("CALL")) {
@@ -2007,7 +2001,7 @@ namespace utility {
             const auto displacement = utility::resolve_displacement(ip);
 
             if (displacement) {
-                result = { ip, ix, *displacement };
+                result = { { ip, ix }, *displacement };
                 return utility::ExhaustionResult::BREAK;
             }
 
@@ -2079,7 +2073,7 @@ namespace utility {
             }
 
             if (str == (const char*)*disp) {
-                result = ResolvedDisplacement{ ip, ix, *disp };
+                result = ResolvedDisplacement{ { ip, ix }, *disp };
                 return utility::ExhaustionResult::BREAK;
             }
 
@@ -2118,7 +2112,7 @@ namespace utility {
             }
 
             if (str == (const wchar_t*)*disp) {
-                result = ResolvedDisplacement{ ip, ix, *disp };
+                result = ResolvedDisplacement{ { ip, ix }, *disp };
                 return utility::ExhaustionResult::BREAK;
             }
 
@@ -2154,7 +2148,7 @@ namespace utility {
                 }
 
                 if (pointer == *(void**)*disp) {
-                    result = ResolvedDisplacement{ ip, ix, *disp };
+                    result = ResolvedDisplacement{ { ip, ix }, *disp };
                     return true;
                 }
 
@@ -2201,7 +2195,7 @@ namespace utility {
                 }
 
                 if (*disp == displacement) {
-                    result = ResolvedDisplacement{ ip, ix, *disp };
+                    result = ResolvedDisplacement{ { ip, ix }, *disp };
                     return true;
                 }
 

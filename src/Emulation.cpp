@@ -116,7 +116,7 @@ void emulate(HMODULE module, uintptr_t ip, size_t num_instructions, std::functio
 }
 
 void emulate(HMODULE module, uintptr_t ip, size_t num_instructions, ShemuContext& emu, std::function<ExhaustionResult(const ShemuContextExtended& ctx)> callback) {
-    utility::ShemuContextExtended ctx{&emu, false};
+    utility::ShemuContextExtended ctx{&emu, { .writes_to_memory = false }};
 
     while (true) try {
         if (emu.ctx->InstructionsCount > num_instructions) {

@@ -1,6 +1,10 @@
 #include <ppl.h>
 
 // Include MSVC internal RTTI headers
+#ifdef __clang__
+#define _ThrowInfo ThrowInfo
+#endif
+
 #include <vcruntime.h>
 #include <rttidata.h>
 
@@ -100,8 +104,6 @@ void for_each(HMODULE m, std::function<void(const Vtable&)> predicate) {
 
 std::optional<Vtable> find(HMODULE m, std::function<bool(const Vtable&)> predicate) {
     populate(m);
-
-    std::optional<Vtable> result{};
 
     // makes it easier for the caller to thread this
     std::vector<Vtable> entries{};

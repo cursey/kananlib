@@ -17,7 +17,7 @@ VtableHook::VtableHook(Address target)
 }
 
 VtableHook::VtableHook(VtableHook&& other)
-    : m_raw_data(move(other.m_raw_data)),
+    : m_raw_data(std::move(other.m_raw_data)),
     m_vtable_ptr(other.m_vtable_ptr),
     m_new_vtable(other.m_new_vtable),
     m_old_vtable(other.m_old_vtable),

@@ -17,7 +17,7 @@ public:
     
     void print_elapsed_time() {
         const auto end_time = std::chrono::high_resolution_clock::now();
-        const auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - m_start_time).count();
+        [[maybe_unused]] const auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - m_start_time).count();
         SPDLOG_INFO("{} took {} microseconds", m_function_name, duration);
     }
 
