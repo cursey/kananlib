@@ -142,8 +142,16 @@ target_link_libraries(kananlib PUBLIC
 	shlwapi
 )
 
-if (MSVC)
+if (CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+    message(STATUS "MSVC")
     target_compile_options(kananlib PRIVATE /EHa)
+else()
+    message(STATUS "CLANG")
+    target_compile_options(kananlib PRIVATE
+        -fasynchronous-unwind-tables
+        -fexceptions
+        -fms-extensions
+    )
 endif()
 
 unset(CMKR_TARGET)
@@ -220,8 +228,14 @@ target_compile_definitions(kananlib-nolog PUBLIC
 	SPDLOG_ACTIVE_LEVEL=SPDLOG_LEVEL_OFF
 )
 
-if (MSVC)
+if (CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
     target_compile_options(kananlib-nolog PRIVATE /EHa)
+else()
+    target_compile_options(kananlib-nolog PRIVATE
+        -fasynchronous-unwind-tables
+        -fexceptions
+        -fms-extensions
+    )
 endif()
 
 unset(CMKR_TARGET)

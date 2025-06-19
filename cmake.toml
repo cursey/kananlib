@@ -51,8 +51,16 @@ link-libraries = [
 [target.kananlib]
 type = "kananlib-template"
 cmake-after="""
-if (MSVC)
+if (CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+    message(STATUS "MSVC")
     target_compile_options(kananlib PRIVATE /EHa)
+else()
+    message(STATUS "CLANG")
+    target_compile_options(kananlib PRIVATE
+        -fasynchronous-unwind-tables
+        -fexceptions
+        -fms-extensions
+    )
 endif()
 """
 
@@ -60,8 +68,14 @@ endif()
 type = "kananlib-template"
 compile-definitions = ["SPDLOG_ACTIVE_LEVEL=SPDLOG_LEVEL_OFF"]
 cmake-after="""
-if (MSVC)
+if (CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
     target_compile_options(kananlib-nolog PRIVATE /EHa)
+else()
+    target_compile_options(kananlib-nolog PRIVATE
+        -fasynchronous-unwind-tables
+        -fexceptions
+        -fms-extensions
+    )
 endif()
 """
 
