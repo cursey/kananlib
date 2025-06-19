@@ -132,10 +132,6 @@ target_compile_features(kananlib PUBLIC
 	cxx_std_20
 )
 
-target_compile_options(kananlib PUBLIC
-	"/EHa"
-)
-
 target_include_directories(kananlib PUBLIC
 	include
 )
@@ -145,6 +141,10 @@ target_link_libraries(kananlib PUBLIC
 	spdlog::spdlog
 	shlwapi
 )
+
+if (MSVC)
+    target_compile_options(kananlib PRIVATE /EHa)
+endif()
 
 unset(CMKR_TARGET)
 unset(CMKR_SOURCES)
@@ -206,10 +206,6 @@ target_compile_features(kananlib-nolog PUBLIC
 	cxx_std_20
 )
 
-target_compile_options(kananlib-nolog PUBLIC
-	"/EHa"
-)
-
 target_include_directories(kananlib-nolog PUBLIC
 	include
 )
@@ -223,6 +219,10 @@ target_link_libraries(kananlib-nolog PUBLIC
 target_compile_definitions(kananlib-nolog PUBLIC
 	SPDLOG_ACTIVE_LEVEL=SPDLOG_LEVEL_OFF
 )
+
+if (MSVC)
+    target_compile_options(kananlib-nolog PRIVATE /EHa)
+endif()
 
 unset(CMKR_TARGET)
 unset(CMKR_SOURCES)

@@ -42,7 +42,6 @@ type = "static"
 sources = ["src/*.cpp", "include/**.hpp"]
 include-directories = ["include"]
 compile-features = ["cxx_std_20"]
-compile-options = ["/EHa"]
 link-libraries = [
     "bddisasm::bddisasm", 
     "spdlog::spdlog", 
@@ -51,10 +50,20 @@ link-libraries = [
 
 [target.kananlib]
 type = "kananlib-template"
+cmake-after="""
+if (MSVC)
+    target_compile_options(kananlib PRIVATE /EHa)
+endif()
+"""
 
 [target.kananlib-nolog]
 type = "kananlib-template"
 compile-definitions = ["SPDLOG_ACTIVE_LEVEL=SPDLOG_LEVEL_OFF"]
+cmake-after="""
+if (MSVC)
+    target_compile_options(kananlib-nolog PRIVATE /EHa)
+endif()
+"""
 
 # TODO: define a target for each of your executables/libraries like this:
 #[target.myexecutable]
