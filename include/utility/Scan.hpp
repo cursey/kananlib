@@ -19,9 +19,22 @@ namespace utility {
     
     std::optional<uintptr_t> scan_data(HMODULE, const uint8_t* data, size_t size);
     std::optional<uintptr_t> scan_data(uintptr_t start, size_t length, const uint8_t* data, size_t size);
+    
+    template<typename T>
+    std::optional<uintptr_t> scan_data_t(HMODULE module, const T& data) {
+        return scan_data(module, reinterpret_cast<const uint8_t*>(&data), sizeof(T));
+    }
+
+    template<typename T>
+    std::optional<uintptr_t> scan_data_t(uintptr_t start, size_t length, const T& data) {
+        return scan_data(start, length, reinterpret_cast<const uint8_t*>(&data), sizeof(T));
+    }
+
     std::optional<uintptr_t> scan_data_reverse(uintptr_t start, size_t length, const uint8_t* data, size_t size);
     std::optional<uintptr_t> scan_ptr(HMODULE module, uintptr_t ptr);
     std::optional<uintptr_t> scan_ptr(uintptr_t start, size_t length, uintptr_t ptr);
+    std::optional<uintptr_t> scan_ptr_noalign(HMODULE module, uintptr_t ptr);
+    std::optional<uintptr_t> scan_ptr_noalign(uintptr_t start, size_t length, uintptr_t ptr);
     std::optional<uintptr_t> scan_string(HMODULE module, const std::string& str, bool zero_terminated = false);
     std::optional<uintptr_t> scan_string(HMODULE module, const std::wstring& str, bool zero_terminated = false);
     std::optional<uintptr_t> scan_string(uintptr_t start, size_t length, const std::string& str, bool zero_terminated = false);

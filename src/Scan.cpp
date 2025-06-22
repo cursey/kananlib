@@ -157,12 +157,6 @@ namespace utility {
         const auto module_size = get_module_size(module).value_or(0);
         auto end = (uintptr_t*)((uintptr_t)module + module_size);
 
-        /*for (auto i = (uintptr_t)module; i < end; i += sizeof(void*)) {
-            if (*(uintptr_t*)i == ptr) {
-                return i;
-            }
-        }*/
-
         if (auto it = std::find((uintptr_t*)module, end, ptr); it != end) {
             return (uintptr_t)it;
         }
@@ -184,6 +178,18 @@ namespace utility {
         }
 
         return std::nullopt;
+    }
+
+    std::optional<uintptr_t> scan_ptr_noalign(HMODULE module, uintptr_t ptr) {
+        KANANLIB_BENCH();
+
+        return utility::scan_data(module, (uint8_t*)&ptr, sizeof(uintptr_t));
+    }
+
+    std::optional<uintptr_t> scan_ptr_noalign(uintptr_t start, size_t length, uintptr_t ptr) {
+        KANANLIB_BENCH();
+
+        return utility::scan_data(start, length, (uint8_t*)&ptr, sizeof(uintptr_t));
     }
 
     optional<uintptr_t> scan_string(HMODULE module, const string& str, bool zero_terminated) {
