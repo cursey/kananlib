@@ -66,6 +66,11 @@ namespace utility {
         // get method for strings.
         std::optional<std::string> get(const std::string& key) const;
 
+        template <typename T>
+        std::optional<typename std::enable_if_t<std::is_same_v<T, std::string>, T>> get(const std::string& key) const {
+            return get(key);
+        }
+
         // set method for arithmetic types.
         template <typename T>
         void set(const std::string& key, typename std::enable_if_t<IS_ARITHMETIC_NOT_BOOL_V<T>, T> value) {
@@ -85,6 +90,11 @@ namespace utility {
 
         // set method for strings.
         void set(const std::string& key, const std::string& value);
+
+        template <typename T>
+        void set(const std::string& key, typename std::enable_if_t<std::is_same_v<T, std::string>, T> value) {
+            set(key, value);
+        }
 
         auto& get_key_values() {
             return m_key_values;
