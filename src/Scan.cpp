@@ -104,12 +104,20 @@ namespace utility {
         auto it = (uint8_t*)module;
         const auto end = (uint8_t*)module + module_size;
 
-        while (end != (it = std::find(it, end, *data))) {
-            if (memcmp(it, data, size) == 0) {
-                return (uintptr_t)it;
-            } else {
+        while (it < end) try {
+            while (end != (it = std::find(it, end, *data))) try {
+                if (memcmp(it, data, size) == 0) {
+                    return (uintptr_t)it;
+                } else {
+                    it++;
+                }
+            } catch (...) {
                 it++;
+                continue;
             }
+        } catch (...) {
+            it++;
+            continue;
         }
 
         return {};
@@ -124,12 +132,20 @@ namespace utility {
 
         auto it = (uint8_t*)start;
         const auto end = (uint8_t*)start + length;
-        while (end != (it = std::find(it, end, *data))) {
-            if (memcmp(it, data, size) == 0) {
-                return (uintptr_t)it;
-            } else {
+        while (it < end) try {
+            while (end != (it = std::find(it, end, *data))) try {
+                if (memcmp(it, data, size) == 0) {
+                    return (uintptr_t)it;
+                } else {
+                    it++;
+                }
+            } catch (...) {
                 it++;
+                continue;
             }
+        } catch (...) {
+            it++;
+            continue;
         }
 
         return {};
