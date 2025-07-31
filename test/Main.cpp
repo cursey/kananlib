@@ -9,6 +9,8 @@
 #include <utility/Module.hpp>
 #include <utility/RTTI.hpp>
 
+#include <utility/PDB.hpp>
+
 #define KANANLIB_ASSERT(x) if (!(x)) { std::cout << "Assertion failed: " << #x << std::endl; return 1; }
 
 constexpr char HELLO_WORLD[]{"Hello World!"};
@@ -196,6 +198,31 @@ int test_avx2_displacement_scan() {
 }
 
 int main() try {
+    const auto pdb_path = utility::pdb::get_pdb_path((const uint8_t*)utility::get_executable());
+
+    if (pdb_path.has_value()) {
+        std::cout << "PDB path: " << pdb_path.value() << std::endl;
+    } else {
+        std::cout << "No PDB found." << std::endl;
+    }
+
+    const auto pdb_path_kernel32 = utility::pdb::get_pdb_path((const uint8_t*)utility::get_module("kernelbase.dll"));
+
+    if (pdb_path_kernel32.has_value()) {
+        std::cout << "PDB path for kernelbase.dll: " << pdb_path_kernel32.value() << std::endl;
+
+        // Check if we can resolve a symbol from kernelbase.dll
+        const auto symbol_address = utility::pdb::get_symbol_address((const uint8_t*)utility::get_module("kernelbase.dll"), "GetModuleHandleA");
+
+        if (symbol_address.has_value()) {
+            std::cout << "Resolved symbol 'GetModuleHandleA' at address: " << std::hex << *symbol_address << std::endl;
+        } else {
+            std::cout << "Failed to resolve symbol 'GetModuleHandleA'." << std::endl;
+        }
+    } else {
+        std::cout << "No PDB found for kernelbase.dll." << std::endl;
+    }
+
     const auto hello_world_scan = utility::scan_string(utility::get_executable(), HELLO_WORLD);
     const auto hello_world_scans = utility::scan_strings(utility::get_executable(), HELLO_WORLD);
 

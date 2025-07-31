@@ -29,6 +29,7 @@ add_compile_options($<$<CXX_COMPILER_ID:MSVC>:/MP>)
 
 # mklink the parent dir as kananlib/ with command line stuff
 set(TARGET_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
+set(KANANLIB_USE_DIA_SDK ON CACHE BOOL "" FORCE)
 
 execute_process(
     COMMAND cmd /c mklink /J kananlib ..

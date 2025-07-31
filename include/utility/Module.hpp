@@ -46,6 +46,7 @@ namespace utility {
     std::optional<uintptr_t> ptr_from_rva(uint8_t* dll, uintptr_t rva);
 
     HMODULE get_executable();
+    HMODULE get_module(const std::string& module);
     HMODULE unlink(HMODULE module);
     HMODULE safe_unlink(HMODULE module);
     HMODULE find_partial_module(std::wstring_view name);

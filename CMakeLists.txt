@@ -31,6 +31,7 @@ endif()
 option(KANANLIB_FETCH_BDDISASM "" OFF)
 option(KANANLIB_FETCH_SPDLOG "" OFF)
 option(KANANLIB_STANDALONE_BUILD "" OFF)
+option(KANANLIB_USE_DIA_SDK "" OFF)
 
  
 add_compile_options($<$<CXX_COMPILER_ID:MSVC>:/MP>)
@@ -45,6 +46,27 @@ else()
     # The project is being included as part of another project
     message(STATUS "kananlib: Building as part of another project")
     set(KANANLIB_STANDALONE_BUILD OFF)
+endif()
+
+# Add cmake module path
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
+
+# DIA SDK Detection
+if(KANANLIB_USE_DIA_SDK)
+    message(STATUS "kananlib: DIA SDK support requested")
+    find_package(DIASDK)
+    
+    if(DIASDK_FOUND)
+        set(KANANLIB_DIA_SDK_FOUND TRUE)
+        message(STATUS "kananlib: DIA SDK support will be enabled")
+    else()
+        set(KANANLIB_DIA_SDK_FOUND FALSE)
+        message(WARNING "kananlib: DIA SDK not found. Symbol resolution will be disabled.")
+        message(STATUS "kananlib: Install Visual Studio with C++ workload to get DIA SDK")
+    endif()
+else()
+    message(STATUS "kananlib: DIA SDK support disabled (set KANANLIB_USE_DIA_SDK=ON to enable)")
+    set(KANANLIB_DIA_SDK_FOUND FALSE)
 endif()
 
 include(FetchContent)
@@ -86,6 +108,7 @@ list(APPEND kananlib_SOURCES
 	"src/Input.cpp"
 	"src/Memory.cpp"
 	"src/Module.cpp"
+	"src/PDB.cpp"
 	"src/Patch.cpp"
 	"src/Pattern.cpp"
 	"src/PointerHook.cpp"
@@ -103,6 +126,7 @@ list(APPEND kananlib_SOURCES
 	"include/utility/Logging.hpp"
 	"include/utility/Memory.hpp"
 	"include/utility/Module.hpp"
+	"include/utility/PDB.hpp"
 	"include/utility/Patch.hpp"
 	"include/utility/Pattern.hpp"
 	"include/utility/PointerHook.hpp"
@@ -154,6 +178,17 @@ else()
     )
 endif()
 
+# Configure DIA SDK if found
+if(KANANLIB_DIA_SDK_FOUND)
+    target_compile_definitions(kananlib PRIVATE KANANLIB_USE_DIA_SDK)
+    target_link_libraries(kananlib PRIVATE DIASDK::DIASDK)
+    if (CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+        target_link_options(kananlib PRIVATE /DELAYLOAD:msdia140.dll)
+        target_link_libraries(kananlib PRIVATE delayimp)
+    endif()
+    message(STATUS "kananlib: DIA SDK support enabled for kananlib target")
+endif()
+
 unset(CMKR_TARGET)
 unset(CMKR_SOURCES)
 
@@ -168,6 +203,7 @@ list(APPEND kananlib-nolog_SOURCES
 	"src/Input.cpp"
 	"src/Memory.cpp"
 	"src/Module.cpp"
+	"src/PDB.cpp"
 	"src/Patch.cpp"
 	"src/Pattern.cpp"
 	"src/PointerHook.cpp"
@@ -185,6 +221,7 @@ list(APPEND kananlib-nolog_SOURCES
 	"include/utility/Logging.hpp"
 	"include/utility/Memory.hpp"
 	"include/utility/Module.hpp"
+	"include/utility/PDB.hpp"
 	"include/utility/Patch.hpp"
 	"include/utility/Pattern.hpp"
 	"include/utility/PointerHook.hpp"
@@ -236,6 +273,17 @@ else()
         -fexceptions
         -fms-extensions
     )
+endif()
+
+# Configure DIA SDK if found
+if(KANANLIB_DIA_SDK_FOUND)
+    target_compile_definitions(kananlib-nolog PRIVATE KANANLIB_USE_DIA_SDK)
+    target_link_libraries(kananlib-nolog PRIVATE DIASDK::DIASDK)
+    if (CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+        target_link_options(kananlib-nolog PRIVATE /DELAYLOAD:msdia140.dll)
+        target_link_libraries(kananlib-nolog PRIVATE delayimp)
+    endif()
+    message(STATUS "kananlib: DIA SDK support enabled for kananlib-nolog target")
 endif()
 
 unset(CMKR_TARGET)

@@ -240,6 +240,10 @@ namespace utility {
         return GetModuleHandle(nullptr);
     }
 
+    HMODULE get_module(const std::string& module) {
+        return GetModuleHandleA(module.c_str());
+    }
+
     std::mutex g_unlink_mutex{};
 
     HMODULE unlink(HMODULE module) {
