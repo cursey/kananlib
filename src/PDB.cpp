@@ -23,7 +23,7 @@
 
 namespace utility::pdb {
 std::unordered_map<std::string, std::string> pdb_cache{}; // module path -> local pdb path after download
-std::unordered_map<std::string, std::unordered_map<std::string, uintptr_t>> symbol_cache{}; // module -> symbol -> address
+std::unordered_map<size_t, std::unordered_map<std::string, uintptr_t>> symbol_cache{}; // module hash -> symbol -> address
 
 std::string get_temp_folder() {
     static std::string temp_folder;
@@ -184,7 +184,7 @@ std::optional<std::string> get_pdb_path(const uint8_t* module) {
 }
 
 std::optional<uintptr_t> get_symbol_address(const uint8_t* module, std::string_view symbol_name) {
-    if (!module) {
+    if (module == nullptr) {
         SPDLOG_ERROR("Invalid module pointer");
         return std::nullopt;
     }
@@ -192,12 +192,27 @@ std::optional<uintptr_t> get_symbol_address(const uint8_t* module, std::string_v
 #ifdef KANANLIB_USE_DIA_SDK
     ensure_com_initialized();
 
-    // create cache key from module pointer
-    std::stringstream cache_key_ss;
-    cache_key_ss << std::hex << reinterpret_cast<uintptr_t>(module);
-    std::string module_key = cache_key_ss.str();
+    // Create cache key from hash of module data
+    // get size of headers
+    auto dos_header = reinterpret_cast<const IMAGE_DOS_HEADER*>(module);
+    if (dos_header->e_magic != IMAGE_DOS_SIGNATURE) {
+        SPDLOG_ERROR("Invalid DOS header signature");
+        return std::nullopt;
+    }
 
-    // check if we've already resolved this symbol for this module
+    // get nt headers
+    auto nt_headers = reinterpret_cast<const IMAGE_NT_HEADERS*>(module + dos_header->e_lfanew);
+    if (nt_headers->Signature != IMAGE_NT_SIGNATURE) {
+        SPDLOG_ERROR("Invalid NT header signature");
+        return std::nullopt;
+    }
+
+    // get size of headers
+    const auto end_of_nt_headers = reinterpret_cast<const uint8_t*>(nt_headers) + sizeof(IMAGE_NT_HEADERS);
+    const auto module_header_size = end_of_nt_headers - module;
+    const auto module_key = utility::hash(module, (size_t)module_header_size);
+
+    // Check if we've already resolved this symbol for this module
     if (auto module_it = symbol_cache.find(module_key); module_it != symbol_cache.end()) {
         if (auto symbol_it = module_it->second.find(std::string(symbol_name)); symbol_it != module_it->second.end()) {
             SPDLOG_INFO("Found cached symbol '{}' at address: 0x{:08X}", symbol_name, symbol_it->second);
@@ -439,7 +454,7 @@ std::optional<uintptr_t> get_symbol_address(const uint8_t* module, std::string_v
 std::vector<std::string> enumerate_symbols(const uint8_t* module, size_t max_symbols) {
     std::vector<std::string> symbols;
     
-    if (!module) {
+    if (module == nullptr) {
         SPDLOG_ERROR("Invalid module pointer");
         return symbols;
     }

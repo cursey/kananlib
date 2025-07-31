@@ -36,6 +36,17 @@ namespace utility {
 
         return result;
     }
+
+    static constexpr auto hash(const uint8_t* data, size_t size) {
+        size_t result = 0xcbf29ce484222325;
+
+        for (size_t i = 0; i < size; ++i) {
+            result ^= data[i];
+            result *= (size_t)1099511628211;
+        }
+
+        return result;
+    }
 }
 
 consteval auto operator "" _fnv(const char* s, size_t) {

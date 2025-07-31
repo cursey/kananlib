@@ -216,6 +216,15 @@ int main() try {
 
         if (symbol_address.has_value()) {
             std::cout << "Resolved symbol 'GetModuleHandleA' at address: " << std::hex << *symbol_address << std::endl;
+
+            const auto symbol_address_again = utility::pdb::get_symbol_address((const uint8_t*)utility::get_module("kernelbase.dll"), "GetModuleHandleA");
+
+            // Make sure caching workds
+            if (symbol_address_again.value_or(0) == symbol_address.value_or(0)) {
+                std::cout << "Successfully cached symbol address." << std::endl;
+            } else {
+                std::cout << "Symbol address caching failed!" << std::endl;
+            }
         } else {
             std::cout << "Failed to resolve symbol 'GetModuleHandleA'." << std::endl;
         }
