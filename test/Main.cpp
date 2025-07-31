@@ -232,6 +232,32 @@ int main() try {
         std::cout << "No PDB found for kernelbase.dll." << std::endl;
     }
 
+    const auto win32kbase_sys = LoadLibraryExA("win32kbase.sys", nullptr, DONT_RESOLVE_DLL_REFERENCES);
+    const auto pdb_path_win32kbase_sys = win32kbase_sys != nullptr ? utility::pdb::get_pdb_path((const uint8_t*)utility::get_module("win32kbase.sys")) : std::nullopt;
+
+    if (pdb_path_win32kbase_sys.has_value()) {
+        std::cout << "PDB path for win32kbase.sys: " << pdb_path_win32kbase_sys.value() << std::endl;
+
+        const auto symbol_address = utility::pdb::get_symbol_address((const uint8_t*)utility::get_module("win32kbase.sys"), "?EmitData@CTurbulenceEffectMarshaler@DirectComposition@@IEAA_NPEAPEAVCBatch@2@@Z");
+
+        if (symbol_address.has_value()) {
+            std::cout << "Resolved symbol '?EmitData@CTurbulenceEffectMarshaler@DirectComposition@@IEAA_NPEAPEAVCBatch@2@@Z' at address: " << std::hex << *symbol_address << std::endl;
+
+            const auto symbol_address_again = utility::pdb::get_symbol_address((const uint8_t*)utility::get_module("win32kbase.sys"), "?EmitData@CTurbulenceEffectMarshaler@DirectComposition@@IEAA_NPEAPEAVCBatch@2@@Z");
+
+            // Make sure caching works
+            if (symbol_address_again.value_or(0) == symbol_address.value_or(0)) {
+                std::cout << "Successfully cached symbol address." << std::endl;
+            } else {
+                std::cout << "Symbol address caching failed!" << std::endl;
+            }
+        } else {
+            std::cout << "Failed to resolve symbol '?EmitData@CTurbulenceEffectMarshaler@DirectComposition@@IEAA_NPEAPEAVCBatch@2@@Z'." << std::endl;
+        }
+    } else {
+        std::cout << "No PDB found for win32kbase.sys." << std::endl;
+    }
+
     const auto hello_world_scan = utility::scan_string(utility::get_executable(), HELLO_WORLD);
     const auto hello_world_scans = utility::scan_strings(utility::get_executable(), HELLO_WORLD);
 
