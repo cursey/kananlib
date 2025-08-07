@@ -697,68 +697,119 @@ std::optional<StructInfo> get_struct_info(const uint8_t* module, std::string_vie
                 ULONGLONG type_size = 0;
                 DWORD type_tag = 0;
                 
-                // Try to get a more descriptive type name
-                if (SUCCEEDED(type_symbol->get_name(&type_name)) && type_name) {
-                    member.type = utility::narrow(std::wstring(type_name));
-                    SysFreeString(type_name);
-                } else {
-                    // If no name, try to deduce from base type
-                    DWORD base_type = 0;
-                    ULONGLONG length = 0;
-                    type_symbol->get_length(&length);
+                // Check if this is a pointer type first
+                if (SUCCEEDED(type_symbol->get_symTag(&type_tag)) && type_tag == SymTagPointerType) {
+                    member.is_pointer = true;
                     
-                    if (SUCCEEDED(type_symbol->get_baseType(&base_type))) {
-                        switch (base_type) {
-                            case btUInt: 
-                                switch (length) {
-                                    case 1: member.type = "unsigned __int8"; break;
-                                    case 2: member.type = "unsigned __int16"; break;
-                                    case 4: member.type = "unsigned __int32"; break;
-                                    case 8: member.type = "unsigned __int64"; break;
-                                    default: member.type = "unsigned int"; break;
+                    // For pointer types, get the pointed-to type
+                    CComPtr<IDiaSymbol> pointed_type;
+                    if (SUCCEEDED(type_symbol->get_type(&pointed_type))) {
+                        BSTR pointed_type_name = nullptr;
+                        if (SUCCEEDED(pointed_type->get_name(&pointed_type_name)) && pointed_type_name) {
+                            member.type = utility::narrow(std::wstring(pointed_type_name));
+                            SysFreeString(pointed_type_name);
+                        } else {
+                            // If pointed type has no name, try to resolve it
+                            DWORD pointed_base_type = 0;
+                            ULONGLONG pointed_length = 0;
+                            pointed_type->get_length(&pointed_length);
+                            
+                            if (SUCCEEDED(pointed_type->get_baseType(&pointed_base_type))) {
+                                switch (pointed_base_type) {
+                                    case btVoid: member.type = "void"; break;
+                                    case btChar: member.type = "char"; break;
+                                    case btWChar: member.type = "wchar_t"; break;
+                                    case btUInt:
+                                        switch (pointed_length) {
+                                            case 1: member.type = "unsigned __int8"; break;
+                                            case 2: member.type = "unsigned __int16"; break;
+                                            case 4: member.type = "unsigned __int32"; break;
+                                            case 8: member.type = "unsigned __int64"; break;
+                                            default: member.type = "unsigned int"; break;
+                                        }
+                                        break;
+                                    case btInt:
+                                        switch (pointed_length) {
+                                            case 1: member.type = "__int8"; break;
+                                            case 2: member.type = "__int16"; break;
+                                            case 4: member.type = "__int32"; break;
+                                            case 8: member.type = "__int64"; break;
+                                            default: member.type = "int"; break;
+                                        }
+                                        break;
+                                    default: member.type = "void"; break;
                                 }
-                                break;
-                            case btInt:
-                                switch (length) {
-                                    case 1: member.type = "__int8"; break;
-                                    case 2: member.type = "__int16"; break;
-                                    case 4: member.type = "__int32"; break;
-                                    case 8: member.type = "__int64"; break;
-                                    default: member.type = "int"; break;
-                                }
-                                break;
-                            case btVoid: member.type = "void"; break;
-                            case btChar: member.type = "char"; break;
-                            case btWChar: member.type = "wchar_t"; break;
-                            case btFloat:
-                                member.type = (length == 4) ? "float" : "double";
-                                break;
-                            case btBool: member.type = "bool"; break;
-                            case btLong: 
-                                member.type = (length == 4) ? "long" : "__int64"; 
-                                break;
-                            case btULong: 
-                                member.type = (length == 4) ? "unsigned long" : "unsigned __int64"; 
-                                break;
-                            default: 
-                                // Try to give a more descriptive name based on size
-                                switch (length) {
-                                    case 1: member.type = "UCHAR"; break;
-                                    case 2: member.type = "USHORT"; break;
-                                    case 4: member.type = "ULONG"; break;
-                                    case 8: member.type = "ULONGLONG"; break;
-                                    default: member.type = "UNKNOWN_TYPE_" + std::to_string(length); break;
-                                }
-                                break;
+                            } else {
+                                member.type = "void";
+                            }
                         }
                     } else {
-                        // No base type info available, use size-based naming
-                        switch (length) {
-                            case 1: member.type = "UCHAR"; break;
-                            case 2: member.type = "USHORT"; break;
-                            case 4: member.type = "ULONG"; break;
-                            case 8: member.type = "ULONGLONG"; break;
-                            default: member.type = "UNKNOWN_TYPE_" + std::to_string(length); break;
+                        member.type = "void";
+                    }
+                } else {
+                    // Not a pointer type, handle normally
+                    if (SUCCEEDED(type_symbol->get_name(&type_name)) && type_name) {
+                        member.type = utility::narrow(std::wstring(type_name));
+                        SysFreeString(type_name);
+                    } else {
+                        // If no name, try to deduce from base type
+                        DWORD base_type = 0;
+                        ULONGLONG length = 0;
+                        type_symbol->get_length(&length);
+                        
+                        if (SUCCEEDED(type_symbol->get_baseType(&base_type))) {
+                            switch (base_type) {
+                                case btUInt: 
+                                    switch (length) {
+                                        case 1: member.type = "unsigned __int8"; break;
+                                        case 2: member.type = "unsigned __int16"; break;
+                                        case 4: member.type = "unsigned __int32"; break;
+                                        case 8: member.type = "unsigned __int64"; break;
+                                        default: member.type = "unsigned int"; break;
+                                    }
+                                    break;
+                                case btInt:
+                                    switch (length) {
+                                        case 1: member.type = "__int8"; break;
+                                        case 2: member.type = "__int16"; break;
+                                        case 4: member.type = "__int32"; break;
+                                        case 8: member.type = "__int64"; break;
+                                        default: member.type = "int"; break;
+                                    }
+                                    break;
+                                case btVoid: member.type = "void"; break;
+                                case btChar: member.type = "char"; break;
+                                case btWChar: member.type = "wchar_t"; break;
+                                case btFloat:
+                                    member.type = (length == 4) ? "float" : "double";
+                                    break;
+                                case btBool: member.type = "bool"; break;
+                                case btLong: 
+                                    member.type = (length == 4) ? "long" : "__int64"; 
+                                    break;
+                                case btULong: 
+                                    member.type = (length == 4) ? "unsigned long" : "unsigned __int64"; 
+                                    break;
+                                default: 
+                                    // Try to give a more descriptive name based on size
+                                    switch (length) {
+                                        case 1: member.type = "UCHAR"; break;
+                                        case 2: member.type = "USHORT"; break;
+                                        case 4: member.type = "ULONG"; break;
+                                        case 8: member.type = "ULONGLONG"; break;
+                                        default: member.type = "UNKNOWN_TYPE_" + std::to_string(length); break;
+                                    }
+                                    break;
+                            }
+                        } else {
+                            // No base type info available, use size-based naming
+                            switch (length) {
+                                case 1: member.type = "UCHAR"; break;
+                                case 2: member.type = "USHORT"; break;
+                                case 4: member.type = "ULONG"; break;
+                                case 8: member.type = "ULONGLONG"; break;
+                                default: member.type = "UNKNOWN_TYPE_" + std::to_string(length); break;
+                            }
                         }
                     }
                 }
@@ -768,7 +819,7 @@ std::optional<StructInfo> get_struct_info(const uint8_t* module, std::string_vie
                 }
 
                 if (SUCCEEDED(type_symbol->get_symTag(&type_tag))) {
-                    member.is_pointer = (type_tag == SymTagPointerType);
+                    // Note: pointer detection is handled above
                     member.is_array = (type_tag == SymTagArrayType);
                     
                     // Get array count if it's an array
@@ -1039,14 +1090,14 @@ std::string generate_c_struct(const StructInfo& struct_info) {
             // Handle type
             std::string type_str = member.type;
             if (type_str.empty()) {
-                type_str = "void*"; // fallback for unknown types
+                type_str = "void"; // fallback for unknown types
             }
             
-            ss << type_str;
-            
             // Add pointer indicator if needed
-            if (member.is_pointer && type_str.find("*") == std::string::npos) {
-                ss << "*";
+            if (member.is_pointer) {
+                ss << type_str << "*";
+            } else {
+                ss << type_str;
             }
             
             ss << " " << member.name;
