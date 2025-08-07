@@ -12,11 +12,11 @@ namespace utility::pdb {
     struct StructMember {
         std::string name;
         std::string type;
-        uint32_t offset;
-        uint32_t size;
-        bool is_pointer;
-        bool is_array;
-        uint32_t array_count;
+        uint32_t offset = 0;
+        uint32_t size = 0;
+        bool is_pointer = false;
+        bool is_array = false;
+        uint32_t array_count = 0;
         bool is_bitfield = false;
         uint32_t bit_position = 0;
         uint32_t bit_length = 0;

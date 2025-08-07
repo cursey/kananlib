@@ -677,6 +677,14 @@ std::optional<StructInfo> get_struct_info(const uint8_t* module, std::string_vie
         while (SUCCEEDED(enum_members->Next(1, &member_symbol, &member_celt)) && member_celt == 1) {
             StructMember member;
             
+            // Initialize all flags explicitly to avoid garbage values
+            member.is_pointer = false;
+            member.is_array = false;
+            member.array_count = 0;
+            member.is_bitfield = false;
+            member.bit_position = 0;
+            member.bit_length = 0;
+            
             // Get member name
             BSTR member_name = nullptr;
             if (SUCCEEDED(member_symbol->get_name(&member_name)) && member_name) {
@@ -697,11 +705,21 @@ std::optional<StructInfo> get_struct_info(const uint8_t* module, std::string_vie
                 ULONGLONG type_size = 0;
                 DWORD type_tag = 0;
                 
-                // Check if this is a pointer type first
-                if (SUCCEEDED(type_symbol->get_symTag(&type_tag)) && type_tag == SymTagPointerType) {
+                // Get basic type information first
+                type_symbol->get_length(&type_size);
+                member.size = static_cast<uint32_t>(type_size);
+                
+                // Get the type tag to determine what kind of type this is
+                type_symbol->get_symTag(&type_tag);
+                
+                SPDLOG_DEBUG("Member '{}': type_tag={}, size={}", member.name, type_tag, type_size);
+                
+                if (type_tag == SymTagPointerType) {
+                    // This is a pointer type - ONLY set pointer flag, leave array flag false
                     member.is_pointer = true;
+                    member.is_array = false;
                     
-                    // For pointer types, get the pointed-to type
+                    // Get the pointed-to type
                     CComPtr<IDiaSymbol> pointed_type;
                     if (SUCCEEDED(type_symbol->get_type(&pointed_type))) {
                         BSTR pointed_type_name = nullptr;
@@ -709,18 +727,39 @@ std::optional<StructInfo> get_struct_info(const uint8_t* module, std::string_vie
                             member.type = utility::narrow(std::wstring(pointed_type_name));
                             SysFreeString(pointed_type_name);
                         } else {
-                            // If pointed type has no name, try to resolve it
-                            DWORD pointed_base_type = 0;
-                            ULONGLONG pointed_length = 0;
-                            pointed_type->get_length(&pointed_length);
+                            member.type = "void"; // fallback for unnamed pointed type
+                        }
+                    } else {
+                        member.type = "void";
+                    }
+                } else if (type_tag == SymTagArrayType) {
+                    // This is an array type - ONLY set array flag, leave pointer flag false
+                    member.is_pointer = false;
+                    member.is_array = true;
+                    
+                    // Get array count
+                    DWORD array_count = 0;
+                    if (SUCCEEDED(type_symbol->get_count(&array_count))) {
+                        member.array_count = array_count;
+                    }
+                    
+                    // Get the array element type
+                    CComPtr<IDiaSymbol> element_type;
+                    if (SUCCEEDED(type_symbol->get_type(&element_type))) {
+                        BSTR element_type_name = nullptr;
+                        if (SUCCEEDED(element_type->get_name(&element_type_name)) && element_type_name) {
+                            member.type = utility::narrow(std::wstring(element_type_name));
+                            SysFreeString(element_type_name);
+                        } else {
+                            // Try to resolve element type by base type
+                            DWORD element_base_type = 0;
+                            ULONGLONG element_length = 0;
+                            element_type->get_length(&element_length);
                             
-                            if (SUCCEEDED(pointed_type->get_baseType(&pointed_base_type))) {
-                                switch (pointed_base_type) {
-                                    case btVoid: member.type = "void"; break;
-                                    case btChar: member.type = "char"; break;
-                                    case btWChar: member.type = "wchar_t"; break;
+                            if (SUCCEEDED(element_type->get_baseType(&element_base_type))) {
+                                switch (element_base_type) {
                                     case btUInt:
-                                        switch (pointed_length) {
+                                        switch (element_length) {
                                             case 1: member.type = "unsigned __int8"; break;
                                             case 2: member.type = "unsigned __int16"; break;
                                             case 4: member.type = "unsigned __int32"; break;
@@ -729,7 +768,7 @@ std::optional<StructInfo> get_struct_info(const uint8_t* module, std::string_vie
                                         }
                                         break;
                                     case btInt:
-                                        switch (pointed_length) {
+                                        switch (element_length) {
                                             case 1: member.type = "__int8"; break;
                                             case 2: member.type = "__int16"; break;
                                             case 4: member.type = "__int32"; break;
@@ -737,30 +776,30 @@ std::optional<StructInfo> get_struct_info(const uint8_t* module, std::string_vie
                                             default: member.type = "int"; break;
                                         }
                                         break;
-                                    default: member.type = "void"; break;
+                                    case btChar: member.type = "char"; break;
+                                    default: member.type = "unsigned __int8"; break;
                                 }
                             } else {
-                                member.type = "void";
+                                member.type = "unsigned __int8";
                             }
                         }
-                    } else {
-                        member.type = "void";
                     }
                 } else {
-                    // Not a pointer type, handle normally
+                    // Regular type (struct, union, basic type, etc.) - NOT a pointer or array
+                    member.is_pointer = false;
+                    member.is_array = false;
+                    
+                    // Try to get the type name first
                     if (SUCCEEDED(type_symbol->get_name(&type_name)) && type_name) {
                         member.type = utility::narrow(std::wstring(type_name));
                         SysFreeString(type_name);
                     } else {
-                        // If no name, try to deduce from base type
+                        // If no type name, try to resolve by base type
                         DWORD base_type = 0;
-                        ULONGLONG length = 0;
-                        type_symbol->get_length(&length);
-                        
                         if (SUCCEEDED(type_symbol->get_baseType(&base_type))) {
                             switch (base_type) {
                                 case btUInt: 
-                                    switch (length) {
+                                    switch (type_size) {
                                         case 1: member.type = "unsigned __int8"; break;
                                         case 2: member.type = "unsigned __int16"; break;
                                         case 4: member.type = "unsigned __int32"; break;
@@ -769,7 +808,7 @@ std::optional<StructInfo> get_struct_info(const uint8_t* module, std::string_vie
                                     }
                                     break;
                                 case btInt:
-                                    switch (length) {
+                                    switch (type_size) {
                                         case 1: member.type = "__int8"; break;
                                         case 2: member.type = "__int16"; break;
                                         case 4: member.type = "__int32"; break;
@@ -777,56 +816,33 @@ std::optional<StructInfo> get_struct_info(const uint8_t* module, std::string_vie
                                         default: member.type = "int"; break;
                                     }
                                     break;
-                                case btVoid: member.type = "void"; break;
                                 case btChar: member.type = "char"; break;
                                 case btWChar: member.type = "wchar_t"; break;
-                                case btFloat:
-                                    member.type = (length == 4) ? "float" : "double";
-                                    break;
+                                case btFloat: member.type = (type_size == 4) ? "float" : "double"; break;
                                 case btBool: member.type = "bool"; break;
-                                case btLong: 
-                                    member.type = (length == 4) ? "long" : "__int64"; 
-                                    break;
-                                case btULong: 
-                                    member.type = (length == 4) ? "unsigned long" : "unsigned __int64"; 
-                                    break;
+                                case btVoid: member.type = "void"; break;
+                                case btLong: member.type = (type_size == 4) ? "long" : "__int64"; break;
+                                case btULong: member.type = (type_size == 4) ? "unsigned long" : "unsigned __int64"; break;
                                 default: 
-                                    // Try to give a more descriptive name based on size
-                                    switch (length) {
+                                    // Unknown base type, use size-based fallback
+                                    switch (type_size) {
                                         case 1: member.type = "UCHAR"; break;
                                         case 2: member.type = "USHORT"; break;
                                         case 4: member.type = "ULONG"; break;
                                         case 8: member.type = "ULONGLONG"; break;
-                                        default: member.type = "UNKNOWN_TYPE_" + std::to_string(length); break;
+                                        default: member.type = "UNKNOWN_TYPE_" + std::to_string(type_size); break;
                                     }
                                     break;
                             }
                         } else {
-                            // No base type info available, use size-based naming
-                            switch (length) {
+                            // No base type, use size-based fallback
+                            switch (type_size) {
                                 case 1: member.type = "UCHAR"; break;
                                 case 2: member.type = "USHORT"; break;
                                 case 4: member.type = "ULONG"; break;
                                 case 8: member.type = "ULONGLONG"; break;
-                                default: member.type = "UNKNOWN_TYPE_" + std::to_string(length); break;
+                                default: member.type = "UNKNOWN_TYPE_" + std::to_string(type_size); break;
                             }
-                        }
-                    }
-                }
-                
-                if (SUCCEEDED(type_symbol->get_length(&type_size))) {
-                    member.size = static_cast<uint32_t>(type_size);
-                }
-
-                if (SUCCEEDED(type_symbol->get_symTag(&type_tag))) {
-                    // Note: pointer detection is handled above
-                    member.is_array = (type_tag == SymTagArrayType);
-                    
-                    // Get array count if it's an array
-                    if (member.is_array) {
-                        DWORD array_count = 0;
-                        if (SUCCEEDED(type_symbol->get_count(&array_count))) {
-                            member.array_count = array_count;
                         }
                     }
                 }
@@ -956,18 +972,8 @@ std::vector<std::string> enumerate_structs(const uint8_t* module, size_t max_str
             
             std::wstring struct_name_found(name);
             std::string narrow_name = utility::narrow(struct_name_found);
-            
-            // Filter by UDT kind (struct, class, union)
-            std::string kind_str;
-            switch (udt_kind) {
-                case UdtStruct: kind_str = "struct"; break;
-                case UdtClass: kind_str = "class"; break;
-                case UdtUnion: kind_str = "union"; break;
-                default: kind_str = "unknown"; break;
-            }
-            
-            std::string struct_info = narrow_name + " (" + kind_str + ", " + std::to_string(struct_size) + " bytes)";
-            structs.push_back(struct_info);
+
+            structs.push_back(narrow_name);
             count++;
             
             SysFreeString(name);

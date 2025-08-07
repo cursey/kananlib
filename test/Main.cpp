@@ -279,6 +279,14 @@ int main() try {
     if (ntdll_pdb_path.has_value()) {
         std::cout << "PDB path for ntdll.dll: " << ntdll_pdb_path.value() << std::endl;
 
+        const auto structs = utility::pdb::enumerate_structs((const uint8_t*)utility::get_module("ntdll.dll"), 10000);
+
+        std::cout << "Enumerated " << structs.size() << " structures in ntdll.dll:" << std::endl;
+
+        for (const auto& struct_name : structs) {
+            std::cout << "Structure: " << struct_name << std::endl;
+        }
+
         // Try to dump _LIST_ENTRY structure from ntdll.dll
         const auto struct_info = utility::pdb::get_struct_info((const uint8_t*)utility::get_module("ntdll.dll"), "_LIST_ENTRY");
 
