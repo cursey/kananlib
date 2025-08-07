@@ -3,6 +3,8 @@
 #include <iomanip>
 #include <sstream>
 #include <fstream>
+#include <algorithm>
+#include <map>
 #include <spdlog/spdlog.h>
 
 #include <Windows.h>
@@ -589,4 +591,491 @@ std::vector<std::string> enumerate_symbols(const uint8_t* module, size_t max_sym
 
     return symbols;
 }
+
+std::optional<StructInfo> get_struct_info(const uint8_t* module, std::string_view struct_name) {
+    if (module == nullptr) {
+        SPDLOG_ERROR("Invalid module pointer");
+        return std::nullopt;
+    }
+
+#ifdef KANANLIB_USE_DIA_SDK
+    ensure_com_initialized();
+
+    // get PDB path
+    auto pdb_path_opt = get_pdb_path(module);
+    if (!pdb_path_opt) {
+        SPDLOG_ERROR("Failed to get PDB path for module");
+        return std::nullopt;
+    }
+
+    std::string pdb_path = *pdb_path_opt;
+
+    // load PDB using DIA SDK
+    CComPtr<IDiaDataSource> data_source;
+    HRESULT hr = CoCreateInstance(CLSID_DiaSource, NULL, CLSCTX_INPROC_SERVER, __uuidof(IDiaDataSource), (void**)&data_source);
+    if (FAILED(hr)) {
+        SPDLOG_ERROR("Failed to create DIA data source (HRESULT: 0x{:08X})", hr);
+        return std::nullopt;
+    }
+
+    std::wstring wide_pdb_path = utility::widen(pdb_path);
+    hr = data_source->loadDataFromPdb(wide_pdb_path.c_str());
+    if (FAILED(hr)) {
+        SPDLOG_ERROR("Failed to load PDB file: {} (HRESULT: 0x{:08X})", pdb_path, hr);
+        return std::nullopt;
+    }
+
+    CComPtr<IDiaSession> session;
+    hr = data_source->openSession(&session);
+    if (FAILED(hr)) {
+        SPDLOG_ERROR("Failed to open DIA session (HRESULT: 0x{:08X})", hr);
+        return std::nullopt;
+    }
+
+    CComPtr<IDiaSymbol> global_scope;
+    hr = session->get_globalScope(&global_scope);
+    if (FAILED(hr)) {
+        SPDLOG_ERROR("Failed to get global scope (HRESULT: 0x{:08X})", hr);
+        return std::nullopt;
+    }
+
+    // Search for the structure
+    std::wstring wide_struct_name = utility::widen(struct_name);
+    CComPtr<IDiaEnumSymbols> enum_symbols;
+    hr = global_scope->findChildren(SymTagUDT, wide_struct_name.c_str(), nsCaseInsensitive, &enum_symbols);
+    if (FAILED(hr)) {
+        SPDLOG_ERROR("Failed to find UDT symbols (HRESULT: 0x{:08X})", hr);
+        return std::nullopt;
+    }
+
+    CComPtr<IDiaSymbol> struct_symbol;
+    ULONG celt = 0;
+    
+    if (FAILED(enum_symbols->Next(1, &struct_symbol, &celt)) || celt != 1) {
+        SPDLOG_ERROR("Structure '{}' not found in PDB", struct_name);
+        return std::nullopt;
+    }
+
+    StructInfo struct_info;
+    struct_info.name = std::string(struct_name);
+
+    // Get structure size
+    ULONGLONG struct_size = 0;
+    if (SUCCEEDED(struct_symbol->get_length(&struct_size))) {
+        struct_info.size = static_cast<uint32_t>(struct_size);
+    }
+
+    SPDLOG_INFO("Found structure '{}' with size {} bytes", struct_name, struct_info.size);
+
+    // Enumerate structure members
+    CComPtr<IDiaEnumSymbols> enum_members;
+    hr = struct_symbol->findChildren(SymTagData, NULL, nsNone, &enum_members);
+    if (SUCCEEDED(hr)) {
+        CComPtr<IDiaSymbol> member_symbol;
+        ULONG member_celt = 0;
+        
+        while (SUCCEEDED(enum_members->Next(1, &member_symbol, &member_celt)) && member_celt == 1) {
+            StructMember member;
+            
+            // Get member name
+            BSTR member_name = nullptr;
+            if (SUCCEEDED(member_symbol->get_name(&member_name)) && member_name) {
+                member.name = utility::narrow(std::wstring(member_name));
+                SysFreeString(member_name);
+            }
+
+            // Get member offset
+            LONG member_offset = 0;
+            if (SUCCEEDED(member_symbol->get_offset(&member_offset))) {
+                member.offset = static_cast<uint32_t>(member_offset);
+            }
+
+            // Get member type information
+            CComPtr<IDiaSymbol> type_symbol;
+            if (SUCCEEDED(member_symbol->get_type(&type_symbol))) {
+                BSTR type_name = nullptr;
+                ULONGLONG type_size = 0;
+                DWORD type_tag = 0;
+                
+                // Try to get a more descriptive type name
+                if (SUCCEEDED(type_symbol->get_name(&type_name)) && type_name) {
+                    member.type = utility::narrow(std::wstring(type_name));
+                    SysFreeString(type_name);
+                } else {
+                    // If no name, try to deduce from base type
+                    DWORD base_type = 0;
+                    ULONGLONG length = 0;
+                    type_symbol->get_length(&length);
+                    
+                    if (SUCCEEDED(type_symbol->get_baseType(&base_type))) {
+                        switch (base_type) {
+                            case btUInt: 
+                                switch (length) {
+                                    case 1: member.type = "unsigned __int8"; break;
+                                    case 2: member.type = "unsigned __int16"; break;
+                                    case 4: member.type = "unsigned __int32"; break;
+                                    case 8: member.type = "unsigned __int64"; break;
+                                    default: member.type = "unsigned int"; break;
+                                }
+                                break;
+                            case btInt:
+                                switch (length) {
+                                    case 1: member.type = "__int8"; break;
+                                    case 2: member.type = "__int16"; break;
+                                    case 4: member.type = "__int32"; break;
+                                    case 8: member.type = "__int64"; break;
+                                    default: member.type = "int"; break;
+                                }
+                                break;
+                            case btVoid: member.type = "void"; break;
+                            case btChar: member.type = "char"; break;
+                            case btWChar: member.type = "wchar_t"; break;
+                            case btFloat:
+                                member.type = (length == 4) ? "float" : "double";
+                                break;
+                            case btBool: member.type = "bool"; break;
+                            case btLong: 
+                                member.type = (length == 4) ? "long" : "__int64"; 
+                                break;
+                            case btULong: 
+                                member.type = (length == 4) ? "unsigned long" : "unsigned __int64"; 
+                                break;
+                            default: 
+                                // Try to give a more descriptive name based on size
+                                switch (length) {
+                                    case 1: member.type = "UCHAR"; break;
+                                    case 2: member.type = "USHORT"; break;
+                                    case 4: member.type = "ULONG"; break;
+                                    case 8: member.type = "ULONGLONG"; break;
+                                    default: member.type = "UNKNOWN_TYPE_" + std::to_string(length); break;
+                                }
+                                break;
+                        }
+                    } else {
+                        // No base type info available, use size-based naming
+                        switch (length) {
+                            case 1: member.type = "UCHAR"; break;
+                            case 2: member.type = "USHORT"; break;
+                            case 4: member.type = "ULONG"; break;
+                            case 8: member.type = "ULONGLONG"; break;
+                            default: member.type = "UNKNOWN_TYPE_" + std::to_string(length); break;
+                        }
+                    }
+                }
+                
+                if (SUCCEEDED(type_symbol->get_length(&type_size))) {
+                    member.size = static_cast<uint32_t>(type_size);
+                }
+
+                if (SUCCEEDED(type_symbol->get_symTag(&type_tag))) {
+                    member.is_pointer = (type_tag == SymTagPointerType);
+                    member.is_array = (type_tag == SymTagArrayType);
+                    
+                    // Get array count if it's an array
+                    if (member.is_array) {
+                        DWORD array_count = 0;
+                        if (SUCCEEDED(type_symbol->get_count(&array_count))) {
+                            member.array_count = array_count;
+                        }
+                    }
+                }
+            }
+
+            // Check for bitfield information
+            DWORD bit_position = 0;
+            ULONGLONG bit_length = 0;
+            bool is_bitfield = false;
+            
+            // A member is a bitfield if:
+            // 1. We can get bit position and length successfully
+            // 2. The bit length is > 0 and < size * 8 (not the full storage unit)
+            // 3. OR if bit_position > 0 (indicating it starts mid-byte)
+            if (SUCCEEDED(member_symbol->get_bitPosition(&bit_position)) &&
+                SUCCEEDED(member_symbol->get_length(&bit_length))) {
+                
+                if (bit_length > 0 && (bit_length < member.size * 8 || bit_position > 0)) {
+                    is_bitfield = true;
+                }
+            }
+
+            if (is_bitfield) {
+                SPDLOG_DEBUG("Bitfield Member: {} {} at offset 0x{:X}.{} (bit length: {}, size: {})", 
+                            member.type, member.name, member.offset, bit_position, bit_length, member.size);
+                
+                // Store bitfield information in the member
+                member.is_bitfield = true;
+                member.bit_position = bit_position;
+                member.bit_length = static_cast<uint32_t>(bit_length);
+            } else {
+                SPDLOG_DEBUG("Member: {} {} at offset 0x{:X} (size: {})", 
+                            member.type, member.name, member.offset, member.size);
+            }
+            
+            struct_info.members.push_back(member);
+            member_symbol.Release();
+        }
+    }
+
+    return struct_info;
+#else
+    SPDLOG_ERROR("Structure analysis not supported: kananlib was compiled without DIA SDK support");
+    return std::nullopt;
+#endif
+}
+
+std::vector<std::string> enumerate_structs(const uint8_t* module, size_t max_structs) {
+    std::vector<std::string> structs;
+    
+    if (module == nullptr) {
+        SPDLOG_ERROR("Invalid module pointer");
+        return structs;
+    }
+
+#ifdef KANANLIB_USE_DIA_SDK
+    ensure_com_initialized();
+
+    // get PDB path
+    auto pdb_path_opt = get_pdb_path(module);
+    if (!pdb_path_opt) {
+        SPDLOG_ERROR("Failed to get PDB path for module");
+        return structs;
+    }
+
+    std::string pdb_path = *pdb_path_opt;
+
+    // load PDB using DIA SDK
+    CComPtr<IDiaDataSource> data_source;
+    HRESULT hr = CoCreateInstance(CLSID_DiaSource, NULL, CLSCTX_INPROC_SERVER, __uuidof(IDiaDataSource), (void**)&data_source);
+    if (FAILED(hr)) {
+        SPDLOG_ERROR("Failed to create DIA data source (HRESULT: 0x{:08X})", hr);
+        return structs;
+    }
+
+    std::wstring wide_pdb_path = utility::widen(pdb_path);
+    hr = data_source->loadDataFromPdb(wide_pdb_path.c_str());
+    if (FAILED(hr)) {
+        SPDLOG_ERROR("Failed to load PDB file: {} (HRESULT: 0x{:08X})", pdb_path, hr);
+        return structs;
+    }
+
+    CComPtr<IDiaSession> session;
+    hr = data_source->openSession(&session);
+    if (FAILED(hr)) {
+        SPDLOG_ERROR("Failed to open DIA session (HRESULT: 0x{:08X})", hr);
+        return structs;
+    }
+
+    CComPtr<IDiaSymbol> global_scope;
+    hr = session->get_globalScope(&global_scope);
+    if (FAILED(hr)) {
+        SPDLOG_ERROR("Failed to get global scope (HRESULT: 0x{:08X})", hr);
+        return structs;
+    }
+
+    // Enumerate all UDT (User Defined Types) symbols
+    CComPtr<IDiaEnumSymbols> enum_symbols;
+    hr = global_scope->findChildren(SymTagUDT, NULL, nsNone, &enum_symbols);
+    if (FAILED(hr)) {
+        SPDLOG_ERROR("Failed to enumerate UDT symbols (HRESULT: 0x{:08X})", hr);
+        return structs;
+    }
+
+    // Check total count of UDT symbols
+    LONG total_udt_count = 0;
+    if (SUCCEEDED(enum_symbols->get_Count(&total_udt_count))) {
+        SPDLOG_INFO("Total UDT symbols found in PDB: {}", total_udt_count);
+    } else {
+        SPDLOG_WARN("Could not get UDT symbol count");
+    }
+
+    CComPtr<IDiaSymbol> symbol;
+    ULONG celt = 0;
+    size_t count = 0;
+
+    SPDLOG_INFO("Enumerating up to {} structures from PDB...", max_structs);
+
+    while (SUCCEEDED(enum_symbols->Next(1, &symbol, &celt)) && celt == 1 && count < max_structs) {
+        BSTR name = nullptr;
+        ULONGLONG struct_size = 0;
+        DWORD udt_kind = 0;
+        
+        if (SUCCEEDED(symbol->get_name(&name)) && name &&
+            SUCCEEDED(symbol->get_length(&struct_size)) &&
+            SUCCEEDED(symbol->get_udtKind(&udt_kind))) {
+            
+            std::wstring struct_name_found(name);
+            std::string narrow_name = utility::narrow(struct_name_found);
+            
+            // Filter by UDT kind (struct, class, union)
+            std::string kind_str;
+            switch (udt_kind) {
+                case UdtStruct: kind_str = "struct"; break;
+                case UdtClass: kind_str = "class"; break;
+                case UdtUnion: kind_str = "union"; break;
+                default: kind_str = "unknown"; break;
+            }
+            
+            std::string struct_info = narrow_name + " (" + kind_str + ", " + std::to_string(struct_size) + " bytes)";
+            structs.push_back(struct_info);
+            count++;
+            
+            SysFreeString(name);
+        }
+        
+        symbol.Release();
+    }
+
+    SPDLOG_INFO("Found {} structures in PDB", structs.size());
+    
+    // If we didn't find any structures, let's see what other symbol types are available
+    if (structs.empty()) {
+        SPDLOG_WARN("No UDT structures found. Checking what symbol types are available...");
+        
+        // Try to enumerate all symbol types to see what's available
+        CComPtr<IDiaEnumSymbols> all_symbols;
+        hr = global_scope->findChildren(SymTagNull, NULL, nsNone, &all_symbols);
+        if (SUCCEEDED(hr)) {
+            LONG total_symbols = 0;
+            if (SUCCEEDED(all_symbols->get_Count(&total_symbols))) {
+                SPDLOG_INFO("Total symbols of all types: {}", total_symbols);
+            }
+            
+            // Sample first few symbols to see their types
+            CComPtr<IDiaSymbol> sample_symbol;
+            ULONG sample_celt = 0;
+            size_t samples_checked = 0;
+            std::map<DWORD, int> symbol_type_counts;
+            
+            while (SUCCEEDED(all_symbols->Next(1, &sample_symbol, &sample_celt)) && 
+                   sample_celt == 1 && samples_checked < 100) {
+                DWORD sym_tag = 0;
+                if (SUCCEEDED(sample_symbol->get_symTag(&sym_tag))) {
+                    symbol_type_counts[sym_tag]++;
+                }
+                sample_symbol.Release();
+                samples_checked++;
+            }
+            
+            SPDLOG_INFO("Symbol type distribution (first 100 symbols):");
+            for (const auto& [tag, count] : symbol_type_counts) {
+                std::string tag_name;
+                switch (tag) {
+                    case SymTagFunction: tag_name = "Function"; break;
+                    case SymTagData: tag_name = "Data"; break;
+                    case SymTagPublicSymbol: tag_name = "PublicSymbol"; break;
+                    case SymTagUDT: tag_name = "UDT"; break;
+                    case SymTagEnum: tag_name = "Enum"; break;
+                    case SymTagTypedef: tag_name = "Typedef"; break;
+                    default: tag_name = "Tag" + std::to_string(tag); break;
+                }
+                SPDLOG_INFO("  {}: {}", tag_name, count);
+            }
+        }
+    }
+#else
+    SPDLOG_ERROR("Structure enumeration not supported: kananlib was compiled without DIA SDK support");
+#endif
+
+    return structs;
+}
+
+std::string generate_c_struct(const StructInfo& struct_info) {
+    std::stringstream ss;
+    
+    ss << "typedef struct {\n";
+    
+    // Sort members by offset to ensure correct order
+    auto sorted_members = struct_info.members;
+    std::sort(sorted_members.begin(), sorted_members.end(), 
+              [](const StructMember& a, const StructMember& b) {
+                  return a.offset < b.offset;
+              });
+    
+    uint32_t current_offset = 0;
+    uint32_t current_bitfield_offset = UINT32_MAX; // Track current bitfield group
+    
+    for (const auto& member : sorted_members) {
+        // Handle bitfields specially
+        if (member.is_bitfield && member.bit_length > 0) {
+            // If this is a new bitfield group (different offset), add padding if needed
+            if (member.offset != current_bitfield_offset) {
+                // Add padding if there's a gap before this bitfield
+                if (member.offset > current_offset) {
+                    uint32_t padding_size = member.offset - current_offset;
+                    ss << "    char _padding_0x" << std::hex << current_offset 
+                       << "[0x" << std::hex << padding_size << "]; // Padding\n";
+                }
+                current_bitfield_offset = member.offset;
+            }
+            
+            // Generate bitfield member
+            ss << "    ";
+            
+            // Handle type
+            std::string type_str = member.type;
+            if (type_str.empty()) {
+                type_str = "unsigned __int32"; // default for bitfields
+            }
+            
+            ss << type_str << " " << member.name << " : " << std::dec << member.bit_length;
+            ss << "; // 0x" << std::hex << member.offset << "." << std::dec << member.bit_position;
+            ss << " (bit length: " << member.bit_length << ")\n";
+            
+            // Update current_offset to the end of this bitfield's storage unit
+            current_offset = member.offset + member.size;
+        } else {
+            // Handle regular (non-bitfield) members
+            
+            // Add padding if there's a gap
+            if (member.offset > current_offset) {
+                uint32_t padding_size = member.offset - current_offset;
+                ss << "    char _padding_0x" << std::hex << current_offset 
+                   << "[0x" << std::hex << padding_size << "]; // Padding\n";
+            }
+            
+            // Add member
+            ss << "    ";
+            
+            // Handle type
+            std::string type_str = member.type;
+            if (type_str.empty()) {
+                type_str = "void*"; // fallback for unknown types
+            }
+            
+            ss << type_str;
+            
+            // Add pointer indicator if needed
+            if (member.is_pointer && type_str.find("*") == std::string::npos) {
+                ss << "*";
+            }
+            
+            ss << " " << member.name;
+            
+            // Add array indicator if needed
+            if (member.is_array && member.array_count > 0) {
+                ss << "[" << std::dec << member.array_count << "]";
+            }
+            
+            ss << "; // 0x" << std::hex << member.offset;
+            if (member.size > 0) {
+                ss << " (size: 0x" << std::hex << member.size << ")";
+            }
+            ss << "\n";
+            
+            current_offset = member.offset + (member.size > 0 ? member.size : 1);
+            current_bitfield_offset = UINT32_MAX; // Reset bitfield tracking
+        }
+    }
+    
+    // Add final padding if needed
+    if (current_offset < struct_info.size) {
+        uint32_t final_padding = struct_info.size - current_offset;
+        ss << "    char _padding_final[0x" << std::hex << final_padding << "]; // Final padding\n";
+    }
+    
+    ss << "} " << struct_info.name << "; // Total size: 0x" << std::hex << struct_info.size << " (" << std::dec << struct_info.size << " bytes)\n";
+    
+    return ss.str();
+}
+
 }

@@ -2,6 +2,7 @@
 #include <string>
 #include <iostream>
 #include <random>
+#include <algorithm>
 
 #include <utility/Logging.hpp>
 
@@ -206,10 +207,10 @@ int main() try {
         std::cout << "No PDB found." << std::endl;
     }
 
-    const auto pdb_path_kernel32 = utility::pdb::get_pdb_path((const uint8_t*)utility::get_module("kernelbase.dll"));
+    const auto pdb_path_kernelbase = utility::pdb::get_pdb_path((const uint8_t*)utility::get_module("kernelbase.dll"));
 
-    if (pdb_path_kernel32.has_value()) {
-        std::cout << "PDB path for kernelbase.dll: " << pdb_path_kernel32.value() << std::endl;
+    if (pdb_path_kernelbase.has_value()) {
+        std::cout << "PDB path for kernelbase.dll: " << pdb_path_kernelbase.value() << std::endl;
 
         // Check if we can resolve a symbol from kernelbase.dll
         const auto symbol_address = utility::pdb::get_symbol_address((const uint8_t*)utility::get_module("kernelbase.dll"), "GetModuleHandleA");
@@ -230,6 +231,14 @@ int main() try {
         }
     } else {
         std::cout << "No PDB found for kernelbase.dll." << std::endl;
+    }
+
+    const auto pdb_path_kernel32 = utility::pdb::get_pdb_path((const uint8_t*)utility::get_module("kernel32.dll"));
+
+    if (pdb_path_kernel32.has_value()) {
+        std::cout << "PDB path for kernel32.dll: " << pdb_path_kernel32.value() << std::endl;
+    } else {
+        std::cout << "No PDB found for kernel32.dll." << std::endl;
     }
 
     const auto win32kbase_sys = LoadLibraryExA("win32kbase.sys", nullptr, DONT_RESOLVE_DLL_REFERENCES);
@@ -254,8 +263,45 @@ int main() try {
         } else {
             std::cout << "Failed to resolve symbol '?EmitData@CTurbulenceEffectMarshaler@DirectComposition@@IEAA_NPEAPEAVCBatch@2@@Z'." << std::endl;
         }
+
+        const auto structs = utility::pdb::enumerate_structs((const uint8_t*)utility::get_module("win32kbase.sys"));
+
+        std::cout << "Enumerated " << structs.size() << " structures in win32kbase.sys:" << std::endl;
+        for (const auto& struct_name : structs) {
+            std::cout << "Structure: " << struct_name << std::endl;
+        }
     } else {
         std::cout << "No PDB found for win32kbase.sys." << std::endl;
+    }
+
+    const auto ntdll_pdb_path = utility::pdb::get_pdb_path((const uint8_t*)utility::get_module("ntdll.dll"));
+
+    if (ntdll_pdb_path.has_value()) {
+        std::cout << "PDB path for ntdll.dll: " << ntdll_pdb_path.value() << std::endl;
+
+        // Try to dump _LIST_ENTRY structure from ntdll.dll
+        const auto struct_info = utility::pdb::get_struct_info((const uint8_t*)utility::get_module("ntdll.dll"), "_LIST_ENTRY");
+
+        if (struct_info.has_value()) {
+            std::cout << "Found structure '_LIST_ENTRY' in ntdll.dll:" << std::endl;
+            std::cout << "Name: " << struct_info->name << ", Size: " << struct_info->size << std::endl;
+
+            for (const auto& member : struct_info->members) {
+                std::cout << "Member: " << member.name << ", Type: " << member.type
+                          << ", Offset: " << member.offset << ", Size: " << member.size
+                          << ", Is Pointer: " << (member.is_pointer ? "Yes" : "No")
+                          << ", Is Array: " << (member.is_array ? "Yes" : "No")
+                          << ", Array Count: " << member.array_count << std::endl;
+            }
+
+            // Generate C struct definition
+            const auto c_struct = utility::pdb::generate_c_struct(*struct_info);
+            std::cout << "Generated C struct definition:\n" << c_struct << std::endl;
+        } else {
+            std::cout << "Failed to retrieve structure '_LIST_ENTRY'." << std::endl;
+        }
+    } else {
+        std::cout << "No PDB found for ntdll.dll." << std::endl;
     }
 
     const auto hello_world_scan = utility::scan_string(utility::get_executable(), HELLO_WORLD);
