@@ -97,7 +97,7 @@ std::optional<std::string> get_pdb_path(const uint8_t* module) {
         return std::nullopt;
     }
 
-    auto debug_data = reinterpret_cast<const IMAGE_DEBUG_DIRECTORY*>(module + debug_directory.VirtualAddress);
+    auto debug_data = reinterpret_cast<const IMAGE_DEBUG_DIRECTORY*>(is_memory_module ? module + debug_directory.VirtualAddress : (uint8_t*)utility::ptr_from_rva(module, debug_directory.VirtualAddress).value_or(0));
     auto num_entries = debug_directory.Size / sizeof(IMAGE_DEBUG_DIRECTORY);
     
     for (size_t i = 0; i < num_entries; ++i) {

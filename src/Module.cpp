@@ -508,7 +508,7 @@ namespace utility {
         SPDLOG_ERROR("Unexpected error in spoof_module_paths_in_exe_dir. Continuing...");
     }
 
-    optional<uintptr_t> ptr_from_rva(uint8_t* dll, uintptr_t rva) {
+    optional<uintptr_t> ptr_from_rva(const uint8_t* dll, uintptr_t rva) {
         // Get the first section.
         auto dosHeader = (PIMAGE_DOS_HEADER)&dll[0];
         auto ntHeaders = (PIMAGE_NT_HEADERS)&dll[dosHeader->e_lfanew];
