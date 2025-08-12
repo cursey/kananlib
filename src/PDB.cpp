@@ -5,7 +5,6 @@
 #include <fstream>
 #include <algorithm>
 #include <map>
-#include <spdlog/spdlog.h>
 
 #include <Windows.h>
 #include <urlmon.h>
@@ -20,6 +19,7 @@
 #include <utility/PDB.hpp>
 #include <utility/String.hpp>
 #include <utility/Module.hpp>
+#include <utility/Logging.hpp>
 
 #pragma comment(lib, "urlmon.lib")
 
