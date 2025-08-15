@@ -172,9 +172,26 @@ namespace utility {
 
         const auto module_size = get_module_size(module).value_or(0);
         auto end = (uintptr_t*)((uintptr_t)module + module_size);
+        auto it = (uintptr_t*)module;
 
-        if (auto it = std::find((uintptr_t*)module, end, ptr); it != end) {
-            return (uintptr_t)it;
+        // just making use of the try catch + while to get through unreadable pages
+        while (it < end) try {
+            it = std::find(it, end, ptr);
+
+            if (it != end) {
+                return (uintptr_t)it;
+            }
+
+            ++it;
+        } catch(...) {
+            MEMORY_BASIC_INFORMATION mbi{};
+            if (VirtualQuery(it, &mbi, sizeof(mbi)) != 0) {
+                it = (uintptr_t*)((uintptr_t)mbi.BaseAddress + mbi.RegionSize);
+            } else {
+                ++it;
+            }
+
+            continue;
         }
 
         return std::nullopt;
@@ -188,9 +205,26 @@ namespace utility {
         }
 
         auto end = (uintptr_t*)(start + length);
+        auto it = (uintptr_t*)start;
 
-        if (auto it = std::find((uintptr_t*)start, end, ptr); it != end) {
-            return (uintptr_t)it;
+        // just making use of the try catch + while to get through unreadable pages
+        while (it < end) try {
+            it = std::find(it, end, ptr);
+
+            if (it != end) {
+                return (uintptr_t)it;
+            }
+
+            ++it;
+        } catch(...) {
+            MEMORY_BASIC_INFORMATION mbi{};
+            if (VirtualQuery(it, &mbi, sizeof(mbi)) != 0) {
+                it = (uintptr_t*)((uintptr_t)mbi.BaseAddress + mbi.RegionSize);
+            } else {
+                ++it;
+            }
+            
+            continue;
         }
 
         return std::nullopt;
