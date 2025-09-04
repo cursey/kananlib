@@ -453,6 +453,222 @@ std::optional<uintptr_t> get_symbol_address(const uint8_t* module, std::string_v
 #endif
 }
 
+std::optional<std::string> get_symbol_name(const uint8_t* module, uintptr_t rva) {
+    if (module == nullptr) {
+        SPDLOG_ERROR("Invalid module pointer");
+        return std::nullopt;
+    }
+
+    if (rva == 0) {
+        SPDLOG_ERROR("RVA must be non-zero");
+        return std::nullopt;
+    }
+
+#ifdef KANANLIB_USE_DIA_SDK
+    ensure_com_initialized();
+
+    // Resolve PDB path for the module
+    auto pdb_path_opt = get_pdb_path(module);
+    if (!pdb_path_opt) {
+        SPDLOG_ERROR("Failed to get PDB path for module");
+        return std::nullopt;
+    }
+
+    std::string pdb_path = *pdb_path_opt;
+
+    // Load PDB using DIA SDK
+    CComPtr<IDiaDataSource> data_source;
+    HRESULT hr = CoCreateInstance(CLSID_DiaSource, NULL, CLSCTX_INPROC_SERVER, __uuidof(IDiaDataSource), (void**)&data_source);
+    if (FAILED(hr)) {
+        SPDLOG_ERROR("Failed to create DIA data source (HRESULT: 0x{:08X})", hr);
+        return std::nullopt;
+    }
+
+    std::wstring wide_pdb_path = utility::widen(pdb_path);
+    hr = data_source->loadDataFromPdb(wide_pdb_path.c_str());
+    if (FAILED(hr)) {
+        SPDLOG_ERROR("Failed to load PDB file: {} (HRESULT: 0x{:08X})", pdb_path, hr);
+        return std::nullopt;
+    }
+
+    CComPtr<IDiaSession> session;
+    hr = data_source->openSession(&session);
+    if (FAILED(hr)) {
+        SPDLOG_ERROR("Failed to open DIA session (HRESULT: 0x{:08X})", hr);
+        return std::nullopt;
+    }
+
+    // First, try to find a public symbol at this RVA (exports, etc.)
+    CComPtr<IDiaSymbol> symbol;
+    hr = session->findSymbolByRVA(static_cast<DWORD>(rva), SymTagPublicSymbol, &symbol);
+    if (FAILED(hr) || symbol == nullptr) {
+        // Try function symbols (most common for code RVAs)
+        hr = session->findSymbolByRVA(static_cast<DWORD>(rva), SymTagFunction, &symbol);
+    }
+
+    if (FAILED(hr) || symbol == nullptr) {
+        // As a fallback, try by-address enumerator to get the nearest symbol that contains the RVA
+    CComPtr<IDiaEnumSymbolsByAddr> enum_by_addr;
+    if (SUCCEEDED(session->getSymbolsByAddr(&enum_by_addr)) && enum_by_addr) {
+            CComPtr<IDiaSymbol> by_addr_sym;
+            if (SUCCEEDED(enum_by_addr->symbolByRVA(static_cast<DWORD>(rva), &by_addr_sym)) && by_addr_sym) {
+                symbol = by_addr_sym;
+            }
+        }
+    }
+
+    if (!symbol) {
+        SPDLOG_ERROR("No symbol found for RVA: 0x{:08X}", static_cast<uint32_t>(rva));
+        return std::nullopt;
+    }
+
+    // Prefer undecorated name if available
+    BSTR undec_name_bstr = nullptr;
+    std::string result_name;
+    if (SUCCEEDED(symbol->get_undecoratedNameEx(0, &undec_name_bstr)) && undec_name_bstr) {
+        result_name = utility::narrow(std::wstring(undec_name_bstr));
+        SysFreeString(undec_name_bstr);
+    } else {
+        BSTR name_bstr = nullptr;
+        if (SUCCEEDED(symbol->get_name(&name_bstr)) && name_bstr) {
+            result_name = utility::narrow(std::wstring(name_bstr));
+            SysFreeString(name_bstr);
+        }
+    }
+
+    if (result_name.empty()) {
+        SPDLOG_ERROR("Symbol at RVA 0x{:08X} has no name", static_cast<uint32_t>(rva));
+        return std::nullopt;
+    }
+
+    SPDLOG_INFO("Resolved RVA 0x{:08X} to symbol '{}'", static_cast<uint32_t>(rva), result_name);
+    return result_name;
+#else
+    SPDLOG_ERROR("Symbol resolution not supported: kananlib was compiled without DIA SDK support");
+    SPDLOG_INFO("To enable symbol resolution, define KANANLIB_USE_DIA_SDK and ensure DIA SDK is available");
+    return std::nullopt;
+#endif
+}
+
+std::unordered_map<uintptr_t, std::string> get_symbol_map(const uint8_t* module) {
+    std::unordered_map<uintptr_t, std::string> result;
+
+    if (module == nullptr) {
+        SPDLOG_ERROR("Invalid module pointer");
+        return result;
+    }
+
+#ifdef KANANLIB_USE_DIA_SDK
+    ensure_com_initialized();
+
+    // get PDB path
+    auto pdb_path_opt = get_pdb_path(module);
+    if (!pdb_path_opt) {
+        SPDLOG_ERROR("Failed to get PDB path for module");
+        return result;
+    }
+
+    std::string pdb_path = *pdb_path_opt;
+
+    // load PDB using DIA SDK
+    CComPtr<IDiaDataSource> data_source;
+    HRESULT hr = CoCreateInstance(CLSID_DiaSource, NULL, CLSCTX_INPROC_SERVER, __uuidof(IDiaDataSource), (void**)&data_source);
+    if (FAILED(hr)) {
+        SPDLOG_ERROR("Failed to create DIA data source (HRESULT: 0x{:08X})", hr);
+        return result;
+    }
+
+    // convert path to wide string
+    std::wstring wide_pdb_path = utility::widen(pdb_path);
+    hr = data_source->loadDataFromPdb(wide_pdb_path.c_str());
+    if (FAILED(hr)) {
+        SPDLOG_ERROR("Failed to load PDB file: {} (HRESULT: 0x{:08X})", pdb_path, hr);
+        return result;
+    }
+
+    CComPtr<IDiaSession> session;
+    hr = data_source->openSession(&session);
+    if (FAILED(hr)) {
+        SPDLOG_ERROR("Failed to open DIA session (HRESULT: 0x{:08X})", hr);
+        return result;
+    }
+
+    CComPtr<IDiaSymbol> global_scope;
+    hr = session->get_globalScope(&global_scope);
+    if (FAILED(hr)) {
+        SPDLOG_ERROR("Failed to get global scope (HRESULT: 0x{:08X})", hr);
+        return result;
+    }
+
+    auto store_symbol = [&result](IDiaSymbol* sym) {
+        if (!sym) return;
+        DWORD rva = 0;
+        if (FAILED(sym->get_relativeVirtualAddress(&rva)) || rva == 0) return;
+
+        std::string name_str;
+        BSTR undec_bstr = nullptr;
+        if (SUCCEEDED(sym->get_undecoratedNameEx(0, &undec_bstr)) && undec_bstr) {
+            name_str = utility::narrow(std::wstring(undec_bstr));
+            SysFreeString(undec_bstr);
+        } else {
+            BSTR name_bstr = nullptr;
+            if (SUCCEEDED(sym->get_name(&name_bstr)) && name_bstr) {
+                name_str = utility::narrow(std::wstring(name_bstr));
+                SysFreeString(name_bstr);
+            }
+        }
+
+        if (name_str.empty()) return;
+
+        auto it = result.find(static_cast<uintptr_t>(rva));
+        if (it == result.end() || name_str.length() < it->second.length()) {
+            result[static_cast<uintptr_t>(rva)] = std::move(name_str);
+        }
+    };
+
+    CComPtr<IDiaEnumSymbols> enum_symbols;
+    CComPtr<IDiaSymbol> symbol;
+    ULONG celt = 0;
+
+    // 1) Functions
+    hr = global_scope->findChildren(SymTagFunction, NULL, nsNone, &enum_symbols);
+    if (SUCCEEDED(hr)) {
+        while (SUCCEEDED(enum_symbols->Next(1, &symbol, &celt)) && celt == 1) {
+            store_symbol(symbol);
+            symbol.Release();
+        }
+    }
+
+    // 2) Public symbols (exports and others)
+    enum_symbols.Release();
+    hr = global_scope->findChildren(SymTagPublicSymbol, NULL, nsNone, &enum_symbols);
+    if (SUCCEEDED(hr)) {
+        while (SUCCEEDED(enum_symbols->Next(1, &symbol, &celt)) && celt == 1) {
+            store_symbol(symbol);
+            symbol.Release();
+        }
+    }
+
+    // 3) Data symbols (optional)
+    enum_symbols.Release();
+    hr = global_scope->findChildren(SymTagData, NULL, nsNone, &enum_symbols);
+    if (SUCCEEDED(hr)) {
+        size_t added = 0;
+        while (SUCCEEDED(enum_symbols->Next(1, &symbol, &celt)) && celt == 1) {
+            store_symbol(symbol);
+            symbol.Release();
+            if (++added > 100000) break; // safety cap
+        }
+    }
+
+    SPDLOG_INFO("Symbol map size: {} entries", result.size());
+#else
+    SPDLOG_ERROR("Symbol resolution not supported: kananlib was compiled without DIA SDK support");
+#endif
+
+    return result;
+}
+
 std::vector<std::string> enumerate_symbols(const uint8_t* module, size_t max_symbols) {
     std::vector<std::string> symbols;
     
