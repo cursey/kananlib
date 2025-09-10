@@ -24,8 +24,16 @@
 #pragma comment(lib, "urlmon.lib")
 
 namespace utility::pdb {
-std::unordered_map<std::string, std::string> pdb_cache{}; // module path -> local pdb path after download
-std::unordered_map<size_t, std::unordered_map<std::string, uintptr_t>> symbol_cache{}; // module hash -> symbol -> address
+// Use function-local statics to avoid global initialization issues in DLL context
+static std::unordered_map<std::string, std::string>& get_pdb_cache() {
+    static std::unordered_map<std::string, std::string> cache;
+    return cache;
+}
+
+static std::unordered_map<size_t, std::unordered_map<std::string, uintptr_t>>& get_symbol_cache() {
+    static std::unordered_map<size_t, std::unordered_map<std::string, uintptr_t>> cache;
+    return cache;
+}
 
 std::string get_temp_folder() {
     static std::string temp_folder;
@@ -72,9 +80,13 @@ std::optional<std::string> get_pdb_path(const uint8_t* module) {
         SPDLOG_ERROR("get_pdb_path: module pointer is null");
         return std::nullopt;
     }
+    
+    SPDLOG_INFO("Resolving PDB for module at {:x}", (uintptr_t)module);
 
     const auto module_within = utility::get_module_within((uintptr_t)module).value_or(nullptr);
     const auto is_memory_module = module_within != nullptr && module_within == (HMODULE)module;
+
+    SPDLOG_INFO("Module is {}memory-mapped", is_memory_module ? "" : "not ");
 
     // get dos header
     auto dos_header = reinterpret_cast<const IMAGE_DOS_HEADER*>(module);
@@ -97,20 +109,27 @@ std::optional<std::string> get_pdb_path(const uint8_t* module) {
         return std::nullopt;
     }
 
-    auto debug_data = reinterpret_cast<const IMAGE_DEBUG_DIRECTORY*>(is_memory_module ? module + debug_directory.VirtualAddress : (uint8_t*)utility::ptr_from_rva(module, debug_directory.VirtualAddress).value_or(0));
+    SPDLOG_INFO("Debug directory found at VA: {:x}, Size: {}", debug_directory.VirtualAddress, debug_directory.Size);
+
+    auto debug_data = reinterpret_cast<const IMAGE_DEBUG_DIRECTORY*>((uint8_t*)utility::ptr_from_rva(module, debug_directory.VirtualAddress, is_memory_module).value_or(0));
     auto num_entries = debug_directory.Size / sizeof(IMAGE_DEBUG_DIRECTORY);
     
-    for (size_t i = 0; i < num_entries; ++i) {
+    for (size_t i = 0; i < num_entries; ++i) try {
         if (debug_data[i].Type != IMAGE_DEBUG_TYPE_CODEVIEW) {
             continue;
         }
 
         // get codeview data - use AddressOfRawData for memory-mapped modules
-        auto codeview_data = reinterpret_cast<const uint8_t*>(module + (is_memory_module ? debug_data[i].AddressOfRawData : debug_data[i].PointerToRawData));
+        auto codeview_data = reinterpret_cast<const uint8_t*>(utility::ptr_from_rva(module, debug_data[i].AddressOfRawData, is_memory_module).value_or(0));
         auto signature = *reinterpret_cast<const uint32_t*>(codeview_data);
         
         if (signature != 0x53445352) { // 'RSDS'
             SPDLOG_ERROR("Invalid CodeView signature: 0x{:08X}", signature);
+            continue;
+        }
+
+        if (IsBadReadPtr(codeview_data, debug_data[i].SizeOfData)) {
+            SPDLOG_ERROR("CodeView data is a bad pointer");
             continue;
         }
 
@@ -123,6 +142,8 @@ std::optional<std::string> get_pdb_path(const uint8_t* module) {
         std::stringstream cache_key_ss;
         cache_key_ss << std::hex << reinterpret_cast<uintptr_t>(module);
         std::string cache_key = cache_key_ss.str();
+
+        auto& pdb_cache = get_pdb_cache();
         
         // check if we've already resolved this
         if (auto it = pdb_cache.find(cache_key); it != pdb_cache.end()) {
@@ -180,6 +201,10 @@ std::optional<std::string> get_pdb_path(const uint8_t* module) {
         } else {
             SPDLOG_ERROR("Failed to download PDB from symbol server (HRESULT: 0x{:08X})", hr);
         }
+    } catch (const std::exception& e) {
+        SPDLOG_ERROR("Exception while processing debug entry {}: {}", i, e.what());
+    } catch (...) {
+        SPDLOG_ERROR("Unknown exception while processing debug entry {}", i);
     }
 
     return std::nullopt;
@@ -213,6 +238,8 @@ std::optional<uintptr_t> get_symbol_address(const uint8_t* module, std::string_v
     const auto end_of_nt_headers = reinterpret_cast<const uint8_t*>(nt_headers) + sizeof(IMAGE_NT_HEADERS);
     const auto module_header_size = end_of_nt_headers - module;
     const auto module_key = utility::hash(module, (size_t)module_header_size);
+
+    auto& symbol_cache = get_symbol_cache();
 
     // Check if we've already resolved this symbol for this module
     if (auto module_it = symbol_cache.find(module_key); module_it != symbol_cache.end()) {
