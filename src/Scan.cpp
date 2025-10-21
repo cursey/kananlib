@@ -116,7 +116,13 @@ namespace utility {
                 continue;
             }
         } catch (...) {
-            it++;
+            MEMORY_BASIC_INFORMATION mbi{};
+            if (VirtualQuery(it, &mbi, sizeof(mbi)) != 0) {
+                it = (uint8_t*)((uintptr_t)mbi.BaseAddress + mbi.RegionSize);
+                SPDLOG_INFO("Caught exception during outer data scan, skipping to next memory region at {:x}", (uintptr_t)it);
+            } else {
+                it++;
+            }
             continue;
         }
 
@@ -144,7 +150,13 @@ namespace utility {
                 continue;
             }
         } catch (...) {
-            it++;
+            MEMORY_BASIC_INFORMATION mbi{};
+            if (VirtualQuery(it, &mbi, sizeof(mbi)) != 0) {
+                it = (uint8_t*)((uintptr_t)mbi.BaseAddress + mbi.RegionSize);
+                spdlog::info("Caught exception during outer data scan, skipping to next memory region at {:x}", (uintptr_t)it);
+            } else {
+                it++;
+            }
             continue;
         }
 
