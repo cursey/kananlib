@@ -147,10 +147,11 @@ void emulate(HMODULE module, uintptr_t ip, size_t num_instructions, ShemuContext
         }
 
         // Continue
-        const auto emu_failed = emu.emulate() != SHEMU_SUCCESS;
+        const auto emu_reason = emu.emulate();
+        const auto emu_failed = emu_reason != SHEMU_SUCCESS;
 
         if (emu_failed) {
-            SPDLOG_ERROR("Emulation failed at {:x}", emu.ctx->Registers.RegRip);
+            SPDLOG_ERROR("Emulation failed at {:x} (reason: {})", emu.ctx->Registers.RegRip, emu_reason);
 
             const auto ix_cur = utility::decode_one((uint8_t*)emu.ctx->Registers.RegRip);
 
