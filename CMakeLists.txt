@@ -72,12 +72,12 @@ endif()
 include(FetchContent)
 
 if(KANANLIB_FETCH_BDDISASM OR KANANLIB_STANDALONE_BUILD) # fetch-bddisasm
-	message(STATUS "Fetching bddisasm (v1.37.0)...")
+	message(STATUS "Fetching bddisasm (7d8526ce75d13471196ea9c0c988d5fee254f10d)...")
 	FetchContent_Declare(bddisasm
 		GIT_REPOSITORY
 			"https://github.com/bitdefender/bddisasm"
 		GIT_TAG
-			v1.37.0
+			7d8526ce75d13471196ea9c0c988d5fee254f10d
 		GIT_SHALLOW
 			ON
 	)
@@ -104,7 +104,6 @@ set(kananlib_SOURCES "")
 list(APPEND kananlib_SOURCES
 	"src/Address.cpp"
 	"src/Config.cpp"
-	"src/Emulation.cpp"
 	"src/Input.cpp"
 	"src/Memory.cpp"
 	"src/Module.cpp"
@@ -121,7 +120,6 @@ list(APPEND kananlib_SOURCES
 	"include/utility/Address.hpp"
 	"include/utility/Benchmark.hpp"
 	"include/utility/Config.hpp"
-	"include/utility/Emulation.hpp"
 	"include/utility/Input.hpp"
 	"include/utility/Logging.hpp"
 	"include/utility/Memory.hpp"
@@ -199,7 +197,6 @@ set(kananlib-nolog_SOURCES "")
 list(APPEND kananlib-nolog_SOURCES
 	"src/Address.cpp"
 	"src/Config.cpp"
-	"src/Emulation.cpp"
 	"src/Input.cpp"
 	"src/Memory.cpp"
 	"src/Module.cpp"
@@ -216,7 +213,6 @@ list(APPEND kananlib-nolog_SOURCES
 	"include/utility/Address.hpp"
 	"include/utility/Benchmark.hpp"
 	"include/utility/Config.hpp"
-	"include/utility/Emulation.hpp"
 	"include/utility/Input.hpp"
 	"include/utility/Logging.hpp"
 	"include/utility/Memory.hpp"
