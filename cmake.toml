@@ -50,7 +50,7 @@ fetch-spdlog = "KANANLIB_FETCH_SPDLOG OR KANANLIB_STANDALONE_BUILD"
 [fetch-content.bddisasm]
 condition = "fetch-bddisasm"
 git = "https://github.com/bitdefender/bddisasm"
-tag = "7d8526ce75d13471196ea9c0c988d5fee254f10d"
+tag = "v1.37.0"
 shallow = true
 
 [fetch-content.spdlog]
