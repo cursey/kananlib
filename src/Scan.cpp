@@ -1285,6 +1285,19 @@ namespace utility {
         return blocks;
     }
 
+    // We are storing a list of ranges inside buckets, so we can quickly find the correct bucket
+    // Doing this with multithreading was much slower and inefficient
+    namespace detail::find_function_entry {
+        struct Bucket {
+            uint32_t start_range{};
+            uint32_t end_range{};
+            std::vector<PIMAGE_RUNTIME_FUNCTION_ENTRY> entries{};
+        };
+        
+        static std::shared_mutex bucket_mtx{};
+        static std::unordered_map<uintptr_t, std::vector<Bucket>> module_buckets{};
+    }
+
     PIMAGE_RUNTIME_FUNCTION_ENTRY find_function_entry(uintptr_t middle) {
         KANANLIB_BENCH();
 
@@ -1299,24 +1312,13 @@ namespace utility {
 
         const auto middle_rva = middle - module;
 
-        // We are storing a list of ranges inside buckets, so we can quickly find the correct bucket
-        // Doing this with multithreading was much slower and inefficient
-        struct Bucket {
-            uint32_t start_range{};
-            uint32_t end_range{};
-            std::vector<PIMAGE_RUNTIME_FUNCTION_ENTRY> entries{};
-        };
-        
-        static std::shared_mutex bucket_mtx{};
-        static std::unordered_map<uintptr_t, std::vector<Bucket>> module_buckets{};
-
         constexpr size_t NUM_BUCKETS = 2048;
         bool needs_insert = false;
 
         {
-            std::shared_lock _{bucket_mtx};
+            std::shared_lock _{detail::find_function_entry::bucket_mtx};
 
-            if (auto it = module_buckets.find(module); it != module_buckets.end()) {
+            if (auto it = detail::find_function_entry::module_buckets.find(module); it != detail::find_function_entry::module_buckets.end()) {
                 if (it->second.empty()) {
                     needs_insert = true;
                 }
@@ -1343,8 +1345,8 @@ namespace utility {
             // Get the number of entries in the exception directory
             const auto exception_directory_entries = exception_directory_size / sizeof(IMAGE_RUNTIME_FUNCTION_ENTRY);
 
-            std::unique_lock _{bucket_mtx};
-            auto& buckets = module_buckets[module];
+            std::unique_lock _{detail::find_function_entry::bucket_mtx};
+            auto& buckets = detail::find_function_entry::module_buckets[module];
 
             if (buckets.empty() && exception_directory_entries > 0) {
                 SPDLOG_INFO("Adding {} entries for module {:x}", exception_directory_entries, module);
@@ -1369,7 +1371,7 @@ namespace utility {
                 size_t total_added_entries = 0;
 
                 for (auto i = 0; i < std::max<size_t>(sorted_entries.size() / NUM_BUCKETS, 1); ++i) {
-                    Bucket bucket{};
+                    detail::find_function_entry::Bucket bucket{};
                     const auto bucket_index = i * NUM_BUCKETS;
                     bucket.start_range = sorted_entries[bucket_index]->BeginAddress;
                     const auto next_index = std::min<size_t>((i + 1) * NUM_BUCKETS, sorted_entries.size());
@@ -1390,13 +1392,13 @@ namespace utility {
                     if (buckets.empty()) {
                         SPDLOG_INFO("Adding all entries to one bucket for module {:x}", module);
 
-                        buckets.push_back(Bucket{
+                        buckets.push_back(detail::find_function_entry::Bucket{
                             .start_range = 0,
                             .end_range = (uint32_t)module_size,
                             .entries = {}
                         });
                     } else {
-                        buckets.push_back(Bucket{
+                        buckets.push_back(detail::find_function_entry::Bucket{
                             .start_range = sorted_entries[total_added_entries]->BeginAddress,
                             .end_range = (uint32_t)module_size,
                             .entries = {}
@@ -1413,19 +1415,19 @@ namespace utility {
                 }
 
                 // Re-sort the buckets because of the last minute additions
-                std::sort(buckets.begin(), buckets.end(), [](const Bucket& a, const Bucket& b) {
+                std::sort(buckets.begin(), buckets.end(), [](const detail::find_function_entry::Bucket& a, const detail::find_function_entry::Bucket& b) {
                     return a.start_range < b.start_range;
                 });
             }
         }
 
         // For the case where there's weird obfuscation or something
-        std::vector<Bucket*> candidates{};
+        std::vector<detail::find_function_entry::Bucket*> candidates{};
 
         {
-            std::shared_lock _{bucket_mtx};
+            std::shared_lock _{detail::find_function_entry::bucket_mtx};
 
-            for (auto& bucket : module_buckets[module]) {
+            for (auto& bucket : detail::find_function_entry::module_buckets[module]) {
                 // Buckets are sorted so we can break early
                 if (bucket.start_range > middle_rva) {
                     break;
