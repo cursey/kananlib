@@ -716,7 +716,9 @@ namespace utility {
             const __m256i cmp_result1 = _mm256_cmpeq_epi32(vaddresses1, rva);\
             const __m256i cmp_result2 = _mm256_cmpeq_epi32(vaddresses2, rva);\
 \
-            masks[mask_index++] = (uint64_t)_mm256_movemask_epi8(cmp_result1) | ((uint64_t)_mm256_movemask_epi8(cmp_result2) << 32);\
+            const uint32_t mm1 = (uint32_t)_mm256_movemask_epi8(cmp_result1);\
+            const uint32_t mm2 = (uint32_t)_mm256_movemask_epi8(cmp_result2);\
+            masks[mask_index++] = (uint64_t)mm1 | ((uint64_t)mm2 << 32);\
         }
 
         #define PROCESS_4_MASKS_FINAL(IN, mask) \
