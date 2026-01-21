@@ -170,6 +170,19 @@ int test_avx2_displacement_scan() {
 
             effective_throughput_scalar = ((double)huge_bytes.size() * scan_ratio) / ((double)scan_time_scalar_ms / 1000.0);
             effective_throughput_scalar_gbs = effective_throughput_scalar / (1024.0 * 1024.0 * 1024.0);
+
+            // Test byte-by-byte scalar version as well
+            const auto scan_start_scalar_bbb = std::chrono::high_resolution_clock::now();
+            const auto scan_result_scalar_bbb = utility::scan_relative_reference_scalar_byte_by_byte((uintptr_t)huge_bytes.data(), (uintptr_t)huge_bytes.size(), address_to_rel32_reference);
+            const auto scan_end_scalar_bbb = std::chrono::high_resolution_clock::now();
+
+            KANANLIB_ASSERT(scan_result_scalar_bbb.has_value());
+            KANANLIB_ASSERT(*scan_result_scalar_bbb == address_to_write_to);
+
+            const auto scan_time_scalar_bbb_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(scan_end_scalar_bbb - scan_start_scalar_bbb).count();
+            const auto scan_time_scalar_bbb_ms = (double)scan_time_scalar_bbb_ns / 1000000.0;
+
+            std::cout << "Scalar byte-by-byte scan took: " << std::dec << scan_time_scalar_bbb_ms << "ms" << std::endl;
         }
 
         std::cout << "Scalar scan took: " << std::dec << scan_time_scalar_ms << "ms" << std::endl;

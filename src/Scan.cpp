@@ -647,13 +647,17 @@ namespace utility {
     __attribute__((target("avx,avx2,bmi")))
     #endif
     std::optional<uintptr_t> scan_relative_reference_avx2(uintptr_t start, size_t length, uintptr_t ptr, std::function<bool(uintptr_t)>& filter) {
+        // if ptr - start > 2GB, fallback to scalar
+        const int64_t dist = (int64_t)((intptr_t)ptr - (intptr_t)start);
+        if (dist > INT32_MAX || dist < INT32_MIN) {
+            return scan_relative_reference_scalar_impl(start, length, ptr, filter);
+        }
+                
         const auto end = (start + length);
 
         constexpr auto SHIFT_SCALAR = 8;
 
         const __m256i post_ip_constant32 = _mm256_set1_epi32(4); // Usually true most of the time. *rel32 + &rel32 + 4 = target unless it's some weird instruction
-        const __m256i shift_amount_interval32 = _mm256_set1_epi32(SHIFT_SCALAR);
-        const __m256i shift_amount_after32 = _mm256_set1_epi32(sizeof(__m256i) - SHIFT_SCALAR);
 
         const __m256i shuffle_mask_lo = _mm256_set_epi8(
             22, 21, 20, 19,
@@ -681,11 +685,6 @@ namespace utility {
         
         size_t lookahead_size = (sizeof(__m256i) * 4) + (sizeof(__m256i) / 4); // 32 + 32 (unrolled loop) + 8 (for the sliding window when we do a 256 load on the next iteration)
 
-        const __m256i start_vectorized = _mm256_set1_epi32(0);
-
-        // These will be added onto every loop.
-        __m256i addresses = _mm256_add_epi32(start_vectorized, addition_mask32);
-
         const int32_t rva_scalar = (int32_t)((intptr_t)ptr - (intptr_t)start);
         const __m256i rva = _mm256_set1_epi32(rva_scalar);
 
@@ -698,10 +697,11 @@ namespace utility {
         
         // So I know this macro is really ugly but it's a good way to unroll the loop and make it easier to read
         // Unrolling the loop gets us an extra 1-1.5GB/s throughput
-        #define PROCESS_AVX2_BLOCK(N) \
+        #define PROCESS_AVX2_BLOCK() \
         { \
-            constexpr auto byte_index = N * SHIFT_SCALAR;\
-            const auto real_i = i + byte_index;\
+            const uint32_t byte_index = (uint32_t)((mask_index >> 1) * sizeof(__m256i) + (mask_index & 1) * SHIFT_SCALAR); \
+            const uintptr_t real_i = start_i + byte_index;\
+            const __m256i addressesN = _mm256_add_epi32(addresses_base, _mm256_set1_epi32(byte_index)); \
 \
             const __m256i data = _mm256_loadu_si256((__m256i*)(real_i));\
 \
@@ -709,8 +709,8 @@ namespace utility {
             const __m256i displacement_hi = _mm256_shuffle_epi8(data, shuffle_mask_hi);\
 \
             /* Resolve the addresses */ \
-            const __m256i vaddresses1 = _mm256_add_epi32(addresses, displacement_lo);\
-            const __m256i vaddresses2 = _mm256_add_epi32(_mm256_add_epi32(addresses, post_ip_constant32), displacement_hi);\
+            const __m256i vaddresses1 = _mm256_add_epi32(addressesN, displacement_lo);\
+            const __m256i vaddresses2 = _mm256_add_epi32(_mm256_add_epi32(addressesN, post_ip_constant32), displacement_hi);\
 \
             /* Compare addresses to the target */ \
             const __m256i cmp_result1 = _mm256_cmpeq_epi32(vaddresses1, rva);\
@@ -719,26 +719,10 @@ namespace utility {
             masks[mask_index++] = (uint64_t)_mm256_movemask_epi8(cmp_result1) | ((uint64_t)_mm256_movemask_epi8(cmp_result2) << 32);\
         }
 
-        #define PROCESS_4_MASKS(IN) \
+        #define PROCESS_4_MASKS_FINAL(IN, mask) \
         {\
             constexpr size_t j = IN;\
             constexpr size_t maskindex = IN / 4;\
-            /* Load 4 masks into a 256-bit register, aligned */ \
-            const __m256i vmasks = _mm256_load_si256((__m256i*)&masks[j]); \
-            /* Create a mask of which 64-bit values are non-zero */ \
-            /* We can use _mm256_cmpeq_epi64 to compare against zero */ \
-            const __m256i zero = _mm256_setzero_si256();\
-            const __m256i cmp = _mm256_cmpeq_epi64(vmasks, zero);\
-            /* Invert since cmpeq gives 1s for equal-to-zero */ \
-            cmpeq_masks[maskindex] = ~_mm256_movemask_pd(_mm256_castsi256_pd(cmp)) & 0b1111; \
-        }
-
-        #define PROCESS_4_MASKS_FINAL(IN) \
-        {\
-            constexpr size_t j = IN;\
-            constexpr size_t maskindex = IN / 4;\
-            int mask = cmpeq_masks[maskindex];\
-            /* Process each bit in the mask */ \
             while (mask != 0) {\
                 /* Find index of first set bit*/\
                 unsigned long index = _tzcnt_u32(mask);\
@@ -748,14 +732,14 @@ namespace utility {
                 const uint64_t actual_mask = masks[jindex];\
                 const auto real_i = start_i + (sizeof(__m256i) * (jindex / 2)) + ((jindex % 2) * SHIFT_SCALAR);\
 \
-                const auto mask2 = actual_mask >> 32;\
+                const uint32_t mask2 = (uint32_t)(actual_mask >> 32);\
                 if (mask2 != 0) {\
                     if (auto result = check_candidate(real_i, mask2, 4, ptr, filter); result.has_value()) {\
                         return result;\
                     }\
                 }\
 \
-                const auto mask1 = actual_mask & 0xFFFFFFFF;\
+                const uint32_t mask1 = (uint32_t)actual_mask;\
                 if (mask1 != 0) {\
                     if (auto result = check_candidate(real_i, mask1, 0, ptr, filter); result.has_value()) {\
                         return result;\
@@ -767,12 +751,10 @@ namespace utility {
             }\
         }
 
-        #define PROCESS_AVX2_BLOCKS(N, N2)\
-            PROCESS_AVX2_BLOCK(N);\
-            addresses = _mm256_add_epi32(addresses, shift_amount_interval32);\
+        #define PROCESS_AVX2_BLOCKS()\
+            PROCESS_AVX2_BLOCK();\
             /* Second half, 8-12, 12 - 16, 24 - 28, 28 - 32 */ \
-            PROCESS_AVX2_BLOCK(N2);\
-            addresses = _mm256_add_epi32(addresses, shift_amount_after32); /* 32 - 8 = 24 */ \
+            PROCESS_AVX2_BLOCK();\
             i += sizeof(__m256i);
         
         constexpr size_t LOOKAHEAD_AMOUNT = 12;
@@ -780,46 +762,57 @@ namespace utility {
         constexpr size_t NUM_64BIT_MASKS = LOOKAHEAD_AMOUNT * 2;
 
         alignas(__m256i) uint64_t masks[NUM_64BIT_MASKS]{};
-        alignas(__m256i) int cmpeq_masks[NUM_64BIT_MASKS]{};
 
         if (length >= (sizeof(__m256i) * 12) + 8) {
             lookahead_size = (sizeof(__m256i) * LOOKAHEAD_AMOUNT) + 8;
+            const __m256i zero = _mm256_setzero_si256();
 
             // Loop unrolled a bunch of times to increase throughput
             for (auto i = start; i + lookahead_size < end;) __try {
+                const int32_t base = (int32_t)(i - start);
+                const auto addresses_base = _mm256_add_epi32(_mm256_set1_epi32(base), addition_mask32);
+
                 size_t mask_index{0};
                 const size_t start_i = i;
 
-                PROCESS_AVX2_BLOCKS(0, 1);
-                PROCESS_AVX2_BLOCKS(0, 1);
-                PROCESS_AVX2_BLOCKS(0, 1);
-                PROCESS_AVX2_BLOCKS(0, 1);
+                PROCESS_AVX2_BLOCKS();
+                PROCESS_AVX2_BLOCKS();
+                PROCESS_AVX2_BLOCKS();
+                PROCESS_AVX2_BLOCKS();
 
-                PROCESS_AVX2_BLOCKS(0, 1);
-                PROCESS_AVX2_BLOCKS(0, 1);
-                PROCESS_AVX2_BLOCKS(0, 1);
-                PROCESS_AVX2_BLOCKS(0, 1);
+                PROCESS_AVX2_BLOCKS();
+                PROCESS_AVX2_BLOCKS();
+                PROCESS_AVX2_BLOCKS();
+                PROCESS_AVX2_BLOCKS();
 
-                PROCESS_AVX2_BLOCKS(0, 1);
-                PROCESS_AVX2_BLOCKS(0, 1);
-                PROCESS_AVX2_BLOCKS(0, 1);
-                PROCESS_AVX2_BLOCKS(0, 1);
+                PROCESS_AVX2_BLOCKS();
+                PROCESS_AVX2_BLOCKS();
+                PROCESS_AVX2_BLOCKS();
+                PROCESS_AVX2_BLOCKS();
 
                 // Process 4 masks at a time using AVX2
                 // Literally increases speed from 10GB/s to almost 20GB/s
-                PROCESS_4_MASKS(0);
-                PROCESS_4_MASKS(4);
-                PROCESS_4_MASKS(8);
-                PROCESS_4_MASKS(12);
-                PROCESS_4_MASKS(16);
-                PROCESS_4_MASKS(20);
+                const auto load0 = _mm256_load_si256((__m256i*)&masks[0]);
+                const auto load4 = _mm256_load_si256((__m256i*)&masks[4]);
+                const auto load8 = _mm256_load_si256((__m256i*)&masks[8]);
+                const auto load12 = _mm256_load_si256((__m256i*)&masks[12]);
+                const auto load16 = _mm256_load_si256((__m256i*)&masks[16]);
+                const auto load20 = _mm256_load_si256((__m256i*)&masks[20]);
+            
+                // The testz instruction is way faster than movemask + cmpeq when most masks are zero
+                uint32_t mask0 = _mm256_testz_si256(load0, load0) == 0 ? ~_mm256_movemask_pd(_mm256_castsi256_pd(_mm256_cmpeq_epi64(load0, zero))) & 0b1111 : 0;
+                uint32_t mask4 = _mm256_testz_si256(load4, load4) == 0 ? ~_mm256_movemask_pd(_mm256_castsi256_pd(_mm256_cmpeq_epi64(load4, zero))) & 0b1111 : 0;
+                uint32_t mask8 = _mm256_testz_si256(load8, load8) == 0 ? ~_mm256_movemask_pd(_mm256_castsi256_pd(_mm256_cmpeq_epi64(load8, zero))) & 0b1111 : 0;
+                uint32_t mask12 = _mm256_testz_si256(load12, load12) == 0 ? ~_mm256_movemask_pd(_mm256_castsi256_pd(_mm256_cmpeq_epi64(load12, zero))) & 0b1111 : 0;
+                uint32_t mask16 = _mm256_testz_si256(load16, load16) == 0 ? ~_mm256_movemask_pd(_mm256_castsi256_pd(_mm256_cmpeq_epi64(load16, zero))) & 0b1111 : 0;
+                uint32_t mask20 = _mm256_testz_si256(load20, load20) == 0 ? ~_mm256_movemask_pd(_mm256_castsi256_pd(_mm256_cmpeq_epi64(load20, zero))) & 0b1111 : 0;
 
-                PROCESS_4_MASKS_FINAL(0);
-                PROCESS_4_MASKS_FINAL(4);
-                PROCESS_4_MASKS_FINAL(8);
-                PROCESS_4_MASKS_FINAL(12);
-                PROCESS_4_MASKS_FINAL(16);
-                PROCESS_4_MASKS_FINAL(20);
+                PROCESS_4_MASKS_FINAL(0, mask0);
+                PROCESS_4_MASKS_FINAL(4, mask4);
+                PROCESS_4_MASKS_FINAL(8, mask8);
+                PROCESS_4_MASKS_FINAL(12, mask12);
+                PROCESS_4_MASKS_FINAL(16, mask16);
+                PROCESS_4_MASKS_FINAL(20, mask20);
             } __except (EXCEPTION_EXECUTE_HANDLER) {
                 //SPDLOG_INFO("Exception caught at {:x}", i);
                 i += sizeof(__m256i);
@@ -827,14 +820,18 @@ namespace utility {
             }
         } else {
             lookahead_size = (sizeof(__m256i)) + 8;
+            const __m256i zero = _mm256_setzero_si256();
 
             for (auto i = start; i + lookahead_size < end;) __try {
+                const int32_t base = (int32_t)(i - start);
+                const auto addresses_base = _mm256_add_epi32(_mm256_set1_epi32(base), addition_mask32);
+
                 size_t start_i = i;
                 size_t mask_index{0};
 
-                PROCESS_AVX2_BLOCKS(0, 1);
-                PROCESS_4_MASKS(0);
-                PROCESS_4_MASKS_FINAL(0);
+                PROCESS_AVX2_BLOCKS();
+                auto mask0 = ~_mm256_movemask_pd(_mm256_castsi256_pd(_mm256_cmpeq_epi64( _mm256_load_si256((__m256i*)&masks[0]), zero))) & 0b1111; \
+                PROCESS_4_MASKS_FINAL(0, mask0);
             } __except (EXCEPTION_EXECUTE_HANDLER) {
                 //SPDLOG_INFO("Exception caught at {:x}", i);
                 i += sizeof(__m256i);

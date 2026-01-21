@@ -44,6 +44,7 @@ namespace utility {
     std::vector<uintptr_t> scan_strings(uintptr_t start, size_t length, const std::string& str, bool zero_terminated = false);
     std::vector<uintptr_t> scan_strings(uintptr_t start, size_t length, const std::wstring& str, bool zero_terminated = false);
 
+    std::optional<uintptr_t> scan_relative_reference_scalar_byte_by_byte(uintptr_t start, size_t length, uintptr_t ptr, std::function<bool(uintptr_t)> filter = nullptr);
     std::optional<uintptr_t> scan_relative_reference_scalar(uintptr_t start, size_t length, uintptr_t ptr, std::function<bool(uintptr_t)> filter = nullptr);
 
     std::optional<uintptr_t> scan_relative_reference(uintptr_t start, size_t length, uintptr_t ptr, std::function<bool(uintptr_t)> filter = nullptr);
