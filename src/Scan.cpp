@@ -1245,6 +1245,33 @@ namespace utility {
         });
     }
 
+    void linear_decode(uint8_t* ip, size_t max_size, std::function<bool(ExhaustionContext&)> callback) {
+        ExhaustionContext ctx{};
+        ctx.branch_start = (uintptr_t)ip;
+
+        for (size_t i = 0; i < max_size;) try {
+            INSTRUX ix{};
+            const auto status = NdDecodeEx(&ix, ip, 64, ND_CODE_64, ND_DATA_64);
+
+            if (!ND_SUCCESS(status)) {
+                break;
+            }
+
+            ctx.addr = (uintptr_t)ip;
+            ctx.instrux = ix;
+
+            if (!callback(ctx)) {
+                break;
+            }
+
+            i += ix.Length;
+            ip += ix.Length;
+        } catch (...) {
+            SPDLOG_ERROR("Exception caught during linear_decode at {:x}", (uintptr_t)ip);
+            break;
+        }
+    }
+
     std::vector<BasicBlock> collect_basic_blocks(uintptr_t start, const BasicBlockCollectOptions& options) {
         std::vector<BasicBlock> blocks{};
         uintptr_t previous_branch_start = start;
@@ -1284,30 +1311,22 @@ namespace utility {
         return blocks;
     }
 
-    PIMAGE_RUNTIME_FUNCTION_ENTRY find_function_entry(uintptr_t middle) {
+    // We are storing a list of ranges inside buckets, so we can quickly find the correct bucket
+    // Doing this with multithreading was much slower and inefficient
+    struct Bucket {
+        uint32_t start_range{};
+        uint32_t end_range{};
+        std::vector<PIMAGE_RUNTIME_FUNCTION_ENTRY> entries{};
+    };
+    
+    static std::shared_mutex bucket_mtx{};
+    static std::unordered_map<uintptr_t, std::vector<Bucket>> module_buckets{};
+
+    void populate_function_buckets(uintptr_t module) {
         KANANLIB_BENCH();
-
-        const auto module = (uintptr_t)utility::get_module_within(middle).value_or(nullptr);
-
-        if (module == 0 || middle == 0) {
-            return {};
-        }
 
         const auto module_size = utility::get_module_size((HMODULE)module).value_or(0xDEADBEEF);
         const auto module_end = module + module_size;
-
-        const auto middle_rva = middle - module;
-
-        // We are storing a list of ranges inside buckets, so we can quickly find the correct bucket
-        // Doing this with multithreading was much slower and inefficient
-        struct Bucket {
-            uint32_t start_range{};
-            uint32_t end_range{};
-            std::vector<PIMAGE_RUNTIME_FUNCTION_ENTRY> entries{};
-        };
-        
-        static std::shared_mutex bucket_mtx{};
-        static std::unordered_map<uintptr_t, std::vector<Bucket>> module_buckets{};
 
         constexpr size_t NUM_BUCKETS = 2048;
         bool needs_insert = false;
@@ -1324,99 +1343,115 @@ namespace utility {
             }
         }
 
-        if (needs_insert) {
-            // This function abuses the fact that most non-obfuscated binaries have
-            // an exception directory containing a list of function start and end addresses.
-            // Get the PE header, and then the exception directory
-            const auto dos_header = (PIMAGE_DOS_HEADER)module;
-            const auto nt_header = (PIMAGE_NT_HEADERS)((uintptr_t)dos_header + dos_header->e_lfanew);
-            const auto exception_directory = (PIMAGE_DATA_DIRECTORY)&nt_header->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXCEPTION];
-
-            // Get the exception directory RVA and size
-            const auto exception_directory_rva = exception_directory->VirtualAddress;
-            const auto exception_directory_size = exception_directory->Size;
-
-            // Get the exception directory
-            const auto exception_directory_ptr = (PIMAGE_RUNTIME_FUNCTION_ENTRY)((uintptr_t)dos_header + exception_directory_rva);
-
-            // Get the number of entries in the exception directory
-            const auto exception_directory_entries = exception_directory_size / sizeof(IMAGE_RUNTIME_FUNCTION_ENTRY);
-
-            std::unique_lock _{bucket_mtx};
-            auto& buckets = module_buckets[module];
-
-            if (buckets.empty() && exception_directory_entries > 0) {
-                SPDLOG_INFO("Adding {} entries for module {:x}", exception_directory_entries, module);
-
-                std::vector<PIMAGE_RUNTIME_FUNCTION_ENTRY> sorted_entries{};
-                sorted_entries.resize(exception_directory_entries);
-
-                for (size_t i = 0; i < exception_directory_entries; ++i) {
-                    sorted_entries[i] = &exception_directory_ptr[i];
-                }
-
-                std::sort(sorted_entries.begin(), sorted_entries.end(), [](const PIMAGE_RUNTIME_FUNCTION_ENTRY a, const PIMAGE_RUNTIME_FUNCTION_ENTRY b) {
-                    return a->BeginAddress < b->BeginAddress;
-                });
-
-                std::erase_if(sorted_entries, [module, module_end](const PIMAGE_RUNTIME_FUNCTION_ENTRY entry) {
-                    return module + entry->EndAddress > module_end || module + entry->BeginAddress > module_end || entry->EndAddress < entry->BeginAddress;
-                });
-
-                SPDLOG_INFO("Filtered and sorted entries down to {} for module {:x}", sorted_entries.size(), module);
-
-                size_t total_added_entries = 0;
-
-                for (auto i = 0; i < std::max<size_t>(sorted_entries.size() / NUM_BUCKETS, 1); ++i) {
-                    Bucket bucket{};
-                    const auto bucket_index = i * NUM_BUCKETS;
-                    bucket.start_range = sorted_entries[bucket_index]->BeginAddress;
-                    const auto next_index = std::min<size_t>((i + 1) * NUM_BUCKETS, sorted_entries.size());
-
-                    uint32_t highest_end = 0;
-                    for (size_t j = bucket_index; j < next_index; ++j) {
-                        bucket.end_range = std::max<uint32_t>(highest_end, sorted_entries[j]->EndAddress);
-
-                        bucket.entries.push_back(sorted_entries[j]);
-                        ++total_added_entries;
-                    }
-
-                    buckets.push_back(bucket);
-                }
-
-                // Can happen, but can also happen if the number of entries is less than NUM_BUCKETS
-                if (total_added_entries < sorted_entries.size()) {
-                    if (buckets.empty()) {
-                        SPDLOG_INFO("Adding all entries to one bucket for module {:x}", module);
-
-                        buckets.push_back(Bucket{
-                            .start_range = 0,
-                            .end_range = (uint32_t)module_size,
-                            .entries = {}
-                        });
-                    } else {
-                        buckets.push_back(Bucket{
-                            .start_range = sorted_entries[total_added_entries]->BeginAddress,
-                            .end_range = (uint32_t)module_size,
-                            .entries = {}
-                        });
-                    }
-
-                    SPDLOG_INFO("Adding remaining {} entries to last bucket for module {:x}", sorted_entries.size() - total_added_entries, module);
-                    // Add the remaining entries to the last bucket
-                    auto& last_bucket = buckets.back();
-
-                    for (size_t i = total_added_entries; i < sorted_entries.size(); ++i) {
-                        last_bucket.entries.push_back(sorted_entries[i]);
-                    }
-                }
-
-                // Re-sort the buckets because of the last minute additions
-                std::sort(buckets.begin(), buckets.end(), [](const Bucket& a, const Bucket& b) {
-                    return a.start_range < b.start_range;
-                });
-            }
+        if (!needs_insert) {
+            return;
         }
+
+        // This function abuses the fact that most non-obfuscated binaries have
+        // an exception directory containing a list of function start and end addresses.
+        // Get the PE header, and then the exception directory
+        const auto dos_header = (PIMAGE_DOS_HEADER)module;
+        const auto nt_header = (PIMAGE_NT_HEADERS)((uintptr_t)dos_header + dos_header->e_lfanew);
+        const auto exception_directory = (PIMAGE_DATA_DIRECTORY)&nt_header->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXCEPTION];
+
+        // Get the exception directory RVA and size
+        const auto exception_directory_rva = exception_directory->VirtualAddress;
+        const auto exception_directory_size = exception_directory->Size;
+
+        // Get the exception directory
+        const auto exception_directory_ptr = (PIMAGE_RUNTIME_FUNCTION_ENTRY)((uintptr_t)dos_header + exception_directory_rva);
+
+        // Get the number of entries in the exception directory
+        const auto exception_directory_entries = exception_directory_size / sizeof(IMAGE_RUNTIME_FUNCTION_ENTRY);
+
+        std::unique_lock _{bucket_mtx};
+        auto& buckets = module_buckets[module];
+
+        if (buckets.empty() && exception_directory_entries > 0) {
+            SPDLOG_INFO("Adding {} entries for module {:x}", exception_directory_entries, module);
+
+            std::vector<PIMAGE_RUNTIME_FUNCTION_ENTRY> sorted_entries{};
+            sorted_entries.resize(exception_directory_entries);
+
+            for (size_t i = 0; i < exception_directory_entries; ++i) {
+                sorted_entries[i] = &exception_directory_ptr[i];
+            }
+
+            std::sort(sorted_entries.begin(), sorted_entries.end(), [](const PIMAGE_RUNTIME_FUNCTION_ENTRY a, const PIMAGE_RUNTIME_FUNCTION_ENTRY b) {
+                return a->BeginAddress < b->BeginAddress;
+            });
+
+            std::erase_if(sorted_entries, [module, module_end](const PIMAGE_RUNTIME_FUNCTION_ENTRY entry) {
+                return module + entry->EndAddress > module_end || module + entry->BeginAddress > module_end || entry->EndAddress < entry->BeginAddress;
+            });
+
+            SPDLOG_INFO("Filtered and sorted entries down to {} for module {:x}", sorted_entries.size(), module);
+
+            size_t total_added_entries = 0;
+
+            for (auto i = 0; i < std::max<size_t>(sorted_entries.size() / NUM_BUCKETS, 1); ++i) {
+                Bucket bucket{};
+                const auto bucket_index = i * NUM_BUCKETS;
+                bucket.start_range = sorted_entries[bucket_index]->BeginAddress;
+                const auto next_index = std::min<size_t>((i + 1) * NUM_BUCKETS, sorted_entries.size());
+
+                uint32_t highest_end = 0;
+                for (size_t j = bucket_index; j < next_index; ++j) {
+                    bucket.end_range = std::max<uint32_t>(highest_end, sorted_entries[j]->EndAddress);
+
+                    bucket.entries.push_back(sorted_entries[j]);
+                    ++total_added_entries;
+                }
+
+                buckets.push_back(bucket);
+            }
+
+            // Can happen, but can also happen if the number of entries is less than NUM_BUCKETS
+            if (total_added_entries < sorted_entries.size()) {
+                if (buckets.empty()) {
+                    SPDLOG_INFO("Adding all entries to one bucket for module {:x}", module);
+
+                    buckets.push_back(Bucket{
+                        .start_range = 0,
+                        .end_range = (uint32_t)module_size,
+                        .entries = {}
+                    });
+                } else {
+                    buckets.push_back(Bucket{
+                        .start_range = sorted_entries[total_added_entries]->BeginAddress,
+                        .end_range = (uint32_t)module_size,
+                        .entries = {}
+                    });
+                }
+
+                SPDLOG_INFO("Adding remaining {} entries to last bucket for module {:x}", sorted_entries.size() - total_added_entries, module);
+                // Add the remaining entries to the last bucket
+                auto& last_bucket = buckets.back();
+
+                for (size_t i = total_added_entries; i < sorted_entries.size(); ++i) {
+                    last_bucket.entries.push_back(sorted_entries[i]);
+                }
+            }
+
+            // Re-sort the buckets because of the last minute additions
+            std::sort(buckets.begin(), buckets.end(), [](const Bucket& a, const Bucket& b) {
+                return a.start_range < b.start_range;
+            });
+        }
+    }
+
+    PIMAGE_RUNTIME_FUNCTION_ENTRY find_function_entry(uintptr_t middle) {
+        KANANLIB_BENCH();
+
+        const auto module = (uintptr_t)utility::get_module_within(middle).value_or(nullptr);
+
+        if (module == 0 || middle == 0) {
+            return {};
+        }
+
+        populate_function_buckets(module);
+
+        const auto middle_rva = middle - module;
 
         // For the case where there's weird obfuscation or something
         std::vector<Bucket*> candidates{};
@@ -1479,6 +1514,30 @@ namespace utility {
         }
 
         return last;
+    }
+
+    std::vector<FunctionBounds> find_all_function_bounds(HMODULE module) {
+        populate_function_buckets((uintptr_t)module);
+        
+        std::vector<FunctionBounds> functions{};
+
+        const auto module_base = (uintptr_t)module;
+        const auto module_size = utility::get_module_size(module).value_or(0);
+
+        std::shared_lock _{bucket_mtx};
+
+        if (auto it = module_buckets.find(module_base); it != module_buckets.end()) {
+            for (const auto& bucket : it->second) {
+                for (const auto& entry : bucket.entries) {
+                    functions.push_back(FunctionBounds{
+                        .start = module_base + entry->BeginAddress,
+                        .end = module_base + entry->EndAddress
+                    });
+                }
+            }
+        }
+
+        return functions;
     }
 
     std::optional<uintptr_t> find_function_start(uintptr_t middle) {

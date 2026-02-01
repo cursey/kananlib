@@ -87,6 +87,8 @@ namespace utility {
     void exhaustive_decode(uint8_t* ip, size_t max_size, std::function<ExhaustionResult(ExhaustionContext&)> callback);
     void exhaustive_decode(uint8_t* ip, size_t max_size, std::function<ExhaustionResult(INSTRUX&, uintptr_t)> callback);
 
+    void linear_decode(uint8_t* ip, size_t max_size, std::function<bool(ExhaustionContext&)> callback);
+
     struct BasicBlock {
         struct Instruction {
             uintptr_t addr{};
@@ -105,6 +107,13 @@ namespace utility {
     std::vector<BasicBlock> collect_basic_blocks(uintptr_t start, const BasicBlockCollectOptions& options = {});
 
     PIMAGE_RUNTIME_FUNCTION_ENTRY find_function_entry(uintptr_t middle);
+
+    struct FunctionBounds {
+        uintptr_t start{};
+        uintptr_t end{};
+    };
+    std::vector<FunctionBounds> find_all_function_bounds(HMODULE module);
+
     std::optional<uintptr_t> find_function_start(uintptr_t middle);
     // same as prev, but unwinds until the main procedure is found
     // separate function because a lot of code depends on find_function_start
