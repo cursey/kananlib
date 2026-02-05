@@ -1303,6 +1303,12 @@ namespace utility {
             return ExhaustionResult::CONTINUE;
         });
 
+        // Push the last block if it's not equal to the last one we pushed (can happen if the last instruction is a ret or int3, etc)
+        if (blocks.empty() || blocks.back().start != last_block.start || blocks.back().end != last_block.end) {
+            blocks.push_back(last_block);
+            //SPDLOG_INFO("Found basic block from {:x} to {:x}", last_block.start, last_block.end);
+        }
+
         if (options.sort) {
             std::sort(blocks.begin(), blocks.end(), [](const BasicBlock& a, const BasicBlock& b) {
                 return a.start < b.start;
