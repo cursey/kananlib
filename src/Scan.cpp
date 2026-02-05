@@ -1280,18 +1280,19 @@ namespace utility {
         last_block.start = start;
         last_block.end = start;
 
+
         utility::exhaustive_decode((uint8_t*)start, options.max_size, [&](utility::ExhaustionContext& ctx) {
             if (ctx.branch_start != previous_branch_start) {
                 blocks.push_back(last_block);
-                SPDLOG_INFO("Found basic block from {:x} to {:x}", last_block.start, last_block.end);
+                //SPDLOG_INFO("Found basic block from {:x} to {:x}", last_block.start, last_block.end);
 
                 previous_branch_start = ctx.branch_start;
                 last_block.instructions.clear();
                 last_block.start = ctx.branch_start;
-                last_block.end = ctx.branch_start;
+                last_block.end = ctx.branch_start + ctx.instrux.Length;
             }
 
-            last_block.end = ctx.addr;
+            last_block.end = ctx.addr + ctx.instrux.Length;
             last_block.instructions.push_back({ ctx.addr, ctx.instrux });
 
             // Skip over calls
@@ -1310,25 +1311,326 @@ namespace utility {
 
         return blocks;
     }
-
-    // We are storing a list of ranges inside buckets, so we can quickly find the correct bucket
-    // Doing this with multithreading was much slower and inefficient
-    struct Bucket {
-        uint32_t start_range{};
-        uint32_t end_range{};
-        std::vector<PIMAGE_RUNTIME_FUNCTION_ENTRY> entries{};
-    };
     
     static std::shared_mutex bucket_mtx{};
     static std::unordered_map<uintptr_t, std::vector<Bucket>> module_buckets{};
 
-    void populate_function_buckets(uintptr_t module) {
+    template<typename T, typename GetBegin, typename GetEnd>
+    void fill_generic(
+        uintptr_t module,
+        size_t module_size,
+        const std::vector<T>& sorted_entries,
+        std::vector<Bucket>& buckets,
+        GetBegin get_begin,
+        GetEnd get_end
+    )
+    {
+        constexpr size_t NUM_BUCKETS = 2048;
+        size_t total_added_entries = 0;
+
+        for (auto i = 0; i < std::max<size_t>(sorted_entries.size() / NUM_BUCKETS, 1); ++i) {
+            Bucket bucket{};
+            const auto bucket_index = i * NUM_BUCKETS;
+            bucket.start_range = get_begin(sorted_entries[bucket_index]);
+            const auto next_index = std::min<size_t>((i + 1) * NUM_BUCKETS, sorted_entries.size());
+
+            uint32_t highest_end = 0;
+            for (size_t j = bucket_index; j < next_index; ++j) {
+                bucket.end_range = std::max<uint32_t>(highest_end, get_end(sorted_entries[j]));
+
+                bucket.entries.emplace_back(sorted_entries[j]);
+                ++total_added_entries;
+            }
+
+            buckets.push_back(bucket);
+        }
+
+        // Can happen, but can also happen if the number of entries is less than NUM_BUCKETS
+        if (total_added_entries < sorted_entries.size()) {
+            if (buckets.empty()) {
+                SPDLOG_INFO("Adding all entries to one bucket for module {:x}", module);
+
+                buckets.push_back(Bucket{
+                    .start_range = 0,
+                    .end_range = (uint32_t)module_size,
+                    .entries = {}
+                });
+            } else {
+                buckets.push_back(Bucket{
+                    .start_range = get_begin(sorted_entries[total_added_entries]),
+                    .end_range = (uint32_t)module_size,
+                    .entries = {}
+                });
+            }
+
+            SPDLOG_INFO("Adding remaining {} entries to last bucket for module {:x}", sorted_entries.size() - total_added_entries, module);
+            // Add the remaining entries to the last bucket
+            auto& last_bucket = buckets.back();
+
+            for (size_t i = total_added_entries; i < sorted_entries.size(); ++i) {
+                last_bucket.entries.push_back(sorted_entries[i]);
+            }
+        }
+
+        // Re-sort the buckets because of the last minute additions
+        std::sort(buckets.begin(), buckets.end(), [](const Bucket& a, const Bucket& b) {
+            return a.start_range < b.start_range;
+        });
+    }
+
+    void populate_function_buckets_heuristic(uintptr_t module) {
         KANANLIB_BENCH();
 
         const auto module_size = utility::get_module_size((HMODULE)module).value_or(0xDEADBEEF);
         const auto module_end = module + module_size;
 
         constexpr size_t NUM_BUCKETS = 2048;
+        bool needs_insert = false;
+
+        {
+            std::shared_lock _{bucket_mtx};
+
+            if (auto it = module_buckets.find(module); it != module_buckets.end()) {
+                if (it->second.empty()) {
+                    needs_insert = true;
+                }
+            } else {
+                needs_insert = true;
+            }
+        }
+
+        if (!needs_insert) {
+            return;
+        }
+
+        SPDLOG_INFO("Populating function buckets heuristically for module {:x}", module);
+
+        // VirtualQuery and look for all executable regions
+        MEMORY_BASIC_INFORMATION mbi{};
+        std::vector<MEMORY_BASIC_INFORMATION> exec_regions{};
+
+        for (auto addr = module; addr < module_end; ) {
+            if (VirtualQuery((LPCVOID)addr, &mbi, sizeof(mbi)) == 0) {
+                break;
+            }
+
+            if ((mbi.Protect & PAGE_EXECUTE) || (mbi.Protect & PAGE_EXECUTE_READ) || (mbi.Protect & PAGE_EXECUTE_READWRITE) || (mbi.Protect & PAGE_EXECUTE_WRITECOPY)) {
+                exec_regions.push_back(mbi);
+            }
+
+            addr += mbi.RegionSize;
+        }
+
+        SPDLOG_INFO("Found {} executable regions in module {:x}", exec_regions.size(), module);
+
+        // Continuously use scan_data to find all E8 xx xx xx xx patterns in the executable regions
+        std::vector<uint32_t> function_starts{};
+        for (const auto& region : exec_regions) {
+            const auto region_start = (uintptr_t)region.BaseAddress;
+            const auto region_size = region.RegionSize;
+            const auto region_end = region_start + region_size;
+
+            for (auto addr = region_start; addr + 5 < region_end; ) {
+                const auto result = scan_data(addr, region_end - addr - 5, (uint8_t*)"\xE8", 1);
+
+                if (!result.has_value()) {
+                    break;
+                }
+
+                const auto call_target = utility::calculate_absolute(*result + 1);
+
+                if (call_target >= module && call_target < module_end) {
+                    // now also check if it's within the executable regions
+                    auto it = std::find_if(exec_regions.begin(), exec_regions.end(), [call_target](const MEMORY_BASIC_INFORMATION& r) {
+                        const auto r_start = (uintptr_t)r.BaseAddress;
+                        const auto r_end = r_start + r.RegionSize;
+
+                        return call_target >= r_start && call_target < r_end;
+                    });
+
+                    if (it != exec_regions.end()) {
+                        function_starts.push_back((uint32_t)(call_target - module));
+                    }
+                }
+
+                addr = *result + 5;
+            }
+        }
+
+        SPDLOG_INFO("Found {} potential function starts in module {:x}", function_starts.size(), module);
+
+        std::sort(function_starts.begin(), function_starts.end());
+        function_starts.erase(std::unique(function_starts.begin(), function_starts.end()), function_starts.end());
+        SPDLOG_INFO("Filtered down to {} unique function starts in module {:x}", function_starts.size(), module);
+
+        // Look for functions that start with E9, and sled into other E9s.
+        // these are functions that don't always have references but can be considered functions.
+        std::unordered_set<uint32_t> additional_function_starts{};
+
+        for (const auto& start : function_starts) {
+            const auto absolute = module + start;
+
+            if (*(uint8_t*)absolute != 0xE9) {
+                continue;
+            }
+
+            uint32_t slide_count = 0;
+            auto sled_addr = absolute;
+
+            while (*(uint8_t*)sled_addr == 0xE9) {
+                const auto dest = utility::calculate_absolute(sled_addr + 1);
+
+                if (dest < module || dest >= module_end) {
+                    break;
+                }
+
+                const auto dest_rva = (uint32_t)(dest - module);
+
+                if (!additional_function_starts.contains(dest_rva) || !additional_function_starts.contains((uint32_t)(sled_addr - module)))
+                {
+                    if (std::find(function_starts.begin(), function_starts.end(), dest_rva) == function_starts.end() &&
+                        std::find(additional_function_starts.begin(), additional_function_starts.end(), dest_rva) == additional_function_starts.end()) 
+                    {
+                        additional_function_starts.insert(dest_rva);
+                        additional_function_starts.insert(sled_addr - module);
+                    }
+
+                    ++slide_count;
+                }
+
+                sled_addr += 5;
+            }
+        }
+
+        SPDLOG_INFO("Found {} additional function starts via sledding in module {:x}", additional_function_starts.size(), module);
+
+        // Filter out which ones already belong to function_starts
+        // and log how many actually got added
+        size_t added_count = 0;
+        for (const auto& add_start : additional_function_starts) {
+            if (std::find(function_starts.begin(), function_starts.end(), add_start) == function_starts.end()) {
+                function_starts.push_back(add_start);
+                ++added_count;
+            }
+        }
+
+        SPDLOG_INFO("Added {} new function starts after filtering in module {:x}", added_count, module);
+        SPDLOG_INFO("Total function starts before disassembly check: {}", function_starts.size());
+
+        std::sort(function_starts.begin(), function_starts.end());
+        function_starts.erase(std::unique(function_starts.begin(), function_starts.end()), function_starts.end());
+
+        // Quickly disassemble to make sure they look like function starts
+        // Remove any that don't
+        std::erase_if(function_starts, [module](uint32_t rva) {
+            const auto absolute = module + rva;
+
+            INSTRUX ix{};
+            const auto status = NdDecodeEx(&ix, (uint8_t*)absolute, 16, ND_CODE_64, ND_DATA_64);
+
+            if (!ND_SUCCESS(status)) {
+                return true;
+            }
+
+            return false;
+        });
+
+        SPDLOG_INFO("Filtered down to {} function starts after disassembly check in module {:x}", function_starts.size(), module);
+
+        // Remove any function starts that land on int3, 0x00, or similar
+        std::erase_if(function_starts, [module](uint32_t rva) {
+            const auto absolute = module + rva;
+
+            if (*(uint8_t*)absolute == 0xCC || *(uint8_t*)absolute == 0x00) {
+                return true;
+            }
+
+            if (*(uint8_t*)absolute == 0xFF && (*(uint8_t*)(absolute + 1) == 0xFF)) {
+                return true;
+            }
+
+            return false;
+        });
+
+        SPDLOG_INFO("Filtered down to {} function starts after int3 check in module {:x}", function_starts.size(), module);
+
+        std::vector<uint32_t> function_ends{}; // Heuristically determined via basic block
+        for (const auto& start_rva : function_starts) {
+            const auto start_absolute = module + start_rva;
+
+            const auto blocks = utility::collect_basic_blocks(start_absolute, BasicBlockCollectOptions{ .max_size = 0x1000, .sort = true });
+
+            if (blocks.empty()) {
+                function_ends.push_back(start_rva + utility::get_insn_size(start_absolute)); // fallback
+                continue;
+            }
+
+            // Find the highest basic block that is > than the start
+            // and is also reachable contiguously (cur.start == prev.end)
+            uintptr_t highest_block_end = blocks.begin()->end;
+
+            for (size_t i = 1; i < blocks.size(); ++i) {
+                const auto& block = blocks[i];
+
+                if (block.start != highest_block_end) {
+                    SPDLOG_INFO("{} contiguous blocks found for function starting at {:x}", i, start_absolute);
+                    break;
+                }
+
+                highest_block_end = block.end;
+            }
+
+            if (highest_block_end > start_absolute) {
+                function_ends.push_back(highest_block_end - module);
+            } else {
+                function_ends.push_back(start_rva + utility::get_insn_size(start_absolute)); // fallback
+            }
+        }
+
+        // log all RVAs
+        /*for (const auto& start : function_starts) {
+            const auto rva = start;
+            SPDLOG_INFO("Function start RVA: {:x}->{:X} (size {:X})", rva, rva + function_ends[&start - &function_starts[0]] - rva, function_ends[&start - &function_starts[0]] - rva);
+        }*/
+
+        for (size_t i = 0; i < function_starts.size(); ++i) {
+            const auto rva = function_starts[i];
+            SPDLOG_INFO("Function start RVA: {:x}->{:X} (size {:X})", rva, function_ends[i], function_ends[i] - rva);
+        }
+
+        std::unique_lock _{bucket_mtx};
+        auto& buckets = module_buckets[module];
+        
+        std::vector<Bucket::IMAGE_RUNTIME_FUNCTION_ENTRY_KANANLIB> entries{};
+        for (size_t i = 0; i < function_starts.size(); ++i) {
+            Bucket::IMAGE_RUNTIME_FUNCTION_ENTRY_KANANLIB entry{};
+            entry.BeginAddress = function_starts[i];
+            entry.EndAddress = function_ends[i];
+            entries.push_back(entry);
+        }
+
+        fill_generic<Bucket::IMAGE_RUNTIME_FUNCTION_ENTRY_KANANLIB>(module, module_size, entries, buckets,
+            [](const Bucket::IMAGE_RUNTIME_FUNCTION_ENTRY_KANANLIB& entry) {
+                return entry.BeginAddress;
+            },
+            [](const Bucket::IMAGE_RUNTIME_FUNCTION_ENTRY_KANANLIB& entry) {
+                return entry.EndAddress;
+            }
+        );
+
+        return;
+    }
+
+    void populate_function_buckets(uintptr_t module) {
+        KANANLIB_BENCH();
+
+#ifdef _M_X86
+        return populate_function_buckets_heuristic(module);
+#else
+
+        const auto module_size = utility::get_module_size((HMODULE)module).value_or(0xDEADBEEF);
+        const auto module_end = module + module_size;
+
         bool needs_insert = false;
 
         {
@@ -1387,60 +1689,19 @@ namespace utility {
 
             SPDLOG_INFO("Filtered and sorted entries down to {} for module {:x}", sorted_entries.size(), module);
 
-            size_t total_added_entries = 0;
-
-            for (auto i = 0; i < std::max<size_t>(sorted_entries.size() / NUM_BUCKETS, 1); ++i) {
-                Bucket bucket{};
-                const auto bucket_index = i * NUM_BUCKETS;
-                bucket.start_range = sorted_entries[bucket_index]->BeginAddress;
-                const auto next_index = std::min<size_t>((i + 1) * NUM_BUCKETS, sorted_entries.size());
-
-                uint32_t highest_end = 0;
-                for (size_t j = bucket_index; j < next_index; ++j) {
-                    bucket.end_range = std::max<uint32_t>(highest_end, sorted_entries[j]->EndAddress);
-
-                    bucket.entries.push_back(sorted_entries[j]);
-                    ++total_added_entries;
+            fill_generic<PIMAGE_RUNTIME_FUNCTION_ENTRY>(module, module_size, sorted_entries, buckets,
+                [](const PIMAGE_RUNTIME_FUNCTION_ENTRY entry) {
+                    return entry->BeginAddress;
+                },
+                [](const PIMAGE_RUNTIME_FUNCTION_ENTRY entry) {
+                    return entry->EndAddress;
                 }
-
-                buckets.push_back(bucket);
-            }
-
-            // Can happen, but can also happen if the number of entries is less than NUM_BUCKETS
-            if (total_added_entries < sorted_entries.size()) {
-                if (buckets.empty()) {
-                    SPDLOG_INFO("Adding all entries to one bucket for module {:x}", module);
-
-                    buckets.push_back(Bucket{
-                        .start_range = 0,
-                        .end_range = (uint32_t)module_size,
-                        .entries = {}
-                    });
-                } else {
-                    buckets.push_back(Bucket{
-                        .start_range = sorted_entries[total_added_entries]->BeginAddress,
-                        .end_range = (uint32_t)module_size,
-                        .entries = {}
-                    });
-                }
-
-                SPDLOG_INFO("Adding remaining {} entries to last bucket for module {:x}", sorted_entries.size() - total_added_entries, module);
-                // Add the remaining entries to the last bucket
-                auto& last_bucket = buckets.back();
-
-                for (size_t i = total_added_entries; i < sorted_entries.size(); ++i) {
-                    last_bucket.entries.push_back(sorted_entries[i]);
-                }
-            }
-
-            // Re-sort the buckets because of the last minute additions
-            std::sort(buckets.begin(), buckets.end(), [](const Bucket& a, const Bucket& b) {
-                return a.start_range < b.start_range;
-            });
+            );
         }
+#endif
     }
 
-    PIMAGE_RUNTIME_FUNCTION_ENTRY find_function_entry(uintptr_t middle) {
+    std::optional<Bucket::IMAGE_RUNTIME_FUNCTION_ENTRY_KANANLIB> find_function_entry(uintptr_t middle) {
         KANANLIB_BENCH();
 
         const auto module = (uintptr_t)utility::get_module_within(middle).value_or(nullptr);
@@ -1473,14 +1734,14 @@ namespace utility {
 
         if (candidates.empty()) {
             SPDLOG_ERROR("Failed to find candidates for function entry");
-            return nullptr;
+            return std::nullopt;
         }
 
         if (candidates.size() > 1) {
             SPDLOG_INFO("Found {} candidates for function entry", candidates.size());
         }
 
-        PIMAGE_RUNTIME_FUNCTION_ENTRY last = nullptr;
+        const Bucket::IMAGE_RUNTIME_FUNCTION_ENTRY_KANANLIB* last = nullptr;
         uint32_t nearest_distance = 0xFFFFFFFF;
 
         for (auto& bucket : candidates) {
@@ -1493,27 +1754,27 @@ namespace utility {
                     break;
                 }
 
-                if (entry->BeginAddress == middle_rva) {
-                    last = entry;
+                if (entry.BeginAddress == middle_rva) {
+                    last = &entry;
                     nearest_distance = 0;
                     break;
                 }
 
                 // Check if the middle address is within the range of the function
-                if (entry->BeginAddress <= middle_rva && middle_rva <= entry->EndAddress) {
-                    const auto distance = middle_rva - entry->BeginAddress;
+                if (entry.BeginAddress <= middle_rva && middle_rva <= entry.EndAddress) {
+                    const auto distance = middle_rva - entry.BeginAddress;
 
                     if (distance < nearest_distance) {
                         nearest_distance = distance;
 
                         // Return the start address of the function
-                        last = entry;
+                        last = &entry;
                     }
                 }
             }
         }
 
-        return last;
+        return last != nullptr ? *last : nullptr;
     }
 
     std::vector<FunctionBounds> find_all_function_bounds(HMODULE module) {
@@ -1530,8 +1791,8 @@ namespace utility {
             for (const auto& bucket : it->second) {
                 for (const auto& entry : bucket.entries) {
                     functions.push_back(FunctionBounds{
-                        .start = module_base + entry->BeginAddress,
-                        .end = module_base + entry->EndAddress
+                        .start = module_base + entry.BeginAddress,
+                        .end = module_base + entry.EndAddress
                     });
                 }
             }
@@ -1543,7 +1804,7 @@ namespace utility {
     std::optional<uintptr_t> find_function_start(uintptr_t middle) {
         const auto entry = find_function_entry(middle);
 
-        if (entry != nullptr) {
+        if (entry) {
             SPDLOG_INFO("Found function start for {:x} at {:x}", middle, entry->BeginAddress);
             return (uintptr_t)entry->BeginAddress + (uintptr_t)utility::get_module_within(middle).value_or(nullptr);
         }
@@ -1555,7 +1816,7 @@ namespace utility {
 #if defined(_M_AMD64)
         auto entry = find_function_entry(middle);
 
-        if (entry != nullptr) {
+        if (entry) {
             const auto module = utility::get_module_within(middle).value_or(nullptr);
 
             if (module != nullptr) {

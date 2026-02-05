@@ -106,7 +106,37 @@ namespace utility {
     };
     std::vector<BasicBlock> collect_basic_blocks(uintptr_t start, const BasicBlockCollectOptions& options = {});
 
-    PIMAGE_RUNTIME_FUNCTION_ENTRY find_function_entry(uintptr_t middle);
+    // We are storing a list of ranges inside buckets, so we can quickly find the correct bucket
+    // Doing this with multithreading was much slower and inefficient
+    struct Bucket {
+        struct IMAGE_RUNTIME_FUNCTION_ENTRY_KANANLIB {
+            DWORD BeginAddress{};
+            DWORD EndAddress{};
+            union {
+                DWORD UnwindInfoAddress{};
+                DWORD UnwindData;
+            } DUMMYUNIONNAME;
+
+            PIMAGE_RUNTIME_FUNCTION_ENTRY original{nullptr};
+
+            IMAGE_RUNTIME_FUNCTION_ENTRY_KANANLIB(PIMAGE_RUNTIME_FUNCTION_ENTRY entry)
+                : BeginAddress(entry->BeginAddress),
+                  EndAddress(entry->EndAddress),
+                  original(entry)
+            {
+                this->UnwindData = entry->UnwindData;
+            }
+
+            IMAGE_RUNTIME_FUNCTION_ENTRY_KANANLIB() = default;
+        };
+
+        uint32_t start_range{};
+        uint32_t end_range{};
+        std::vector<IMAGE_RUNTIME_FUNCTION_ENTRY_KANANLIB> entries{};
+    };
+
+    void populate_function_buckets_heuristic(uintptr_t module);
+    std::optional<Bucket::IMAGE_RUNTIME_FUNCTION_ENTRY_KANANLIB> find_function_entry(uintptr_t middle);
 
     struct FunctionBounds {
         uintptr_t start{};
