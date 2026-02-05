@@ -1558,13 +1558,15 @@ namespace utility {
             return false;
         });
 
+        std::unordered_set<uint32_t> function_starts_set(function_starts.begin(), function_starts.end());
+
         SPDLOG_INFO("Filtered down to {} function starts after int3 check in module {:x}", function_starts.size(), module);
 
         std::vector<uint32_t> function_ends{}; // Heuristically determined via basic block
         for (const auto& start_rva : function_starts) {
             const auto start_absolute = module + start_rva;
 
-            const auto blocks = utility::collect_basic_blocks(start_absolute, BasicBlockCollectOptions{ .max_size = 0x1000, .sort = true });
+            const auto blocks = utility::collect_basic_blocks(start_absolute, BasicBlockCollectOptions{ .max_size = 8192, .sort = true });
 
             if (blocks.empty()) {
                 function_ends.push_back(start_rva + utility::get_insn_size(start_absolute)); // fallback
@@ -1587,6 +1589,59 @@ namespace utility {
             }
 
             if (highest_block_end > start_absolute) {
+                uintptr_t old_block_end = highest_block_end;
+                size_t num_decoded = 0;
+                // Check if we can linearly connect the "highest" block we found to the
+                // highest block in the actual array of blocks.
+                // this should fix issues where we have dead instructions/padding somewhere
+                // the CFG does not account for, but we can still linearly decode through it.
+                if (highest_block_end < blocks.back().end) {
+                    INSTRUX ix{};
+                    const auto status = NdDecodeEx(&ix, (uint8_t*)highest_block_end, 16, ND_CODE_64, ND_DATA_64);
+
+                    if (ND_SUCCESS(status)) {
+                        // If the disassembly is successful, we can assume it's a valid instruction
+                        // and continue sliding the end forward until we hit an invalid instruction
+                        while (true && num_decoded < 16) {
+                            const auto next_status = NdDecodeEx(&ix, (uint8_t*)highest_block_end + ix.Length, 16, ND_CODE_64, ND_DATA_64);
+
+                            if (!ND_SUCCESS(next_status)) {
+                                break;
+                            }
+
+                            highest_block_end += ix.Length;
+                            ++num_decoded;
+
+                            // If decoded instruction is:
+                            // ret, int3, jmp, or similar, we can assume it's the end of the function and stop sliding
+                            if (ix.Instruction == ND_INS_RETN || ix.Instruction == ND_INS_INT3 || ix.BranchInfo.IsBranch) {
+                                break;
+                            }
+
+                            // If instruction pointer lands on:
+                            // Any known function start,
+                            // a range within our known basic blocks
+                            // then we can assume it's the end of the function and stop sliding
+                            if (function_starts_set.contains((uint32_t)(highest_block_end - module))) {
+                                break;
+                            }
+
+                            auto it = std::find_if(blocks.begin(), blocks.end(), [highest_block_end](const BasicBlock& b) {
+                                return highest_block_end >= b.start && highest_block_end < b.end;
+                            });
+
+                            if (it != blocks.end()) {
+                                highest_block_end = it->end;
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                if (old_block_end != highest_block_end) {
+                    SPDLOG_INFO("Slid function end from {:x} to {:x} for function starting at {:x} after decoding {} instructions", old_block_end, highest_block_end, start_absolute, num_decoded);
+                }
+
                 function_ends.push_back(highest_block_end - module);
             } else {
                 function_ends.push_back(start_rva + utility::get_insn_size(start_absolute)); // fallback
