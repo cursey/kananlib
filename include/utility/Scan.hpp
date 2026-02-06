@@ -106,6 +106,14 @@ namespace utility {
     };
     std::vector<BasicBlock> collect_basic_blocks(uintptr_t start, const BasicBlockCollectOptions& options = {});
 
+    struct LinearBlock {
+        uintptr_t start{};
+        uintptr_t end{};
+        std::vector<uintptr_t> branches{};
+    };
+
+    std::vector<LinearBlock> collect_linear_blocks(uintptr_t fn_start, uintptr_t fn_end);
+
     // We are storing a list of ranges inside buckets, so we can quickly find the correct bucket
     // Doing this with multithreading was much slower and inefficient
     struct Bucket {

@@ -1095,7 +1095,7 @@ namespace utility {
     // exhaustive_decode decodes until it hits something like a return, int3, fails, etc
     // except when it notices a conditional jmp, it will decode both branches separately
     void exhaustive_decode(uint8_t* start, size_t max_size, std::function<ExhaustionResult(ExhaustionContext&)> callback) {
-        SPDLOG_INFO("Running exhaustive_decode on {:x}", (uintptr_t)start);
+        //SPDLOG_INFO("Running exhaustive_decode on {:x}", (uintptr_t)start);
 
         std::unordered_set<uint8_t*> seen_addresses{};
         std::deque<uint8_t*> branches{};
@@ -1282,6 +1282,22 @@ namespace utility {
 
 
         utility::exhaustive_decode((uint8_t*)start, options.max_size, [&](utility::ExhaustionContext& ctx) {
+            if (ctx.instrux.BranchInfo.IsBranch) {
+                if (ctx.instrux.BranchInfo.IsConditional) {
+                    if (auto dest = utility::resolve_displacement(ctx.addr); dest) {
+                        last_block.branches.push_back(*dest);
+                    } else {
+                        //SPDLOG_ERROR("Failed to resolve displacement for conditional branch at {:x}", ctx.addr);
+                    }
+
+                    last_block.branches.push_back(ctx.addr + ctx.instrux.Length); // Fallthrough
+                } else {
+                    if (*(uint8_t*)ctx.addr == 0xE9) {
+                        last_block.branches.push_back(utility::calculate_absolute(ctx.addr + 1));
+                    }
+                }
+            }
+
             if (ctx.branch_start != previous_branch_start) {
                 blocks.push_back(last_block);
                 //SPDLOG_INFO("Found basic block from {:x} to {:x}", last_block.start, last_block.end);
@@ -1318,6 +1334,115 @@ namespace utility {
         return blocks;
     }
     
+    std::vector<LinearBlock> collect_linear_blocks(uintptr_t fn_start, uintptr_t fn_end)
+    {
+        std::vector<LinearBlock> blocks;
+        if (fn_start >= fn_end) {
+            return blocks;
+        }
+
+        // gather all split points (block starts) first, then we will build blocks in pass 2
+        std::unordered_set<uintptr_t> split_set;
+        split_set.reserve(64);
+
+        split_set.insert(fn_start);
+        split_set.insert(fn_end);
+
+        utility::linear_decode((uint8_t*)fn_start, fn_end - fn_start,
+            [&](const utility::ExhaustionContext& ctx)
+        {
+            const auto ip   = ctx.addr;
+            const auto& ix  = ctx.instrux;
+            const auto next = ip + ix.Length;
+
+            if (ip >= fn_end) {
+                return false;
+            }
+
+            if (ix.BranchInfo.IsBranch) {
+                // fallthrough always starts new block
+                if (next >= fn_start && next <= fn_end) {
+                    split_set.insert(next);
+                }
+
+                // direct branch target
+                if (!ix.BranchInfo.IsIndirect) {
+                    if (auto dest = utility::resolve_displacement(ip); dest) {
+                        if (*dest >= fn_start && *dest <= fn_end) {
+                            split_set.insert(*dest);
+                        }
+                    }
+                }
+            }
+
+            // terminators also split
+            if (ix.Instruction == ND_INS_RETN || ix.Instruction == ND_INS_INT3) {
+                if (next >= fn_start && next <= fn_end) {
+                    split_set.insert(next);
+                }
+            }
+
+            return true;
+        });
+
+        // sort split points
+        std::vector<uintptr_t> splits(split_set.begin(), split_set.end());
+        std::sort(splits.begin(), splits.end());
+
+        if (splits.size() < 2) {
+            return blocks;
+        }
+
+        blocks.reserve(splits.size());
+
+        // pass 2, build blocks from split points
+        for (size_t i = 0; i + 1 < splits.size(); ++i) {
+            uintptr_t start = splits[i];
+            uintptr_t end   = splits[i + 1];
+
+            if (start >= fn_end)
+                break;
+
+            LinearBlock bb{};
+            bb.start = start;
+            bb.end   = start;
+
+            utility::linear_decode((uint8_t*)start, end - start,
+                [&](const utility::ExhaustionContext& ctx)
+            {
+                const auto ip   = ctx.addr;
+                const auto& ix  = ctx.instrux;
+                const auto next = ip + ix.Length;
+
+                if (ip >= end)
+                    return false;
+
+                // record branches
+                if (ix.BranchInfo.IsBranch) {
+                    if (!ix.BranchInfo.IsIndirect) {
+                        if (auto dest = utility::resolve_displacement(ip); dest)
+                            bb.branches.push_back(*dest);
+                    }
+
+                    if (ix.BranchInfo.IsConditional)
+                        bb.branches.push_back(next);
+                }
+
+                bb.end = next;
+
+                if (ix.Category == ND_CAT_CALL) {
+                    return true;
+                }
+
+                return true;
+            });
+
+            blocks.push_back(bb);
+        }
+
+        return blocks;
+    }
+
     static std::shared_mutex bucket_mtx{};
     static std::unordered_map<uintptr_t, std::vector<Bucket>> module_buckets{};
 
@@ -1581,7 +1706,7 @@ namespace utility {
                 const auto& block = blocks[i];
 
                 if (block.start != highest_block_end) {
-                    SPDLOG_INFO("{} contiguous blocks found for function starting at {:x}", i, start_absolute);
+                    //SPDLOG_INFO("{} contiguous blocks found for function starting at {:x}", i, start_absolute);
                     break;
                 }
 
@@ -1638,9 +1763,9 @@ namespace utility {
                     }
                 }
 
-                if (old_block_end != highest_block_end) {
-                    SPDLOG_INFO("Slid function end from {:x} to {:x} for function starting at {:x} after decoding {} instructions", old_block_end, highest_block_end, start_absolute, num_decoded);
-                }
+                //if (old_block_end != highest_block_end) {
+                    //SPDLOG_INFO("Slid function end from {:x} to {:x} for function starting at {:x} after decoding {} instructions", old_block_end, highest_block_end, start_absolute, num_decoded);
+                //}
 
                 function_ends.push_back(highest_block_end - module);
             } else {
@@ -1654,10 +1779,10 @@ namespace utility {
             SPDLOG_INFO("Function start RVA: {:x}->{:X} (size {:X})", rva, rva + function_ends[&start - &function_starts[0]] - rva, function_ends[&start - &function_starts[0]] - rva);
         }*/
 
-        for (size_t i = 0; i < function_starts.size(); ++i) {
+        /*for (size_t i = 0; i < function_starts.size(); ++i) {
             const auto rva = function_starts[i];
             SPDLOG_INFO("Function start RVA: {:x}->{:X} (size {:X})", rva, function_ends[i], function_ends[i] - rva);
-        }
+        }*/
 
         std::unique_lock _{bucket_mtx};
         auto& buckets = module_buckets[module];
