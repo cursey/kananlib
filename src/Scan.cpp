@@ -988,7 +988,7 @@ namespace utility {
             const auto resolved = utility::resolve_instruction(candidate_addr);
 
             if (resolved) {
-                const auto displacement = utility::resolve_displacement(resolved->addr);
+                const auto displacement = utility::resolve_displacement(resolved->addr, &resolved->instrux);
 
                 if (displacement && *displacement == ptr) {
                     if (filter == nullptr || filter(candidate_addr)) {
@@ -1116,7 +1116,12 @@ namespace utility {
 
                 seen_addresses.insert(ip);
 
-                if (IsBadReadPtr(ip, 16)) {
+                // This instead of IsBadReadPtr so we don't branch into kernel32 every time
+                // we want to test the readability of the memory
+                __try {
+                    volatile auto test = *ip;
+                    (void)test;
+                } __except (EXCEPTION_EXECUTE_HANDLER) {
                     break;
                 }
 
@@ -1149,7 +1154,7 @@ namespace utility {
                         // and push it to the branches deque
                         SPDLOG_DEBUG("Conditional Branch detected: {:x}", (uintptr_t)ip);
 
-                        if (auto dest = utility::resolve_displacement((uintptr_t)ip); dest) {
+                        if (auto dest = utility::resolve_displacement((uintptr_t)ip, &ix); dest) {
                             if (result != ExhaustionResult::STEP_OVER) {
                                 branches.push_back((uint8_t*)*dest);
                                 ++total_branches_seen;
@@ -1161,8 +1166,11 @@ namespace utility {
                     } else if (ix.BranchInfo.IsBranch && !ix.BranchInfo.IsConditional) {
                         SPDLOG_DEBUG("Unconditional Branch detected: {:x}", (uintptr_t)ip);
 
-                        if (auto dest = utility::resolve_displacement((uintptr_t)ip); dest) {
-                            if (std::string_view{ix.Mnemonic}.starts_with("JMP")) {
+                        constexpr auto JMP_3  = ('J' | ('M' << 8) | ('P' << 16));
+
+                        if (auto dest = utility::resolve_displacement((uintptr_t)ip, &ix); dest) {
+                            const auto mnemonic_3 = (*(uint32_t*)ix.Mnemonic) & 0xFFFFFF;
+                            if (mnemonic_3 == JMP_3) {
                                 ip = (uint8_t*)*dest;
                                 ctx.branch_start = (uintptr_t)*dest;
                                 ++total_branches_seen;
@@ -1196,7 +1204,7 @@ namespace utility {
                         }
                     }
 
-                    SPDLOG_ERROR("Failed to resolve indirect jmp destination: {:x}", (uintptr_t)ip);
+                    SPDLOG_DEBUG("Failed to resolve indirect jmp destination: {:x}", (uintptr_t)ip);
                     break;
                 } else if (ix.IsRipRelative && ip[0] == 0xFF && ip[1] == 0x15) { // call qword ptr [rip+0xdeadbeef]
                     SPDLOG_DEBUG("Indirect call detected: {:x}", (uintptr_t)ip);
@@ -1213,7 +1221,8 @@ namespace utility {
                         }
                     }
                 } else if (ix.BranchInfo.IsBranch && !ix.BranchInfo.IsConditional) {
-                    if (!std::string_view{ix.Mnemonic}.starts_with("CALL")) {
+                    //if (!std::string_view{ix.Mnemonic}.starts_with("CALL")) {
+                    if (ix.Category == ND_CAT_CALL) {
                         break;
                     }
                 }
@@ -1281,11 +1290,10 @@ namespace utility {
         last_block.start = start;
         last_block.end = start;
 
-
         utility::exhaustive_decode((uint8_t*)start, options.max_size, [&](utility::ExhaustionContext& ctx) {
-            if (ctx.instrux.BranchInfo.IsBranch) {
+            if (ctx.instrux.BranchInfo.IsBranch && ctx.instrux.Category != ND_CAT_CALL) {
                 if (ctx.instrux.BranchInfo.IsConditional) {
-                    if (auto dest = utility::resolve_displacement(ctx.addr); dest) {
+                    if (auto dest = utility::resolve_displacement(ctx.addr, &ctx.instrux); dest) {
                         last_block.branches.push_back(*dest);
                     } else {
                         //SPDLOG_ERROR("Failed to resolve displacement for conditional branch at {:x}", ctx.addr);
@@ -1313,7 +1321,7 @@ namespace utility {
             last_block.instructions.push_back({ ctx.addr, ctx.instrux });
 
             // Skip over calls
-            if (std::string_view{ctx.instrux.Mnemonic}.starts_with("CALL")) {
+            if (ctx.instrux.Category == ND_CAT_CALL) {
                 return utility::ExhaustionResult::STEP_OVER;
             }
 
@@ -2545,17 +2553,23 @@ namespace utility {
         return result;
     }
 
-    std::optional<uintptr_t> resolve_displacement(uintptr_t ip) {
-        const auto ix = decode_one((uint8_t*)ip);
-
-        if (!ix) {
-            SPDLOG_ERROR("Failed to decode instruction at 0x{:x}", ip);
-            return std::nullopt;
+    std::optional<uintptr_t> resolve_displacement(uintptr_t ip, const INSTRUX* ix_in) {
+        INSTRUX ix_local{};
+        const INSTRUX* ix;
+        
+        if (ix_in) {
+            ix = ix_in;
+        } else {
+            auto decoded = decode_one((uint8_t*)ip);
+            if (!decoded) {
+                return std::nullopt;
+            }
+            ix_local = *decoded;
+            ix = &ix_local;
         }
 
         for (auto i = 0; i < ix->OperandsCount; ++i) {
             const auto& operand = ix->Operands[i];
-
             if (operand.Type == ND_OP_MEM) {
                 const auto& mem = operand.Info.Memory;
                 if (mem.HasDisp && mem.IsRipRel) {
@@ -2652,7 +2666,7 @@ namespace utility {
                 return utility::ExhaustionResult::STEP_OVER;
             }
 
-            const auto disp = utility::resolve_displacement(ip);
+            const auto disp = utility::resolve_displacement(ip, &ix);
 
             if (!disp) {
                 return utility::ExhaustionResult::CONTINUE;
@@ -2691,7 +2705,7 @@ namespace utility {
                 return utility::ExhaustionResult::STEP_OVER;
             }
 
-            const auto disp = utility::resolve_displacement(ip);
+            const auto disp = utility::resolve_displacement(ip, &ix);
 
             if (!disp) {
                 return utility::ExhaustionResult::CONTINUE;
@@ -2727,7 +2741,7 @@ namespace utility {
             }
 
             auto check_if_pointer = [&]() -> bool {
-                const auto disp = utility::resolve_displacement(ip);
+                const auto disp = utility::resolve_displacement(ip, &ix);
 
                 if (!disp) {
                     return false;
@@ -2778,7 +2792,7 @@ namespace utility {
             }
 
             auto check_if_pointer = [&]() -> bool {
-                const auto disp = utility::resolve_displacement(ip);
+                const auto disp = utility::resolve_displacement(ip, &ix);
 
                 if (!disp) {
                     return false;
@@ -2985,7 +2999,7 @@ namespace utility {
                     return ExhaustionResult::STEP_OVER;
                 }
 
-                const auto disp = utility::resolve_displacement(ctx.addr);
+                const auto disp = utility::resolve_displacement(ctx.addr, &ctx.instrux);
 
                 if (!disp) {
                     return ExhaustionResult::CONTINUE;
@@ -3032,7 +3046,7 @@ namespace utility {
                     return ExhaustionResult::STEP_OVER;
                 }
 
-                const auto disp = utility::resolve_displacement(ctx.addr);
+                const auto disp = utility::resolve_displacement(ctx.addr, &ctx.instrux);
 
                 if (!disp) {
                     return ExhaustionResult::CONTINUE;

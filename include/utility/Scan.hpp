@@ -186,7 +186,8 @@ namespace utility {
     std::optional<uintptr_t> find_encapsulating_function(uintptr_t start_instruction, uintptr_t middle);
     std::optional<uintptr_t> find_encapsulating_function_disp(uintptr_t start_instruction, uintptr_t disp, bool follow_calls = true);
 
-    std::optional<uintptr_t> resolve_displacement(uintptr_t ip);
+    // Can supply an instrux if we've already decoded this (reduces redundant decoding when we just want to resolve the displacement)
+    std::optional<uintptr_t> resolve_displacement(uintptr_t ip, const INSTRUX* instrux_in = nullptr);
 
     struct Resolved {
         uintptr_t addr{};
