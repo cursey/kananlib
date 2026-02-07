@@ -1125,15 +1125,15 @@ namespace utility {
                     break;
                 }
 
-                INSTRUX ix{};
-                const auto status = NdDecodeEx(&ix, ip, 64, ND_CODE_64, ND_DATA_64);
+                const auto status = NdDecodeEx(&ctx.instrux, ip, 64, ND_CODE_64, ND_DATA_64);
 
                 if (!ND_SUCCESS(status)) {
                     break;
                 }
 
                 ctx.addr = (uintptr_t)ip;
-                ctx.instrux = ix;
+
+                auto& ix = ctx.instrux;
                 const auto result = callback(ctx);
 
                 if (result == ExhaustionResult::BREAK) {
@@ -1166,24 +1166,26 @@ namespace utility {
                     } else if (ix.BranchInfo.IsBranch && !ix.BranchInfo.IsConditional) {
                         SPDLOG_DEBUG("Unconditional Branch detected: {:x}", (uintptr_t)ip);
 
-                        constexpr auto JMP_3  = ('J' | ('M' << 8) | ('P' << 16));
+                        const auto is_jmp = ix.Instruction >= ND_INS_JMPE && ix.Instruction <= ND_INS_JMPNR;
 
-                        if (auto dest = utility::resolve_displacement((uintptr_t)ip, &ix); dest) {
-                            const auto mnemonic_3 = (*(uint32_t*)ix.Mnemonic) & 0xFFFFFF;
-                            if (mnemonic_3 == JMP_3) {
+                        if (is_jmp) {
+                            if (auto dest = utility::resolve_displacement((uintptr_t)ip, &ix); dest) {
                                 ip = (uint8_t*)*dest;
                                 ctx.branch_start = (uintptr_t)*dest;
                                 ++total_branches_seen;
                                 continue;
                             } else {
-                                if (result != ExhaustionResult::STEP_OVER) {
-                                    branches.push_back((uint8_t*)*dest);
-                                    ++total_branches_seen;
-                                }
+                                SPDLOG_ERROR("Failed to resolve displacement for {:x}", (uintptr_t)ip);
+                                SPDLOG_ERROR(" TODO: Fix this");
                             }
-                        } else {
-                            SPDLOG_ERROR("Failed to resolve displacement for {:x}", (uintptr_t)ip);
-                            SPDLOG_ERROR(" TODO: Fix this");
+                        } else if (result != ExhaustionResult::STEP_OVER) {
+                            if (auto dest = utility::resolve_displacement((uintptr_t)ip, &ix); dest) {
+                                branches.push_back((uint8_t*)*dest);
+                                ++total_branches_seen;
+                            } else {
+                                SPDLOG_ERROR("Failed to resolve displacement for {:x}", (uintptr_t)ip);
+                                SPDLOG_ERROR(" TODO: Fix this");
+                            }
                         }
                     }
                 } else if (ix.IsRipRelative && ip[0] == 0xFF && ip[1] == 0x25) { // jmp qword ptr [rip+0xdeadbeef]
@@ -1289,6 +1291,8 @@ namespace utility {
         last_block.start = start;
         last_block.end = start;
 
+        const auto should_copy_instructions = options.copy_instructions;
+
         utility::exhaustive_decode((uint8_t*)start, options.max_size, [&](utility::ExhaustionContext& ctx) {
             if (ctx.instrux.BranchInfo.IsBranch && ctx.instrux.Category != ND_CAT_CALL) {
                 if (ctx.instrux.BranchInfo.IsConditional) {
@@ -1317,7 +1321,10 @@ namespace utility {
             }
 
             last_block.end = ctx.addr + ctx.instrux.Length;
-            last_block.instructions.push_back({ ctx.addr, ctx.instrux });
+            
+            if (should_copy_instructions) {
+                last_block.instructions.push_back({ ctx.addr, ctx.instrux });
+            }
 
             // Skip over calls
             if (ctx.instrux.Category == ND_CAT_CALL) {
@@ -1715,7 +1722,9 @@ namespace utility {
         for (const auto& start_rva : function_starts) {
             const auto start_absolute = module + start_rva;
 
-            const auto blocks = utility::collect_basic_blocks(start_absolute, BasicBlockCollectOptions{ .max_size = 8192, .sort = true });
+            const auto blocks = utility::collect_basic_blocks(start_absolute, BasicBlockCollectOptions{ 
+                .max_size = 8192, .sort = true, .merge_call_blocks = true, .copy_instructions = false
+            });
 
             if (blocks.empty()) {
                 function_ends.push_back(start_rva + utility::get_insn_size(start_absolute)); // fallback
