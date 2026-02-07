@@ -1221,8 +1221,7 @@ namespace utility {
                         }
                     }
                 } else if (ix.BranchInfo.IsBranch && !ix.BranchInfo.IsConditional) {
-                    //if (!std::string_view{ix.Mnemonic}.starts_with("CALL")) {
-                    if (ix.Category == ND_CAT_CALL) {
+                    if (ix.Category != ND_CAT_CALL) {
                         break;
                     }
                 }
