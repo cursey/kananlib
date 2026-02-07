@@ -1095,7 +1095,8 @@ namespace utility {
     // exhaustive_decode decodes until it hits something like a return, int3, fails, etc
     // except when it notices a conditional jmp, it will decode both branches separately
     void exhaustive_decode(uint8_t* start, size_t max_size, std::function<ExhaustionResult(ExhaustionContext&)> callback) {
-        //SPDLOG_INFO("Running exhaustive_decode on {:x}", (uintptr_t)start);
+        KANANLIB_BENCH();
+        SPDLOG_DEBUG("Running exhaustive_decode on {:x}", (uintptr_t)start);
 
         std::unordered_set<uint8_t*> seen_addresses{};
         std::deque<uint8_t*> branches{};
@@ -1325,10 +1326,26 @@ namespace utility {
             //SPDLOG_INFO("Found basic block from {:x} to {:x}", last_block.start, last_block.end);
         }
 
-        if (options.sort) {
+        if (options.sort || options.merge_call_blocks) {
             std::sort(blocks.begin(), blocks.end(), [](const BasicBlock& a, const BasicBlock& b) {
                 return a.start < b.start;
             });
+
+            // merge blocks together that are separated by call instructions
+            // just a side effect of how exhaustive_decode works
+            if (options.merge_call_blocks) {
+                for (auto it = blocks.begin(); it != blocks.end(); ++it) {
+                    if (!it->instructions.empty() && it->instructions.back().instrux.Category == ND_CAT_CALL) {
+                        auto next = std::next(it);
+                        if (next != blocks.end() && !next->instructions.empty() && next->instructions.front().addr == it->end) {
+                            it->end = next->end;
+                            it->branches = next->branches;
+                            it->instructions.insert(it->instructions.end(), next->instructions.begin(), next->instructions.end());
+                            blocks.erase(next);
+                        }
+                    }
+                }
+            }
         }
 
         return blocks;

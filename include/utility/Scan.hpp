@@ -103,6 +103,7 @@ namespace utility {
     struct BasicBlockCollectOptions {
         size_t max_size{1000};
         bool sort{false};
+        bool merge_call_blocks{true}; // if a block ends with a call, and the next block starts with the instruction after the call, merge them into one block
     };
     std::vector<BasicBlock> collect_basic_blocks(uintptr_t start, const BasicBlockCollectOptions& options = {});
 
