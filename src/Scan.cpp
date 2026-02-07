@@ -1365,8 +1365,7 @@ namespace utility {
         return blocks;
     }
     
-    std::vector<LinearBlock> collect_linear_blocks(uintptr_t fn_start, uintptr_t fn_end)
-    {
+    std::vector<LinearBlock> collect_linear_blocks(uintptr_t fn_start, uintptr_t fn_end) {
         std::vector<LinearBlock> blocks;
         if (fn_start >= fn_end) {
             return blocks;
@@ -1398,7 +1397,7 @@ namespace utility {
 
                 // direct branch target
                 if (!ix.BranchInfo.IsIndirect) {
-                    if (auto dest = utility::resolve_displacement(ip); dest) {
+                    if (auto dest = utility::resolve_displacement(ip, &ix); dest) {
                         if (*dest >= fn_start && *dest <= fn_end) {
                             split_set.insert(*dest);
                         }
@@ -1431,8 +1430,9 @@ namespace utility {
             uintptr_t start = splits[i];
             uintptr_t end   = splits[i + 1];
 
-            if (start >= fn_end)
+            if (start >= fn_end) {
                 break;
+            }
 
             LinearBlock bb{};
             bb.start = start;
@@ -1445,18 +1445,21 @@ namespace utility {
                 const auto& ix  = ctx.instrux;
                 const auto next = ip + ix.Length;
 
-                if (ip >= end)
+                if (ip >= end) {
                     return false;
+                }
 
                 // record branches
                 if (ix.BranchInfo.IsBranch) {
                     if (!ix.BranchInfo.IsIndirect) {
-                        if (auto dest = utility::resolve_displacement(ip); dest)
+                        if (auto dest = utility::resolve_displacement(ip, &ix); dest) {
                             bb.branches.push_back(*dest);
+                        }
                     }
 
-                    if (ix.BranchInfo.IsConditional)
+                    if (ix.BranchInfo.IsConditional) {
                         bb.branches.push_back(next);
+                    }
                 }
 
                 bb.end = next;
@@ -1719,7 +1722,10 @@ namespace utility {
         SPDLOG_INFO("Filtered down to {} function starts after int3 check in module {:x}", function_starts.size(), module);
 
         std::vector<uint32_t> function_ends{}; // Heuristically determined via basic block
-        for (const auto& start_rva : function_starts) {
+        function_ends.resize(function_starts.size(), 0);
+        //for (const auto& start_rva : function_starts) {
+        concurrency::parallel_for(size_t(0), function_starts.size(), [&](size_t i) {
+            const auto& start_rva = function_starts[i];
             const auto start_absolute = module + start_rva;
 
             const auto blocks = utility::collect_basic_blocks(start_absolute, BasicBlockCollectOptions{ 
@@ -1727,8 +1733,8 @@ namespace utility {
             });
 
             if (blocks.empty()) {
-                function_ends.push_back(start_rva + utility::get_insn_size(start_absolute)); // fallback
-                continue;
+                function_ends[i] = start_rva + utility::get_insn_size(start_absolute); // fallback
+                return;
             }
 
             // Find the highest basic block that is > than the start
@@ -1800,11 +1806,11 @@ namespace utility {
                     //SPDLOG_INFO("Slid function end from {:x} to {:x} for function starting at {:x} after decoding {} instructions", old_block_end, highest_block_end, start_absolute, num_decoded);
                 //}
 
-                function_ends.push_back(highest_block_end - module);
+                function_ends[i] = highest_block_end - module;
             } else {
-                function_ends.push_back(start_rva + utility::get_insn_size(start_absolute)); // fallback
+                function_ends[i] = start_rva + utility::get_insn_size(start_absolute); // fallback
             }
-        }
+        });
 
         // log all RVAs
         /*for (const auto& start : function_starts) {

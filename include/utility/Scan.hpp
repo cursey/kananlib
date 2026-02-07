@@ -151,6 +151,7 @@ namespace utility {
     struct FunctionBounds {
         uintptr_t start{};
         uintptr_t end{};
+        size_t instruction_count{};
     };
     std::vector<FunctionBounds> find_all_function_bounds(HMODULE module);
 
