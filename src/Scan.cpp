@@ -1590,8 +1590,9 @@ namespace utility {
             uint32_t highest_end = 0;
             for (size_t j = bucket_index; j < next_index; ++j) {
                 bucket.end_range = std::max<uint32_t>(highest_end, get_end(sorted_entries[j]));
-
                 bucket.entries.emplace_back(sorted_entries[j]);
+                highest_end = bucket.end_range;
+
                 ++total_added_entries;
             }
 
@@ -2093,7 +2094,7 @@ namespace utility {
             }
         }
 
-        return last != nullptr ? *last : nullptr;
+        return last != nullptr ? std::optional<Bucket::IMAGE_RUNTIME_FUNCTION_ENTRY_KANANLIB>{*last} : std::nullopt;
     }
 
     std::vector<FunctionBounds> find_all_function_bounds(HMODULE module) {
