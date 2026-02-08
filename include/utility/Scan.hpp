@@ -4,6 +4,8 @@
 #include <optional>
 #include <string>
 #include <functional>
+#include <unordered_set>
+#include <array>
 
 #include <bddisasm.h>
 #include <Windows.h>
@@ -99,6 +101,7 @@ namespace utility {
         uintptr_t end{};
         std::vector<Instruction> instructions{};
         std::vector<uintptr_t> branches{}; // the addresses they branch to, not the addresses of the instructions themselves
+        size_t instruction_count{};
     };
     struct BasicBlockCollectOptions {
         size_t max_size{1000};
@@ -107,6 +110,7 @@ namespace utility {
         bool copy_instructions{true}; // if false, the instructions vector will be empty, and only the start/end/branches will be populated
     };
     std::vector<BasicBlock> collect_basic_blocks(uintptr_t start, const BasicBlockCollectOptions& options = {});
+    std::vector<BasicBlock>::const_iterator get_highest_contiguous_block(const std::vector<BasicBlock>& blocks);
 
     struct LinearBlock {
         uintptr_t start{};
@@ -154,6 +158,7 @@ namespace utility {
         size_t instruction_count{};
     };
     std::vector<FunctionBounds> find_all_function_bounds(HMODULE module);
+    std::optional<FunctionBounds> determine_function_bounds(uintptr_t start);
 
     std::optional<uintptr_t> find_function_start(uintptr_t middle);
     // same as prev, but unwinds until the main procedure is found

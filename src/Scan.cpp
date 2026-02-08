@@ -3,6 +3,7 @@
 #include <ppl.h>
 #include <intrin.h>
 
+#include <numeric>
 #include <cwctype>
 #include <cstdint>
 #include <unordered_set>
@@ -1324,9 +1325,11 @@ namespace utility {
                 last_block.instructions.clear();
                 last_block.start = ctx.branch_start;
                 last_block.end = ctx.branch_start + ctx.instrux.Length;
+                last_block.instruction_count = 0;
             }
 
             last_block.end = ctx.addr + ctx.instrux.Length;
+            ++last_block.instruction_count;
             
             if (should_copy_instructions) {
                 last_block.instructions.push_back({ ctx.addr, ctx.instrux });
@@ -1369,6 +1372,85 @@ namespace utility {
         }
 
         return blocks;
+    }
+
+    std::vector<BasicBlock>::const_iterator get_highest_contiguous_block(const std::vector<BasicBlock>& blocks) {
+        if (blocks.empty()) {
+            return blocks.end();
+        }
+
+        const auto start_absolute = blocks.front().start;
+        uintptr_t highest_block_end = blocks.begin()->end;
+        auto highest_block = blocks.begin();
+
+        for (size_t i = 1; i < blocks.size(); ++i) {
+            const auto& block = blocks[i];
+
+            if (block.start != highest_block_end) {
+                //SPDLOG_INFO("{} contiguous blocks found for function starting at {:x}", i, start_absolute);
+                break;
+            }
+
+            highest_block_end = block.end;
+            highest_block = blocks.begin() + i;
+        }
+
+        if (highest_block_end > start_absolute) {
+            uintptr_t old_block_end = highest_block_end;
+            size_t num_decoded = 0;
+            // Check if we can linearly connect the "highest" block we found to the
+            // highest block in the actual array of blocks.
+            // this should fix issues where we have dead instructions/padding somewhere
+            // the CFG does not account for, but we can still linearly decode through it.
+            if (highest_block_end < blocks.back().end) {
+                INSTRUX ix{};
+                const auto status = NdDecodeEx(&ix, (uint8_t*)highest_block_end, 16, ND_CODE_64, ND_DATA_64);
+
+                if (ND_SUCCESS(status)) {
+                    // If the disassembly is successful, we can assume it's a valid instruction
+                    // and continue sliding the end forward until we hit an invalid instruction
+                    while (true && num_decoded < 16) {
+                        const auto next_status = NdDecodeEx(&ix, (uint8_t*)highest_block_end + ix.Length, 16, ND_CODE_64, ND_DATA_64);
+
+                        if (!ND_SUCCESS(next_status)) {
+                            break;
+                        }
+
+                        highest_block_end += ix.Length;
+                        ++num_decoded;
+
+                        // If decoded instruction is:
+                        // ret, int3, jmp, or similar, we can assume it's the end of the function and stop sliding
+                        if (ix.Instruction == ND_INS_RETN || ix.Instruction == ND_INS_INT3 || ix.BranchInfo.IsBranch) {
+                            break;
+                        }
+
+                        // If instruction pointer lands on:
+                        // Any known function start,
+                        // a range within our known basic blocks
+                        // then we can assume it's the end of the function and stop sliding
+                        //if (function_starts_set.contains((uint32_t)(highest_block_end - module))) {
+                            //break;
+                        //}
+
+                        auto it = std::find_if(blocks.begin(), blocks.end(), [highest_block_end](const BasicBlock& b) {
+                            return highest_block_end >= b.start && highest_block_end < b.end;
+                        });
+
+                        if (it != blocks.end()) {
+                            highest_block_end = it->end;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            //if (old_block_end != highest_block_end) {
+                //SPDLOG_INFO("Slid function end from {:x} to {:x} for function starting at {:x} after decoding {} instructions", old_block_end, highest_block_end, start_absolute, num_decoded);
+            //}
+        }
+        
+        return highest_block;
     }
     
     std::vector<LinearBlock> collect_linear_blocks(uintptr_t fn_start, uintptr_t fn_end) {
@@ -2036,6 +2118,26 @@ namespace utility {
         }
 
         return functions;
+    }
+
+    std::optional<FunctionBounds> determine_function_bounds(uintptr_t addr) {
+        const auto blocks = utility::collect_basic_blocks(addr, BasicBlockCollectOptions{ .max_size = 8192, .sort = true, .merge_call_blocks = true, .copy_instructions = false });
+
+        if (blocks.empty()) {
+            return std::nullopt;
+        }
+
+        auto it = get_highest_contiguous_block(blocks);
+
+        if (it == blocks.end()) {
+            return std::nullopt;
+        }
+
+        return FunctionBounds{
+            .start = it->start,
+            .end = it->end,
+            .instruction_count = 1
+        };
     }
 
     std::optional<uintptr_t> find_function_start(uintptr_t middle) {
