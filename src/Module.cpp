@@ -560,4 +560,128 @@ namespace utility {
 
         return out;
     }
+
+    LoaderLockGuard::LoaderLockGuard() {
+        const auto ntdll = GetModuleHandleW(L"ntdll.dll");
+        auto lock_loader = ntdll != nullptr ? (PFN_LdrLockLoaderLock)GetProcAddress(ntdll, "LdrLockLoaderLock") : nullptr;
+        auto unlock_loader = ntdll != nullptr ? (PFN_LdrUnlockLoaderLock)GetProcAddress(ntdll, "LdrUnlockLoaderLock") : nullptr;
+
+        if (lock_loader != nullptr && unlock_loader != nullptr) {
+            lock_loader(0, NULL, &this->cookie);
+        }
+    }
+
+    LoaderLockGuard::~LoaderLockGuard() {
+        const auto ntdll = GetModuleHandleW(L"ntdll.dll");
+        auto lock_loader = ntdll != nullptr ? (PFN_LdrLockLoaderLock)GetProcAddress(ntdll, "LdrLockLoaderLock") : nullptr;
+        auto unlock_loader = ntdll != nullptr ? (PFN_LdrUnlockLoaderLock)GetProcAddress(ntdll, "LdrUnlockLoaderLock") : nullptr;
+
+        if (lock_loader != nullptr && unlock_loader != nullptr) {
+            unlock_loader(0, this->cookie);
+        }
+    }
+
+    std::optional<FakeModule> map_view_of_pe(const std::string& path) {
+        auto fspath = std::filesystem::path{ path };
+
+        auto file_handle = CreateFileW(fspath.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+
+        if (file_handle == INVALID_HANDLE_VALUE) {
+            return std::nullopt;
+        }
+
+        auto mapping_handle = CreateFileMappingW(file_handle, nullptr, PAGE_READONLY | SEC_IMAGE, 0, 0, nullptr);
+
+        if (mapping_handle == nullptr) {
+            CloseHandle(file_handle);
+            return std::nullopt;
+        }
+
+        auto mapped_base = MapViewOfFile(mapping_handle, FILE_MAP_READ, 0, 0, 0);
+
+        if (mapped_base == nullptr) {
+            CloseHandle(mapping_handle);
+            CloseHandle(file_handle);
+            return std::nullopt;
+        }
+
+        // Create a fake PEB entry for this module so that utility::get_module_path and similar functions work with it.
+        #ifdef _M_X64
+        auto peb = (PEB*)__readgsqword(0x60);
+        #else
+        auto peb = (PEB*)__readfsdword(0x30);
+        #endif
+
+        // Lock the loader lock while we modify the module list to prevent
+        // race conditions.
+        LoaderLockGuard lock{};
+
+        auto fake_entry = new _LDR_DATA_TABLE_ENTRY{};
+        std::memset(fake_entry, 0, sizeof(_LDR_DATA_TABLE_ENTRY));
+
+        // get size of image from pe header and assign to entry
+        auto dosHeader = (PIMAGE_DOS_HEADER)mapped_base;
+        if (dosHeader->e_magic != IMAGE_DOS_SIGNATURE) {
+            UnmapViewOfFile(mapped_base);
+            CloseHandle(mapping_handle);
+            CloseHandle(file_handle);
+            return std::nullopt;
+        }
+
+        auto ntHeaders = (PIMAGE_NT_HEADERS)((uintptr_t)dosHeader + dosHeader->e_lfanew);
+
+        if (ntHeaders->Signature != IMAGE_NT_SIGNATURE) {
+            UnmapViewOfFile(mapped_base);
+            CloseHandle(mapping_handle);
+            CloseHandle(file_handle);
+            return std::nullopt;
+        }
+
+        // SizeOfImage
+        *(uint32_t*)&fake_entry->Reserved3[1] = ntHeaders->OptionalHeader.SizeOfImage;
+
+        fake_entry->DllBase = (PVOID)mapped_base;
+
+        auto wpath = fspath.wstring();
+        memset(&fake_entry->FullDllName, 0, sizeof(fake_entry->FullDllName));
+        fake_entry->FullDllName.Buffer = (wchar_t*)malloc((wpath.size() + 1) * sizeof(wchar_t));
+        fake_entry->FullDllName.Length = (USHORT)(wpath.size() * sizeof(wchar_t));
+        fake_entry->FullDllName.MaximumLength = (USHORT)((wpath.size() + 1) * sizeof(wchar_t));
+        memcpy(fake_entry->FullDllName.Buffer, wpath.c_str(), (wpath.size() + 1) * sizeof(wchar_t));
+        fake_entry->InMemoryOrderLinks.Flink = peb->Ldr->InMemoryOrderModuleList.Flink;
+        fake_entry->InMemoryOrderLinks.Blink = &peb->Ldr->InMemoryOrderModuleList;
+        peb->Ldr->InMemoryOrderModuleList.Flink->Blink = &fake_entry->InMemoryOrderLinks;
+        peb->Ldr->InMemoryOrderModuleList.Flink = &fake_entry->InMemoryOrderLinks;
+
+        return FakeModule{ (HMODULE)mapped_base, file_handle, mapping_handle };
+    }
+    
+    FakeModule::~FakeModule() {
+        if (module) {
+            _LDR_DATA_TABLE_ENTRY* fake_entry = nullptr;
+            // Find the entry in the list that matches our module and remove it.
+            foreach_module([&](LIST_ENTRY* entry, _LDR_DATA_TABLE_ENTRY* ldr_entry) {
+                if (ldr_entry->DllBase == (PVOID)module) {
+                    entry->Flink->Blink = entry->Blink;
+                    entry->Blink->Flink = entry->Flink;
+                    fake_entry = ldr_entry;
+                }
+            });
+
+            if (fake_entry != nullptr) {
+                free(fake_entry->FullDllName.Buffer);
+                delete fake_entry;
+            }
+
+            UnmapViewOfFile(module);
+        }
+
+        if (mapping_handle) {
+            CloseHandle(mapping_handle);
+        }
+
+        if (file_handle) {
+            CloseHandle(file_handle);
+        }
+    }
 }

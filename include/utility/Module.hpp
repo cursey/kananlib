@@ -17,6 +17,9 @@ typedef struct _LIST_ENTRY LIST_ENTRY;
 
 struct _LDR_DATA_TABLE_ENTRY;
 
+typedef NTSTATUS (WINAPI* PFN_LdrLockLoaderLock)(ULONG Flags, ULONG *State, ULONG_PTR *Cookie);
+typedef NTSTATUS (WINAPI* PFN_LdrUnlockLoaderLock)(ULONG Flags, ULONG_PTR Cookie);
+
 namespace utility {
     //
     // Module utilities.
@@ -57,4 +60,51 @@ namespace utility {
     void spoof_module_paths_in_exe_dir();
 
     std::vector<std::wstring> get_loaded_module_names();
+
+    struct LoaderLockGuard {
+        LoaderLockGuard();
+        ~LoaderLockGuard();
+    
+    private:
+        ULONG_PTR cookie{};
+    };
+
+    struct FakeModule {
+        HMODULE module{};
+        HANDLE file_handle{};
+        HANDLE mapping_handle{};
+
+        FakeModule(HMODULE module, HANDLE file_handle, HANDLE mapping_handle)
+            : module{ module }
+            , file_handle{ file_handle }
+            , mapping_handle{ mapping_handle }
+        {}
+        
+        FakeModule(const FakeModule&) = delete;
+        FakeModule& operator=(const FakeModule&) = delete;
+        FakeModule(FakeModule&& other) noexcept
+            : module{ other.module }
+            , file_handle{ other.file_handle }
+            , mapping_handle{ other.mapping_handle }
+        {
+            other.module = nullptr;
+            other.file_handle = nullptr;
+            other.mapping_handle = nullptr;
+        }
+
+        // Sets everything to null so the destructor won't clean up. 
+        // Useful if you want to keep the module around after the FakeModule goes out of scope.
+        void detach() {
+            module = nullptr;
+            file_handle = nullptr;
+            mapping_handle = nullptr;
+        }
+
+        virtual ~FakeModule();
+    };
+
+    // Maps a PE into memory without loading it, and adds it to the module list with a fake entry.
+    // Useful for being able to use our normal utilities on a PE that isn't actually loaded.
+    // Especially useful on executables because we can't call LoadLibraryExA on them correctly.
+    std::optional<FakeModule> map_view_of_pe(const std::string& path);
 }
