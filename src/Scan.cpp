@@ -1118,13 +1118,19 @@ namespace utility {
 
                 // This instead of IsBadReadPtr so we don't branch into kernel32 every time
                 // we want to test the readability of the memory
+#ifdef _NDEBUG
                 __try {
                     volatile auto test = *ip;
                     (void)test;
                 } __except (EXCEPTION_EXECUTE_HANDLER) {
                     break;
                 }
-
+#else
+                // in debug mode __try __except doesn't compile in this function
+                if (IsBadReadPtr(ip, 1)) {
+                    break;
+                }
+#endif
                 const auto status = NdDecodeEx(&ctx.instrux, ip, 64, ND_CODE_64, ND_DATA_64);
 
                 if (!ND_SUCCESS(status)) {
