@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <unordered_set>
 #include <mutex>
+#include <shared_mutex>
 
 #include <shlwapi.h>
 #include <windows.h>
@@ -51,13 +52,35 @@ namespace utility {
         return ntHeaders->OptionalHeader.SizeOfImage;
     }
 
+    struct ModuleRange {
+        uintptr_t begin;
+        uintptr_t end;
+    };
+    
+    std::vector<ModuleRange> g_module_ranges{};
+    std::shared_mutex g_module_ranges_mutex{};
+
     std::optional<HMODULE> get_module_within(Address address) {
+        // For our fake modules
+        {
+            std::shared_lock _{g_module_ranges_mutex};
+            for (const auto& range : g_module_ranges) {
+                if (range.begin <= address.as<uintptr_t>() && address.as<uintptr_t>() < range.end) {
+                    return (HMODULE)range.begin;
+                }
+            }
+        }
+
         HMODULE module = nullptr;
         if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, address.as<LPCSTR>(), &module)) {
             return module;
         }
 
-        return {};
+        if (!module) {
+            return std::nullopt;
+        }
+
+        return module;
     }
 
     std::optional<uintptr_t> get_dll_imagebase(Address dll) {
@@ -648,16 +671,39 @@ namespace utility {
         fake_entry->FullDllName.Length = (USHORT)(wpath.size() * sizeof(wchar_t));
         fake_entry->FullDllName.MaximumLength = (USHORT)((wpath.size() + 1) * sizeof(wchar_t));
         memcpy(fake_entry->FullDllName.Buffer, wpath.c_str(), (wpath.size() + 1) * sizeof(wchar_t));
+        
         fake_entry->InMemoryOrderLinks.Flink = peb->Ldr->InMemoryOrderModuleList.Flink;
         fake_entry->InMemoryOrderLinks.Blink = &peb->Ldr->InMemoryOrderModuleList;
+
+        //auto& InLoadOrderLinks = *(LIST_ENTRY*)&peb->Ldr->Reserved2[1];
+        //auto& InLoadOrderLinksEntry = *(LIST_ENTRY*)(&fake_entry->Reserved1[0]);
+        //InLoadOrderLinksEntry.Flink = InLoadOrderLinks.Flink;
+        //InLoadOrderLinksEntry.Blink = &InLoadOrderLinksEntry;
+
+
         peb->Ldr->InMemoryOrderModuleList.Flink->Blink = &fake_entry->InMemoryOrderLinks;
         peb->Ldr->InMemoryOrderModuleList.Flink = &fake_entry->InMemoryOrderLinks;
+        //InLoadOrderLinks.Flink->Blink = &InLoadOrderLinks;
+        //InLoadOrderLinks.Flink = &InLoadOrderLinksEntry;
+
+        {
+            std::unique_lock _{ g_module_ranges_mutex };
+            g_module_ranges.push_back({ (uintptr_t)mapped_base, (uintptr_t)mapped_base + ntHeaders->OptionalHeader.SizeOfImage });
+        }
 
         return FakeModule{ (HMODULE)mapped_base, file_handle, mapping_handle };
     }
     
     FakeModule::~FakeModule() {
         if (module) {
+            {
+                std::unique_lock _{ g_module_ranges_mutex };
+                g_module_ranges.erase(std::remove_if(g_module_ranges.begin(), g_module_ranges.end(),
+                    [&](const ModuleRange& range) {
+                        return range.begin == (uintptr_t)module;
+                    }), g_module_ranges.end());
+            }
+
             _LDR_DATA_TABLE_ENTRY* fake_entry = nullptr;
             // Find the entry in the list that matches our module and remove it.
             foreach_module([&](LIST_ENTRY* entry, _LDR_DATA_TABLE_ENTRY* ldr_entry) {
