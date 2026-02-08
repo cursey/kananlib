@@ -2058,7 +2058,7 @@ namespace utility {
         }
 
         if (candidates.size() > 1) {
-            SPDLOG_INFO("Found {} candidates for function entry", candidates.size());
+            SPDLOG_DEBUG("Found {} candidates for function entry", candidates.size());
         }
 
         const Bucket::IMAGE_RUNTIME_FUNCTION_ENTRY_KANANLIB* last = nullptr;
@@ -2135,7 +2135,7 @@ namespace utility {
         }
 
         return FunctionBounds{
-            .start = it->start,
+            .start = blocks.front().start,
             .end = it->end,
             .instruction_count = 1
         };
@@ -2145,7 +2145,7 @@ namespace utility {
         const auto entry = find_function_entry(middle);
 
         if (entry) {
-            SPDLOG_INFO("Found function start for {:x} at {:x}", middle, entry->BeginAddress);
+            SPDLOG_DEBUG("Found function start for {:x} at {:x}", middle, entry->BeginAddress);
             return (uintptr_t)entry->BeginAddress + (uintptr_t)utility::get_module_within(middle).value_or(nullptr);
         }
 
