@@ -4,7 +4,7 @@
 #include <TlHelp32.h>
 
 #include <utility/Logging.hpp>
-
+#include <utility/Module.hpp>
 #include <utility/Thread.hpp>
 
 namespace utility {
@@ -66,9 +66,6 @@ void resume_threads(const ThreadStates& states) {
         }
     }
 }
-
-typedef NTSTATUS (WINAPI* PFN_LdrLockLoaderLock)(ULONG Flags, ULONG *State, ULONG_PTR *Cookie);
-typedef NTSTATUS (WINAPI* PFN_LdrUnlockLoaderLock)(ULONG Flags, ULONG_PTR Cookie);
 
 ThreadSuspender::ThreadSuspender()  {
     auto ntdll = GetModuleHandleA("ntdll.dll");
