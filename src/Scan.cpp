@@ -1637,6 +1637,7 @@ namespace utility {
         // Look for functions that start with E9, and sled into other E9s.
         // these are functions that don't always have references but can be considered functions.
         std::unordered_set<uint32_t> additional_function_starts{};
+        std::unordered_set<uint32_t> visited_sleds{};
 
         for (const auto& start : function_starts) {
             const auto absolute = module + start;
@@ -1647,6 +1648,10 @@ namespace utility {
 
             uint32_t slide_count = 0;
             auto sled_addr = absolute;
+
+            if (visited_sleds.contains(sled_addr - module)) {
+                continue;
+            }
 
             while (*(uint8_t*)sled_addr == 0xE9) {
                 const auto dest = utility::calculate_absolute(sled_addr + 1);
@@ -1659,8 +1664,8 @@ namespace utility {
 
                 if (!additional_function_starts.contains(dest_rva) || !additional_function_starts.contains((uint32_t)(sled_addr - module)))
                 {
-                    if (std::find(function_starts.begin(), function_starts.end(), dest_rva) == function_starts.end() &&
-                        std::find(additional_function_starts.begin(), additional_function_starts.end(), dest_rva) == additional_function_starts.end()) 
+                    if (std::binary_search(function_starts.begin(), function_starts.end(), dest_rva) &&
+                        !additional_function_starts.contains((uint32_t)(sled_addr - module)))
                     {
                         additional_function_starts.insert(dest_rva);
                         additional_function_starts.insert(sled_addr - module);
@@ -1669,6 +1674,7 @@ namespace utility {
                     ++slide_count;
                 }
 
+                visited_sleds.insert(sled_addr - module);
                 sled_addr += 5;
             }
         }
