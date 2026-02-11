@@ -90,6 +90,7 @@ namespace utility {
         INSTRUX instrux{};
 
         uintptr_t branch_start{};
+        uintptr_t resolved_target{}; // Pre-resolved branch/displacement target (0 if none)
     };
 
     // Forward declaration needed by the template below
@@ -164,6 +165,14 @@ namespace utility {
 
                 auto& ix = ctx.instrux;
 
+                // Pre-resolve branch target so the callback can use it without re-resolving
+                ctx.resolved_target = 0;
+                if (ix.IsRipRelative && !ix.BranchInfo.IsIndirect && ix.BranchInfo.IsBranch) {
+                    if (auto dest = utility::resolve_displacement((uintptr_t)ip, &ix); dest) {
+                        ctx.resolved_target = *dest;
+                    }
+                }
+
                 ExhaustionResult result{};
 
                 if constexpr (std::is_invocable_v<F, ExhaustionContext&>) {
@@ -188,9 +197,9 @@ namespace utility {
                     if (ix.BranchInfo.IsBranch && ix.BranchInfo.IsConditional) {
                         SPDLOG_DEBUG("Conditional Branch detected: {:x}", (uintptr_t)ip);
 
-                        if (auto dest = utility::resolve_displacement((uintptr_t)ip, &ix); dest) {
+                        if (ctx.resolved_target != 0) {
                             if (result != ExhaustionResult::STEP_OVER) {
-                                branches.push_back((uint8_t*)*dest);
+                                branches.push_back((uint8_t*)ctx.resolved_target);
                                 ++total_branches_seen;
                             }
                         } else {
@@ -203,9 +212,9 @@ namespace utility {
                         const auto is_jmp = ix.Instruction >= ND_INS_JMPE && ix.Instruction <= ND_INS_JMPNR;
 
                         if (is_jmp) {
-                            if (auto dest = utility::resolve_displacement((uintptr_t)ip, &ix); dest) {
-                                ip = (uint8_t*)*dest;
-                                ctx.branch_start = (uintptr_t)*dest;
+                            if (ctx.resolved_target != 0) {
+                                ip = (uint8_t*)ctx.resolved_target;
+                                ctx.branch_start = ctx.resolved_target;
                                 ++total_branches_seen;
                                 continue;
                             } else {
@@ -213,8 +222,8 @@ namespace utility {
                                 SPDLOG_ERROR(" TODO: Fix this");
                             }
                         } else if (result != ExhaustionResult::STEP_OVER) {
-                            if (auto dest = utility::resolve_displacement((uintptr_t)ip, &ix); dest) {
-                                branches.push_back((uint8_t*)*dest);
+                            if (ctx.resolved_target != 0) {
+                                branches.push_back((uint8_t*)ctx.resolved_target);
                                 ++total_branches_seen;
                             } else {
                                 SPDLOG_ERROR("Failed to resolve displacement for {:x}", (uintptr_t)ip);

@@ -1132,16 +1132,14 @@ namespace utility {
         utility::exhaustive_decode((uint8_t*)start, options.max_size, [&](utility::ExhaustionContext& ctx) {
             if (ctx.instrux.BranchInfo.IsBranch && ctx.instrux.Category != ND_CAT_CALL) {
                 if (ctx.instrux.BranchInfo.IsConditional) {
-                    if (auto dest = utility::resolve_displacement(ctx.addr, &ctx.instrux); dest) {
-                        last_block.branches.push_back(*dest);
-                    } else {
-                        //SPDLOG_ERROR("Failed to resolve displacement for conditional branch at {:x}", ctx.addr);
+                    if (ctx.resolved_target != 0) {
+                        last_block.branches.push_back(ctx.resolved_target);
                     }
 
                     last_block.branches.push_back(ctx.addr + ctx.instrux.Length); // Fallthrough
                 } else {
-                    if (*(uint8_t*)ctx.addr == 0xE9) {
-                        last_block.branches.push_back(utility::calculate_absolute(ctx.addr + 1));
+                    if (ctx.resolved_target != 0) {
+                        last_block.branches.push_back(ctx.resolved_target);
                     }
                 }
             }
