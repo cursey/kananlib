@@ -167,9 +167,13 @@ namespace utility {
                     }
                     if (already_seen) break;
                 }
-                // Inline seen_insert
+                // Table full — stop decoding to prevent infinite probe loops
+                if (total_seen_count >= max_seen) {
+                    break;
+                }
+                // Inline seen_insert (track dirty slots for cleanup)
                 for (size_t si = SEEN_HASH(ip);; si = (si + 1) & table_mask) {
-                    if (seen_table[si] == nullptr) { seen_table[si] = ip; break; }
+                    if (seen_table[si] == nullptr) { seen_table[si] = ip; dirty_slots[dirty_count++] = si; ++total_seen_count; break; }
                     if (seen_table[si] == ip) break;
                 }
 
@@ -310,11 +314,18 @@ namespace utility {
             }
         };
 
-        for (size_t branch_idx = 0; branch_idx < branches.size(); ++branch_idx) {
+        for (size_t branch_idx = 0; branch_idx < branches.size() && total_seen_count < max_seen; ++branch_idx) {
             decode_branch(branches[branch_idx]);
         }
 
-        free(seen_table);
+        // Dirty list is faster for sparse usage; memset is faster when heavily filled
+        if (dirty_count > table_size / 8) {
+            memset(seen_table, 0, table_size * sizeof(uint8_t*));
+        } else {
+            for (size_t i = 0; i < dirty_count; ++i) {
+                seen_table[dirty_slots[i]] = nullptr;
+            }
+        }
         #undef SEEN_HASH
     }
 
