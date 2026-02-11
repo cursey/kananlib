@@ -5,10 +5,15 @@
 #include <string>
 #include <functional>
 #include <unordered_set>
+#include <vector>
 #include <array>
+#include <type_traits>
 
 #include <bddisasm.h>
 #include <Windows.h>
+
+#include <utility/Logging.hpp>
+#include <utility/Benchmark.hpp>
 
 namespace utility {
     std::optional<uintptr_t> scan(const std::string& module, const std::string& pattern);
@@ -86,8 +91,191 @@ namespace utility {
 
         uintptr_t branch_start{};
     };
-    void exhaustive_decode(uint8_t* ip, size_t max_size, std::function<ExhaustionResult(ExhaustionContext&)> callback);
-    void exhaustive_decode(uint8_t* ip, size_t max_size, std::function<ExhaustionResult(INSTRUX&, uintptr_t)> callback);
+
+    // Forward declaration needed by the template below
+    std::optional<uintptr_t> resolve_displacement(uintptr_t ip, const INSTRUX* instrux_in);
+
+    template<typename F>
+    void exhaustive_decode(uint8_t* start, size_t max_size, F&& callback) {
+        KANANLIB_BENCH();
+        SPDLOG_DEBUG("Running exhaustive_decode on {:x}", (uintptr_t)start);
+
+        // Flat open-addressing hash set for seen addresses (much faster than std::unordered_set).
+        // Uses raw calloc to avoid MSVC STL debug overhead in RelWithDebInfo.
+        size_t table_bits = 4; // minimum 16 slots
+        while ((size_t{1} << table_bits) < max_size * 2) ++table_bits; // load factor <= 0.5
+        const size_t table_size = size_t{1} << table_bits;
+        const size_t table_mask = table_size - 1;
+        auto* seen_table = (uint8_t**)calloc(table_size, sizeof(uint8_t*));
+        if (seen_table == nullptr) {
+            return;
+        }
+        constexpr uint64_t fib_mult = 11400714819323198485ULL;
+        #define SEEN_HASH(p) ((size_t)((uint64_t)(uintptr_t)(p) * fib_mult >> (64 - table_bits)))
+
+        std::vector<uint8_t*> branches{};
+        branches.push_back(start);
+
+        uint32_t total_branches_seen = 0;
+
+        auto decode_branch = [&](uint8_t* ip) {
+            const auto branch_start = (uintptr_t)ip;
+
+            ExhaustionContext ctx{};
+            ctx.branch_start = branch_start;
+
+            for (size_t i = 0; i < max_size; ++i) {
+                // Inline seen_contains
+                {
+                    bool already_seen = false;
+                    for (size_t si = SEEN_HASH(ip);; si = (si + 1) & table_mask) {
+                        if (seen_table[si] == ip) { already_seen = true; break; }
+                        if (seen_table[si] == nullptr) break;
+                    }
+                    if (already_seen) break;
+                }
+                // Inline seen_insert
+                for (size_t si = SEEN_HASH(ip);; si = (si + 1) & table_mask) {
+                    if (seen_table[si] == nullptr) { seen_table[si] = ip; break; }
+                    if (seen_table[si] == ip) break;
+                }
+
+                // This instead of IsBadReadPtr so we don't branch into kernel32 every time
+                // we want to test the readability of the memory
+#ifdef NDEBUG
+                __try {
+                    volatile auto test = *ip;
+                    (void)test;
+                } __except (EXCEPTION_EXECUTE_HANDLER) {
+                    break;
+                }
+#else
+                if (IsBadReadPtr(ip, 1)) {
+                    break;
+                }
+#endif
+                const auto status = NdDecodeEx(&ctx.instrux, ip, 64, ND_CODE_64, ND_DATA_64);
+
+                if (!ND_SUCCESS(status)) {
+                    break;
+                }
+
+                ctx.addr = (uintptr_t)ip;
+
+                auto& ix = ctx.instrux;
+
+                ExhaustionResult result{};
+
+                if constexpr (std::is_invocable_v<F, ExhaustionContext&>) {
+                    result = callback(ctx);
+                } else {
+                    result = callback(ctx.instrux, ctx.addr);
+                }
+
+                if (result == ExhaustionResult::BREAK) {
+                    return;
+                }
+
+                // Allows the callback to at least process that we hit a ret or int3, but we will stop here.
+                if (ix.Instruction == ND_INS_RETN || ix.Instruction == ND_INS_INT3) {
+                    break;
+                }
+
+                const auto prev_branches_count = total_branches_seen;
+
+                // We dont want to follow indirect branches, we aren't emulating
+                if (ix.IsRipRelative && !ix.BranchInfo.IsIndirect) {
+                    if (ix.BranchInfo.IsBranch && ix.BranchInfo.IsConditional) {
+                        SPDLOG_DEBUG("Conditional Branch detected: {:x}", (uintptr_t)ip);
+
+                        if (auto dest = utility::resolve_displacement((uintptr_t)ip, &ix); dest) {
+                            if (result != ExhaustionResult::STEP_OVER) {
+                                branches.push_back((uint8_t*)*dest);
+                                ++total_branches_seen;
+                            }
+                        } else {
+                            SPDLOG_ERROR("Failed to resolve displacement for {:x}", (uintptr_t)ip);
+                            SPDLOG_ERROR(" TODO: Fix this");
+                        }
+                    } else if (ix.BranchInfo.IsBranch && !ix.BranchInfo.IsConditional) {
+                        SPDLOG_DEBUG("Unconditional Branch detected: {:x}", (uintptr_t)ip);
+
+                        const auto is_jmp = ix.Instruction >= ND_INS_JMPE && ix.Instruction <= ND_INS_JMPNR;
+
+                        if (is_jmp) {
+                            if (auto dest = utility::resolve_displacement((uintptr_t)ip, &ix); dest) {
+                                ip = (uint8_t*)*dest;
+                                ctx.branch_start = (uintptr_t)*dest;
+                                ++total_branches_seen;
+                                continue;
+                            } else {
+                                SPDLOG_ERROR("Failed to resolve displacement for {:x}", (uintptr_t)ip);
+                                SPDLOG_ERROR(" TODO: Fix this");
+                            }
+                        } else if (result != ExhaustionResult::STEP_OVER) {
+                            if (auto dest = utility::resolve_displacement((uintptr_t)ip, &ix); dest) {
+                                branches.push_back((uint8_t*)*dest);
+                                ++total_branches_seen;
+                            } else {
+                                SPDLOG_ERROR("Failed to resolve displacement for {:x}", (uintptr_t)ip);
+                                SPDLOG_ERROR(" TODO: Fix this");
+                            }
+                        }
+                    }
+                } else if (ix.IsRipRelative && ip[0] == 0xFF && ip[1] == 0x25) { // jmp qword ptr [rip+0xdeadbeef]
+                    SPDLOG_DEBUG("Indirect jmp detected: {:x}", (uintptr_t)ip);
+                    const auto dest = utility::calculate_absolute((uintptr_t)ip + 2);
+
+                    if (dest != 0 && dest != (uintptr_t)ip && !IsBadReadPtr((void*)dest, sizeof(void*))) {
+                        const auto real_dest = *(uintptr_t*)dest;
+
+                        // Cannot step over jmps
+                        if (real_dest != 0 && real_dest != (uintptr_t)ip && !IsBadReadPtr((void*)real_dest, sizeof(void*))) {
+                            SPDLOG_DEBUG("Indirect jmp destination: {:x}", (uintptr_t)real_dest);
+                            ip = (uint8_t*)real_dest;
+                            ctx.branch_start = (uintptr_t)real_dest;
+                            ++total_branches_seen;
+                            continue;
+                        }
+                    }
+
+                    SPDLOG_DEBUG("Failed to resolve indirect jmp destination: {:x}", (uintptr_t)ip);
+                    break;
+                } else if (ix.IsRipRelative && ip[0] == 0xFF && ip[1] == 0x15) { // call qword ptr [rip+0xdeadbeef]
+                    SPDLOG_DEBUG("Indirect call detected: {:x}", (uintptr_t)ip);
+
+                    const auto dest = utility::calculate_absolute((uintptr_t)ip + 2);
+
+                    if (dest != 0 && dest != (uintptr_t)ip && !IsBadReadPtr((void*)dest, sizeof(void*))) {
+                        const auto real_dest = *(uintptr_t*)dest;
+
+                        if (real_dest != 0 && real_dest != (uintptr_t)ip && !IsBadReadPtr((void*)real_dest, sizeof(void*)) && result != ExhaustionResult::STEP_OVER) {
+                            branches.push_back((uint8_t*)real_dest);
+                            ++total_branches_seen;
+                            SPDLOG_DEBUG("Indirect call destination: {:x}", (uintptr_t)real_dest);
+                        }
+                    }
+                } else if (ix.BranchInfo.IsBranch && !ix.BranchInfo.IsConditional) {
+                    if (ix.Category != ND_CAT_CALL) {
+                        break;
+                    }
+                }
+
+                ip += ix.Length;
+
+                if (total_branches_seen != prev_branches_count) {
+                    ctx.branch_start = (uintptr_t)ip;
+                }
+            }
+        };
+
+        for (size_t branch_idx = 0; branch_idx < branches.size(); ++branch_idx) {
+            decode_branch(branches[branch_idx]);
+        }
+
+        free(seen_table);
+        #undef SEEN_HASH
+    }
 
     void linear_decode(uint8_t* ip, size_t max_size, std::function<bool(ExhaustionContext&)> callback);
 
