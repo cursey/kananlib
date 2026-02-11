@@ -1323,6 +1323,7 @@ namespace utility {
 
                 previous_branch_start = ctx.branch_start;
                 last_block.instructions.clear();
+                last_block.branches.clear();
                 last_block.start = ctx.branch_start;
                 last_block.end = ctx.branch_start + ctx.instrux.Length;
                 last_block.instruction_count = 0;
