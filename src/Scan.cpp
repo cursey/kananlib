@@ -8,6 +8,8 @@
 #include <cstdint>
 #include <unordered_set>
 #include <shared_mutex>
+#include <thread>
+#include <chrono>
 
 #include <utility/Logging.hpp>
 
@@ -1713,32 +1715,17 @@ namespace utility {
 
         std::vector<uint32_t> function_ends(function_starts.size(), 0); // Heuristically determined via basic block
         std::vector<uint8_t> functions_populated(function_starts.size(), 0);
-        //for (const auto& start_rva : function_starts) {
+        std::atomic<size_t> populated_count = 0;
+
         concurrency::parallel_for(size_t(0), indices.size(), [&](size_t j) {
             const auto i = indices[j];
             const auto& start_rva = function_starts[i];
             const auto start_absolute = module + start_rva;
 
-            auto in_blacklisted_region = [&](uintptr_t addr) {
-                for (const auto& bl : blacklisted) {
-                    auto s = bl.start.load(std::memory_order_relaxed);
-                    if (s == 0) continue;
-                    if (addr >= s && addr < bl.end.load(std::memory_order_relaxed)) return true;
-                }
-                return false;
-            };
-
-            /*if (in_blacklisted_region(start_absolute)) {
-                SPDLOG_WARN("Skipping function at {:x} because it is in a blacklisted region", start_absolute);
-                function_ends[i] = start_rva + utility::get_insn_size(start_absolute); // fallback
-                functions_populated[i] = 1;
-                return;
-            }*/
-
             auto t0 = std::chrono::high_resolution_clock::now();
 
             const auto blocks = utility::collect_basic_blocks(start_absolute, BasicBlockCollectOptions{ 
-                .max_size = 8192, .sort = true, .merge_call_blocks = true, .copy_instructions = false
+                .max_size = 100000, .sort = true, .merge_call_blocks = true, .copy_instructions = false
             });
 
             functions_populated[i] = 1;
@@ -1749,14 +1736,11 @@ namespace utility {
             if (ms > 1000) {
                 const auto populated_pct = std::count(functions_populated.begin(), functions_populated.end(), 1) * 100 / functions_populated.size();
                 SPDLOG_WARN("collect_basic_blocks took {}ms for function at {:x} (progress: {}%)", ms, start_absolute, populated_pct);
+            }
 
-                if (ms >= 2000) {
-                    SPDLOG_WARN("Function at {:x} is taking a very long time to analyze, blacklisting the region {:x}-{:x}", start_absolute, start_absolute, start_absolute + 8192);
-                    blacklisted[i].start.store(start_absolute, std::memory_order_relaxed);
-                    blacklisted[i].end.store(start_absolute + 8192, std::memory_order_relaxed);
-                    function_ends[i] = start_rva + utility::get_insn_size(start_absolute); // fallback
-                    return;
-                }
+            size_t local_populated = ++populated_count;
+            if ((local_populated % 1000) == 0 || local_populated == function_starts.size()) {
+                SPDLOG_INFO("Populated function buckets for {}/{} functions ({:.2f}%)", local_populated, function_starts.size(), local_populated * 100.0 / function_starts.size());
             }
 
             if (blocks.empty()) {

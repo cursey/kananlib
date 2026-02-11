@@ -96,28 +96,60 @@ namespace utility {
     // Forward declaration needed by the template below
     std::optional<uintptr_t> resolve_displacement(uintptr_t ip, const INSTRUX* instrux_in);
 
+    // Thread-local reusable hash table for exhaustive_decode.
+    // Allocated once per thread, grows as needed, never freed until thread exit.
+    struct TlsSeenTable {
+        uint8_t** slots = nullptr;   // hash table slots (power-of-2 sized)
+        size_t* dirty = nullptr;     // indices of occupied slots for fast cleanup
+        size_t capacity = 0;         // current slot count (always power of 2)
+        size_t capacity_bits = 0;    // log2(capacity)
+        ~TlsSeenTable() { free(slots); free(dirty); }
+    };
+
     template<typename F>
     void exhaustive_decode(uint8_t* start, size_t max_size, F&& callback) {
         KANANLIB_BENCH();
         SPDLOG_DEBUG("Running exhaustive_decode on {:x}", (uintptr_t)start);
 
-        // Flat open-addressing hash set for seen addresses (much faster than std::unordered_set).
-        // Uses raw calloc to avoid MSVC STL debug overhead in RelWithDebInfo.
+        // Flat open-addressing hash set for seen addresses.
+        // Thread-local buffer avoids heap alloc/free on every call.
+        // Dirty list avoids zeroing the whole table — only used slots are cleared.
+        const size_t table_capacity = max_size < 1024 ? 1024 : max_size * 2;
         size_t table_bits = 4; // minimum 16 slots
-        while ((size_t{1} << table_bits) < max_size * 2) ++table_bits; // load factor <= 0.5
-        const size_t table_size = size_t{1} << table_bits;
-        const size_t table_mask = table_size - 1;
-        auto* seen_table = (uint8_t**)calloc(table_size, sizeof(uint8_t*));
-        if (seen_table == nullptr) {
-            return;
+        while ((size_t{1} << table_bits) < table_capacity * 2) ++table_bits; // load factor <= 0.5
+        const size_t needed = size_t{1} << table_bits;
+
+        thread_local TlsSeenTable tls{};
+        if (needed > tls.capacity) {
+            free(tls.slots);
+            free(tls.dirty);
+            tls.slots = (uint8_t**)calloc(needed, sizeof(uint8_t*));
+            tls.dirty = (size_t*)malloc((needed / 2) * sizeof(size_t));
+            if (!tls.slots || !tls.dirty) {
+                free(tls.slots); free(tls.dirty);
+                tls.slots = nullptr; tls.dirty = nullptr;
+                tls.capacity = 0; tls.capacity_bits = 0;
+                return;
+            }
+            tls.capacity = needed;
+            tls.capacity_bits = table_bits;
         }
+        // Use the (possibly larger) TLS table directly
+        auto* seen_table = tls.slots;
+        auto* dirty_slots = tls.dirty;
+        size_t dirty_count = 0;
+        const size_t table_size = tls.capacity;
+        const size_t table_mask = table_size - 1;
+        const size_t tls_bits = tls.capacity_bits;
         constexpr uint64_t fib_mult = 11400714819323198485ULL;
-        #define SEEN_HASH(p) ((size_t)((uint64_t)(uintptr_t)(p) * fib_mult >> (64 - table_bits)))
+        #define SEEN_HASH(p) ((size_t)((uint64_t)(uintptr_t)(p) * fib_mult >> (64 - tls_bits)))
 
         std::vector<uint8_t*> branches{};
         branches.push_back(start);
 
         uint32_t total_branches_seen = 0;
+        size_t total_seen_count = 0;
+        const size_t max_seen = table_size / 2; // never exceed 50% load factor
 
         auto decode_branch = [&](uint8_t* ip) {
             const auto branch_start = (uintptr_t)ip;
