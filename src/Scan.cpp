@@ -1663,6 +1663,7 @@ namespace utility {
         // VirtualQuery and look for all executable regions
         MEMORY_BASIC_INFORMATION mbi{};
         std::vector<MEMORY_BASIC_INFORMATION> exec_regions{};
+        std::vector<MEMORY_BASIC_INFORMATION> readable_regions{};
 
         for (auto addr = module; addr < module_end; ) {
             if (VirtualQuery((LPCVOID)addr, &mbi, sizeof(mbi)) == 0) {
@@ -1673,10 +1674,15 @@ namespace utility {
                 exec_regions.push_back(mbi);
             }
 
+            if ((mbi.Protect & PAGE_READONLY) || (mbi.Protect & PAGE_READWRITE) || (mbi.Protect & PAGE_WRITECOPY) || (mbi.Protect & PAGE_EXECUTE_READ) || (mbi.Protect & PAGE_EXECUTE_READWRITE) || (mbi.Protect & PAGE_EXECUTE_WRITECOPY)) {
+                readable_regions.push_back(mbi);
+            }
+
             addr += mbi.RegionSize;
         }
 
         SPDLOG_INFO("Found {} executable regions in module {:x}", exec_regions.size(), module);
+        SPDLOG_INFO("Found {} readable regions in module {:x}", readable_regions.size(), module);
 
         // Continuously use scan_data to find all E8 xx xx xx xx patterns in the executable regions
         std::vector<uint32_t> function_starts{};
@@ -1817,8 +1823,47 @@ namespace utility {
 
         SPDLOG_INFO("Filtered down to {} function starts after int3 check in module {:x}", function_starts.size(), module);
 
-        std::vector<uint32_t> function_ends{}; // Heuristically determined via basic block
-        function_ends.resize(function_starts.size(), 0);
+        std::unordered_set<uint32_t> function_starts_set_final(function_starts.begin(), function_starts.end());
+
+        const auto function_starts_before = function_starts.size();
+
+        // Walk readable regions and look for valid function pointers that aren't in our current list, and add them if they look like they could be valid function pointers (point to executable section, etc)
+        for (const auto& region : readable_regions) {
+            const auto region_start = (uintptr_t)region.BaseAddress;
+            const auto region_size = region.RegionSize;
+            const auto region_end = region_start + region_size;
+
+            for (auto addr = region_start; addr + 8 < region_end; addr += 8) {
+                const auto potential_fn_ptr = *(uint64_t*)addr;
+
+                // make sure aligned on sizeof(void*)
+                if ((addr & (sizeof(void*) - 1)) != 0) {
+                    continue;
+                }
+
+                if (potential_fn_ptr >= module && potential_fn_ptr < module_end) {
+                    if (function_starts_set_final.contains((uint32_t)(potential_fn_ptr - module))) {
+                        continue;
+                    }
+
+                    // Check if it points to an executable region
+                    auto it = std::find_if(exec_regions.begin(), exec_regions.end(), [potential_fn_ptr](const MEMORY_BASIC_INFORMATION& r) {
+                        const auto r_start = (uintptr_t)r.BaseAddress;
+                        const auto r_end = r_start + r.RegionSize;
+
+                        return potential_fn_ptr >= r_start && potential_fn_ptr < r_end;
+                    });
+
+                    if (it != exec_regions.end()) {
+                        function_starts.push_back((uint32_t)(potential_fn_ptr - module));
+                    }
+                }
+            }
+        }
+
+        SPDLOG_INFO("Added {} new function starts from pointer scan in module {:x}", function_starts.size() - function_starts_before, module);
+        std::sort(function_starts.begin(), function_starts.end());
+        function_starts.erase(std::unique(function_starts.begin(), function_starts.end()), function_starts.end());
         //for (const auto& start_rva : function_starts) {
         concurrency::parallel_for(size_t(0), function_starts.size(), [&](size_t i) {
             const auto& start_rva = function_starts[i];
