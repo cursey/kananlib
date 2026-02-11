@@ -1186,29 +1186,18 @@ namespace utility {
             // merge blocks together that are separated by call instructions
             // just a side effect of how exhaustive_decode works
             if (options.merge_call_blocks) {
-                size_t write = 0;
-                for (size_t read = 0; read < blocks.size(); ++read) {
-                    if (write != read) {
-                        blocks[write] = std::move(blocks[read]);
+                for (auto it = blocks.begin(); it != blocks.end(); ++it) {
+                    if (!it->instructions.empty() && it->instructions.back().instrux.Category == ND_CAT_CALL) {
+                        auto next = std::next(it);
+                        if (next != blocks.end() && !next->instructions.empty() && next->instructions.front().addr == it->end) {
+                            it->end = next->end;
+                            it->branches = next->branches;
+                            it->instructions.insert(it->instructions.end(), next->instructions.begin(), next->instructions.end());
+                            it->instruction_count += next->instruction_count;
+                            blocks.erase(next);
+                        }
                     }
-                    // Keep merging subsequent blocks into blocks[write] while they end with a call
-                    // and the next block starts where this one ends
-                    while (write < blocks.size() && !blocks[write].instructions.empty()
-                           && blocks[write].instructions.back().instrux.Category == ND_CAT_CALL
-                           && read + 1 < blocks.size()
-                           && !blocks[read + 1].instructions.empty()
-                           && blocks[read + 1].instructions.front().addr == blocks[write].end) {
-                        ++read;
-                        blocks[write].end = blocks[read].end;
-                        blocks[write].branches = std::move(blocks[read].branches);
-                        blocks[write].instructions.insert(blocks[write].instructions.end(),
-                            std::make_move_iterator(blocks[read].instructions.begin()),
-                            std::make_move_iterator(blocks[read].instructions.end()));
-                        blocks[write].instruction_count += blocks[read].instruction_count;
-                    }
-                    ++write;
                 }
-                blocks.resize(write);
             }
         }
 
