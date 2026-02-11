@@ -43,8 +43,29 @@ link-libraries = [
     "kananlib"
 ]
 cmake-before="""
-add_subdirectory(kananlib)
+if(NOT TARGET kananlib)
+    add_subdirectory(kananlib)
+endif()
 """
 
 [target.kananlib-test]
 type = "kananlib-test-template"
+
+# Stress tests for exhaustive_decode and collect_basic_blocks
+[target.kananlib-stress-test]
+type = "executable"
+sources = ["StressTest.cpp"]
+include-directories = ["include"]
+compile-features = ["cxx_std_20"]
+compile-options = ["/EHa"]
+link-libraries = [
+    "bddisasm::bddisasm",
+    "spdlog::spdlog",
+    "shlwapi",
+    "kananlib"
+]
+cmake-before="""
+if(NOT TARGET kananlib)
+    add_subdirectory(kananlib)
+endif()
+"""
