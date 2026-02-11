@@ -1099,15 +1099,15 @@ namespace utility {
         ctx.branch_start = (uintptr_t)ip;
 
         for (size_t i = 0; i < max_size;) try {
-            INSTRUX ix{};
-            const auto status = NdDecodeEx(&ix, ip, 64, ND_CODE_64, ND_DATA_64);
+            const auto status = NdDecodeEx(&ctx.instrux, ip, 64, ND_CODE_64, ND_DATA_64);
 
             if (!ND_SUCCESS(status)) {
                 break;
             }
 
+            auto& ix = ctx.instrux;
+
             ctx.addr = (uintptr_t)ip;
-            ctx.instrux = ix;
 
             if (!callback(ctx)) {
                 break;
