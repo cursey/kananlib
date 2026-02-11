@@ -1364,6 +1364,7 @@ namespace utility {
                             it->end = next->end;
                             it->branches = next->branches;
                             it->instructions.insert(it->instructions.end(), next->instructions.begin(), next->instructions.end());
+                            it->instruction_count += next->instruction_count;
                             blocks.erase(next);
                         }
                     }
