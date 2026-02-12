@@ -181,13 +181,14 @@ namespace utility {
                 // we want to test the readability of the memory
 #ifdef NDEBUG
                 __try {
-                    volatile auto test = *ip;
-                    (void)test;
+                    volatile auto test1 = *(uintptr_t*)(ip);
+                    volatile auto test8 = *(uintptr_t*)(ip + 56); // check if we can read ahead without page crossing
+                    (void)test1; (void)test8;
                 } __except (EXCEPTION_EXECUTE_HANDLER) {
                     break;
                 }
 #else
-                if (IsBadReadPtr(ip, 1)) {
+                if (IsBadReadPtr(ip, 64)) {
                     break;
                 }
 #endif
