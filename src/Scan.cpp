@@ -1168,6 +1168,7 @@ namespace utility {
 
             // Skip over calls
             if (ctx.instrux.Category == ND_CAT_CALL) {
+                last_block.is_call_block = true;
                 return utility::ExhaustionResult::STEP_OVER;
             }
 
@@ -1188,18 +1189,29 @@ namespace utility {
             // merge blocks together that are separated by call instructions
             // just a side effect of how exhaustive_decode works
             if (options.merge_call_blocks) {
-                for (auto it = blocks.begin(); it != blocks.end(); ++it) {
-                    if (!it->instructions.empty() && it->instructions.back().instrux.Category == ND_CAT_CALL) {
-                        auto next = std::next(it);
-                        if (next != blocks.end() && !next->instructions.empty() && next->instructions.front().addr == it->end) {
-                            it->end = next->end;
-                            it->branches = next->branches;
-                            it->instructions.insert(it->instructions.end(), next->instructions.begin(), next->instructions.end());
-                            it->instruction_count += next->instruction_count;
-                            blocks.erase(next);
-                        }
+                size_t write = 0;
+                for (size_t read = 0; read < blocks.size(); ++read) {
+                    if (write != read) {
+                        blocks[write] = std::move(blocks[read]);
                     }
+                    // A block truly ends with a call only if is_call_block is set and
+                    // it has no branches (branches mean it ends with a conditional/unconditional jump)
+                    while (blocks[write].is_call_block
+                           && blocks[write].branches.empty()
+                           && read + 1 < blocks.size()
+                           && blocks[read + 1].start == blocks[write].end) {
+                        ++read;
+                        blocks[write].end = blocks[read].end;
+                        blocks[write].branches = std::move(blocks[read].branches);
+                        blocks[write].is_call_block = blocks[read].is_call_block;
+                        blocks[write].instructions.insert(blocks[write].instructions.end(),
+                            std::make_move_iterator(blocks[read].instructions.begin()),
+                            std::make_move_iterator(blocks[read].instructions.end()));
+                        blocks[write].instruction_count += blocks[read].instruction_count;
+                    }
+                    ++write;
                 }
+                blocks.resize(write);
             }
         }
 
