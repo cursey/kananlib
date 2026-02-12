@@ -2314,8 +2314,6 @@ namespace utility {
 
                 back.push_back(*func_start);
             }
-
-            func_starts_all.push_back(back);
         }
 
         // Find commonalities
