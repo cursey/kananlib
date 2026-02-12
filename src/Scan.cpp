@@ -1321,7 +1321,7 @@ namespace utility {
                 return false;
             }
 
-            if (ix.BranchInfo.IsBranch) {
+            if (ix.BranchInfo.IsBranch && ix.Category != ND_CAT_CALL) {
                 // fallthrough always starts new block
                 if (next >= fn_start && next <= fn_end) {
                     split_set.insert(next);
@@ -1382,7 +1382,7 @@ namespace utility {
                 }
 
                 // record branches
-                if (ix.BranchInfo.IsBranch) {
+                if (ix.BranchInfo.IsBranch && ix.Category != ND_CAT_CALL) {
                     if (!ix.BranchInfo.IsIndirect) {
                         if (auto dest = utility::resolve_displacement(ip, &ix); dest) {
                             bb.branches.push_back(*dest);

@@ -342,6 +342,7 @@ namespace utility {
         std::vector<Instruction> instructions{};
         std::vector<uintptr_t> branches{}; // the addresses they branch to, not the addresses of the instructions themselves
         size_t instruction_count{};
+        bool is_call_block{}; // whether this block ends with a call instruction
     };
     struct BasicBlockCollectOptions {
         size_t max_size{1000};
