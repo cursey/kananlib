@@ -1,13 +1,13 @@
 name: Dev Release
-on: [push, workflow_dispatch]
+on: [push, pull_request, workflow_dispatch]
 env:
   BUILD_TYPE: Release
 jobs:
-  dev-release:
+  build:
     runs-on: windows-latest
     strategy:
       matrix:
-        target: [kananlib]
+        target: [kananlib, kananlib-nolog]
     steps:
       - name: Checkout
         uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
@@ -18,6 +18,28 @@ jobs:
       - name: Configure CMake
         run: cmake -S ${{github.workspace}} -B ${{github.workspace}}/build -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
 
-      - name: Build backend
+      - name: Build
         run: cmake --build ${{github.workspace}}/build --config ${{env.BUILD_TYPE}} --target ${{matrix.target}}
+
+  test:
+    runs-on: windows-latest
+    needs: build
+    strategy:
+      matrix:
+        target: [kananlib-test, kananlib-stress-test]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Configure CMake
+        run: cmake -S ${{github.workspace}}/test -B ${{github.workspace}}/test/build -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
+
+      - name: Build
+        run: cmake --build ${{github.workspace}}/test/build --config ${{env.BUILD_TYPE}} --target ${{matrix.target}}
+
+      - name: Run test
+        run: ${{github.workspace}}/test/build/${{env.BUILD_TYPE}}/${{matrix.target}}.exe
 
