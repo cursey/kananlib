@@ -73,11 +73,13 @@ namespace utility {
         HMODULE module{};
         HANDLE file_handle{};
         HANDLE mapping_handle{};
+        bool is_virtual_alloc{};
 
-        FakeModule(HMODULE module, HANDLE file_handle, HANDLE mapping_handle)
+        FakeModule(HMODULE module, HANDLE file_handle, HANDLE mapping_handle, bool is_virtual_alloc = false)
             : module{ module }
             , file_handle{ file_handle }
             , mapping_handle{ mapping_handle }
+            , is_virtual_alloc{ is_virtual_alloc }
         {}
         
         FakeModule(const FakeModule&) = delete;
@@ -86,10 +88,12 @@ namespace utility {
             : module{ other.module }
             , file_handle{ other.file_handle }
             , mapping_handle{ other.mapping_handle }
+            , is_virtual_alloc{ other.is_virtual_alloc }
         {
             other.module = nullptr;
             other.file_handle = nullptr;
             other.mapping_handle = nullptr;
+            other.is_virtual_alloc = false;
         }
 
         // Sets everything to null so the destructor won't clean up. 
@@ -107,4 +111,13 @@ namespace utility {
     // Useful for being able to use our normal utilities on a PE that isn't actually loaded.
     // Especially useful on executables because we can't call LoadLibraryExA on them correctly.
     std::optional<FakeModule> map_view_of_pe(const std::string& path);
+
+    // Maps a Mach-O (dylib) x86_64 binary into memory with segments at correct virtual addresses.
+    // Supports fat (universal) binaries by extracting the x86_64 slice.
+    // Registers with g_module_ranges so get_module_size/get_module_within work.
+    // Use find_all_function_bounds() on the result for heuristic function boundary detection.
+    std::optional<FakeModule> map_view_of_macho(const std::string& path);
+
+    // Auto-detects PE vs Mach-O by magic bytes and calls the appropriate mapper.
+    std::optional<FakeModule> map_view_of_file(const std::string& path);
 }

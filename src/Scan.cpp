@@ -1897,11 +1897,20 @@ namespace utility {
             return;
         }
 
+        // Validate PE headers before accessing exception directory.
+        // Non-PE modules (e.g. Mach-O) fall back to heuristic scanning.
+        const auto dos_header = (PIMAGE_DOS_HEADER)module;
+        if (dos_header->e_magic != IMAGE_DOS_SIGNATURE) {
+            return populate_function_buckets_heuristic(module);
+        }
+
+        const auto nt_header = (PIMAGE_NT_HEADERS)((uintptr_t)dos_header + dos_header->e_lfanew);
+        if (nt_header->Signature != IMAGE_NT_SIGNATURE) {
+            return populate_function_buckets_heuristic(module);
+        }
+
         // This function abuses the fact that most non-obfuscated binaries have
         // an exception directory containing a list of function start and end addresses.
-        // Get the PE header, and then the exception directory
-        const auto dos_header = (PIMAGE_DOS_HEADER)module;
-        const auto nt_header = (PIMAGE_NT_HEADERS)((uintptr_t)dos_header + dos_header->e_lfanew);
         const auto exception_directory = (PIMAGE_DATA_DIRECTORY)&nt_header->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXCEPTION];
 
         // Get the exception directory RVA and size

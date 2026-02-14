@@ -21,6 +21,14 @@
 using namespace std;
 
 namespace utility {
+    struct ModuleRange {
+        uintptr_t begin;
+        uintptr_t end;
+    };
+
+    std::vector<ModuleRange> g_module_ranges{};
+    std::shared_mutex g_module_ranges_mutex{};
+
     optional<size_t> get_module_size(const string& module) {
         return get_module_size(GetModuleHandleA(module.c_str()));
     }
@@ -37,28 +45,28 @@ namespace utility {
         // Get the dos header and verify that it seems valid.
         auto dosHeader = (PIMAGE_DOS_HEADER)module;
 
-        if (dosHeader->e_magic != IMAGE_DOS_SIGNATURE) {
-            return {};
+        if (dosHeader->e_magic == IMAGE_DOS_SIGNATURE) {
+            // Get the nt headers and verify that they seem valid.
+            auto ntHeaders = (PIMAGE_NT_HEADERS)((uintptr_t)dosHeader + dosHeader->e_lfanew);
+
+            if (ntHeaders->Signature == IMAGE_NT_SIGNATURE) {
+                // OptionalHeader is not actually optional.
+                return ntHeaders->OptionalHeader.SizeOfImage;
+            }
         }
 
-        // Get the nt headers and verify that they seem valid.
-        auto ntHeaders = (PIMAGE_NT_HEADERS)((uintptr_t)dosHeader + dosHeader->e_lfanew);
-
-        if (ntHeaders->Signature != IMAGE_NT_SIGNATURE) {
-            return {};
+        // Fallback for non-PE fake modules (Mach-O, etc.)
+        {
+            std::shared_lock _{g_module_ranges_mutex};
+            for (const auto& range : g_module_ranges) {
+                if (range.begin == (uintptr_t)module) {
+                    return range.end - range.begin;
+                }
+            }
         }
 
-        // OptionalHeader is not actually optional.
-        return ntHeaders->OptionalHeader.SizeOfImage;
+        return {};
     }
-
-    struct ModuleRange {
-        uintptr_t begin;
-        uintptr_t end;
-    };
-    
-    std::vector<ModuleRange> g_module_ranges{};
-    std::shared_mutex g_module_ranges_mutex{};
 
     std::optional<HMODULE> get_module_within(Address address) {
         // For our fake modules
@@ -693,7 +701,264 @@ namespace utility {
 
         return FakeModule{ (HMODULE)mapped_base, file_handle, mapping_handle };
     }
-    
+
+    namespace {
+        constexpr uint32_t MACHO_MH_MAGIC_64   = 0xFEEDFACF;
+        constexpr uint32_t MACHO_FAT_MAGIC_BE   = 0xBEBAFECA; // big-endian FAT_MAGIC as read on little-endian
+        constexpr uint32_t MACHO_CPU_TYPE_X86_64 = 0x01000007;
+        constexpr uint32_t MACHO_LC_SEGMENT_64   = 0x19;
+
+        struct macho_header_64 {
+            uint32_t magic;
+            uint32_t cputype;
+            uint32_t cpusubtype;
+            uint32_t filetype;
+            uint32_t ncmds;
+            uint32_t sizeofcmds;
+            uint32_t flags;
+            uint32_t reserved;
+        };
+
+        struct macho_load_command {
+            uint32_t cmd;
+            uint32_t cmdsize;
+        };
+
+        struct macho_segment_command_64 {
+            uint32_t cmd;
+            uint32_t cmdsize;
+            char     segname[16];
+            uint64_t vmaddr;
+            uint64_t vmsize;
+            uint64_t fileoff;
+            uint64_t filesize;
+            uint32_t maxprot;
+            uint32_t initprot;
+            uint32_t nsects;
+            uint32_t flags;
+        };
+
+        struct macho_fat_header {
+            uint32_t magic;
+            uint32_t nfat_arch;
+        };
+
+        struct macho_fat_arch {
+            uint32_t cputype;
+            uint32_t cpusubtype;
+            uint32_t offset;
+            uint32_t size;
+            uint32_t align;
+        };
+
+        constexpr uint32_t MACHO_VM_PROT_EXECUTE = 0x04;
+    }
+
+    std::optional<FakeModule> map_view_of_macho(const std::string& path) {
+        // Read the entire file
+        auto file = std::ifstream{path, std::ios::binary | std::ios::ate};
+        if (!file.is_open()) {
+            SPDLOG_ERROR("[Mach-O] Failed to open file: {}", path);
+            return std::nullopt;
+        }
+
+        const auto file_size = (size_t)file.tellg();
+        file.seekg(0, std::ios::beg);
+
+        if (file_size < sizeof(macho_header_64)) {
+            SPDLOG_ERROR("[Mach-O] File too small: {}", path);
+            return std::nullopt;
+        }
+
+        auto file_data = std::vector<uint8_t>(file_size);
+        file.read((char*)file_data.data(), file_size);
+        file.close();
+
+        // Determine offset to the x86_64 Mach-O within the file (0 for thin binaries)
+        size_t macho_offset = 0;
+        size_t macho_size = file_size;
+
+        auto magic = *(uint32_t*)file_data.data();
+
+        if (magic == MACHO_FAT_MAGIC_BE) {
+            // Fat (universal) binary - headers are big-endian
+            auto fat = (macho_fat_header*)file_data.data();
+            uint32_t nfat_arch = _byteswap_ulong(fat->nfat_arch);
+
+            if (file_size < sizeof(macho_fat_header) + nfat_arch * sizeof(macho_fat_arch)) {
+                SPDLOG_ERROR("[Mach-O] Fat header extends past file end: {}", path);
+                return std::nullopt;
+            }
+
+            auto archs = (macho_fat_arch*)(file_data.data() + sizeof(macho_fat_header));
+            bool found = false;
+
+            for (uint32_t i = 0; i < nfat_arch; ++i) {
+                uint32_t cputype = _byteswap_ulong(archs[i].cputype);
+                if (cputype == MACHO_CPU_TYPE_X86_64) {
+                    macho_offset = _byteswap_ulong(archs[i].offset);
+                    macho_size = _byteswap_ulong(archs[i].size);
+                    found = true;
+                    break;
+                }
+            }
+
+            if (!found) {
+                SPDLOG_ERROR("[Mach-O] No x86_64 slice found in fat binary: {}", path);
+                return std::nullopt;
+            }
+
+            if (macho_offset + macho_size > file_size) {
+                SPDLOG_ERROR("[Mach-O] x86_64 slice extends past file end: {}", path);
+                return std::nullopt;
+            }
+        }
+
+        // Validate the Mach-O header
+        auto* base = file_data.data() + macho_offset;
+        auto* header = (macho_header_64*)base;
+
+        if (header->magic != MACHO_MH_MAGIC_64) {
+            SPDLOG_ERROR("[Mach-O] Invalid magic: 0x{:08X} (expected 0x{:08X})", header->magic, MACHO_MH_MAGIC_64);
+            return std::nullopt;
+        }
+
+        if (header->cputype != MACHO_CPU_TYPE_X86_64) {
+            SPDLOG_ERROR("[Mach-O] Not x86_64 (cputype: 0x{:08X})", header->cputype);
+            return std::nullopt;
+        }
+
+        // Walk load commands to collect segments
+        struct SegmentInfo {
+            uint64_t vmaddr;
+            uint64_t vmsize;
+            uint64_t fileoff;
+            uint64_t filesize;
+            uint32_t initprot;
+            char     segname[16];
+        };
+
+        std::vector<SegmentInfo> segments{};
+        auto* cmd_ptr = base + sizeof(macho_header_64);
+
+        for (uint32_t i = 0; i < header->ncmds; ++i) {
+            auto* lc = (macho_load_command*)cmd_ptr;
+
+            if (lc->cmdsize == 0 || cmd_ptr + lc->cmdsize > base + macho_size) {
+                break;
+            }
+
+            if (lc->cmd == MACHO_LC_SEGMENT_64) {
+                auto* seg = (macho_segment_command_64*)cmd_ptr;
+
+                // Skip __PAGEZERO (no file content, just reserves VA space)
+                if (seg->filesize == 0 && seg->vmsize > 0 && seg->vmaddr == 0) {
+                    cmd_ptr += lc->cmdsize;
+                    continue;
+                }
+
+                SegmentInfo info{};
+                info.vmaddr = seg->vmaddr;
+                info.vmsize = seg->vmsize;
+                info.fileoff = seg->fileoff;
+                info.filesize = seg->filesize;
+                info.initprot = seg->initprot;
+                memcpy(info.segname, seg->segname, 16);
+
+                segments.push_back(info);
+            }
+
+            cmd_ptr += lc->cmdsize;
+        }
+
+        if (segments.empty()) {
+            SPDLOG_ERROR("[Mach-O] No segments found: {}", path);
+            return std::nullopt;
+        }
+
+        // Compute virtual extent
+        uint64_t min_vmaddr = UINT64_MAX;
+        uint64_t max_vmend = 0;
+
+        for (const auto& seg : segments) {
+            if (seg.vmaddr < min_vmaddr) {
+                min_vmaddr = seg.vmaddr;
+            }
+            uint64_t end = seg.vmaddr + seg.vmsize;
+            if (end > max_vmend) {
+                max_vmend = end;
+            }
+        }
+
+        const auto total_size = (size_t)(max_vmend - min_vmaddr);
+
+        if (total_size == 0 || total_size > 0x100000000ULL) { // sanity check: max 4GB
+            SPDLOG_ERROR("[Mach-O] Invalid virtual extent: 0x{:X}", total_size);
+            return std::nullopt;
+        }
+
+        // Allocate memory for the mapped image
+        auto* mapped_base = (uint8_t*)VirtualAlloc(nullptr, total_size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+
+        if (mapped_base == nullptr) {
+            SPDLOG_ERROR("[Mach-O] VirtualAlloc failed for {} bytes", total_size);
+            return std::nullopt;
+        }
+
+        // Copy each segment to its virtual address
+        for (const auto& seg : segments) {
+            auto dest_offset = (size_t)(seg.vmaddr - min_vmaddr);
+            auto copy_size = (size_t)std::min(seg.filesize, seg.vmsize);
+
+            if (seg.fileoff + copy_size > macho_size) {
+                copy_size = (size_t)(macho_size - seg.fileoff);
+            }
+
+            if (copy_size > 0) {
+                memcpy(mapped_base + dest_offset, base + seg.fileoff, copy_size);
+            }
+        }
+
+        // Set page protections for executable segments
+        for (const auto& seg : segments) {
+            if (seg.initprot & MACHO_VM_PROT_EXECUTE) {
+                auto dest_offset = (size_t)(seg.vmaddr - min_vmaddr);
+                DWORD old_prot = 0;
+                VirtualProtect(mapped_base + dest_offset, (size_t)seg.vmsize, PAGE_EXECUTE_READ, &old_prot);
+            }
+        }
+
+        SPDLOG_INFO("[Mach-O] Mapped {} at {:x}, size 0x{:X} ({} segments)", path, (uintptr_t)mapped_base, total_size, segments.size());
+
+        // Register in module ranges
+        {
+            std::unique_lock _{ g_module_ranges_mutex };
+            g_module_ranges.push_back({ (uintptr_t)mapped_base, (uintptr_t)mapped_base + total_size });
+        }
+
+        return FakeModule{ (HMODULE)mapped_base, nullptr, nullptr, true };
+    }
+
+    std::optional<FakeModule> map_view_of_file(const std::string& path) {
+        // Read the first 4 bytes to determine file type
+        auto file = std::ifstream{path, std::ios::binary};
+        if (!file.is_open()) {
+            return std::nullopt;
+        }
+
+        uint32_t magic = 0;
+        file.read((char*)&magic, sizeof(magic));
+        file.close();
+
+        // Mach-O 64-bit or fat binary
+        if (magic == MACHO_MH_MAGIC_64 || magic == MACHO_FAT_MAGIC_BE) {
+            return map_view_of_macho(path);
+        }
+
+        // Assume PE otherwise (MZ signature = 0x5A4D)
+        return map_view_of_pe(path);
+    }
+
     FakeModule::~FakeModule() {
         if (module) {
             {
@@ -704,22 +969,26 @@ namespace utility {
                     }), g_module_ranges.end());
             }
 
-            _LDR_DATA_TABLE_ENTRY* fake_entry = nullptr;
-            // Find the entry in the list that matches our module and remove it.
-            foreach_module([&](LIST_ENTRY* entry, _LDR_DATA_TABLE_ENTRY* ldr_entry) {
-                if (ldr_entry->DllBase == (PVOID)module) {
-                    entry->Flink->Blink = entry->Blink;
-                    entry->Blink->Flink = entry->Flink;
-                    fake_entry = ldr_entry;
+            if (is_virtual_alloc) {
+                VirtualFree(module, 0, MEM_RELEASE);
+            } else {
+                _LDR_DATA_TABLE_ENTRY* fake_entry = nullptr;
+                // Find the entry in the list that matches our module and remove it.
+                foreach_module([&](LIST_ENTRY* entry, _LDR_DATA_TABLE_ENTRY* ldr_entry) {
+                    if (ldr_entry->DllBase == (PVOID)module) {
+                        entry->Flink->Blink = entry->Blink;
+                        entry->Blink->Flink = entry->Flink;
+                        fake_entry = ldr_entry;
+                    }
+                });
+
+                if (fake_entry != nullptr) {
+                    free(fake_entry->FullDllName.Buffer);
+                    delete fake_entry;
                 }
-            });
 
-            if (fake_entry != nullptr) {
-                free(fake_entry->FullDllName.Buffer);
-                delete fake_entry;
+                UnmapViewOfFile(module);
             }
-
-            UnmapViewOfFile(module);
         }
 
         if (mapping_handle) {
