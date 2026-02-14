@@ -6,6 +6,7 @@
 #include <vector>
 #include <string_view>
 #include <functional>
+#include <unordered_map>
 
 #include <Windows.h>
 #include <winternl.h>
@@ -120,4 +121,14 @@ namespace utility {
 
     // Auto-detects PE vs Mach-O by magic bytes and calls the appropriate mapper.
     std::optional<FakeModule> map_view_of_file(const std::string& path);
+
+    // Bidirectional import map for a PE module's IAT.
+    // name_to_addr: "kernel32.dll!IsBadReadPtr" -> IAT slot address
+    // addr_to_name: IAT slot address -> "kernel32.dll!IsBadReadPtr"
+    struct ImportMap {
+        std::unordered_map<std::string, uintptr_t> name_to_addr{};
+        std::unordered_map<uintptr_t, std::string> addr_to_name{};
+    };
+
+    std::optional<ImportMap> get_module_imports(HMODULE module);
 }

@@ -702,6 +702,111 @@ namespace utility {
         return FakeModule{ (HMODULE)mapped_base, file_handle, mapping_handle };
     }
 
+    std::optional<ImportMap> get_module_imports(HMODULE module) {
+        if (module == nullptr) {
+            return std::nullopt;
+        }
+
+        const auto base = (uintptr_t)module;
+        auto* dos = (PIMAGE_DOS_HEADER)base;
+
+        if (dos->e_magic != IMAGE_DOS_SIGNATURE) {
+            return std::nullopt;
+        }
+
+        auto* nt = (PIMAGE_NT_HEADERS)(base + dos->e_lfanew);
+
+        if (nt->Signature != IMAGE_NT_SIGNATURE) {
+            return std::nullopt;
+        }
+
+        const auto module_size = (size_t)nt->OptionalHeader.SizeOfImage;
+        const auto module_end = base + module_size;
+
+        auto rva_ok = [&](uintptr_t rva, size_t min_size = 1) -> bool {
+            return rva >= 1 && rva + min_size <= module_size;
+        };
+
+        auto& import_dir = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
+
+        if (import_dir.VirtualAddress == 0 || import_dir.Size == 0) {
+            return std::nullopt;
+        }
+
+        if (!rva_ok(import_dir.VirtualAddress, sizeof(IMAGE_IMPORT_DESCRIPTOR))) {
+            return std::nullopt;
+        }
+
+        ImportMap result{};
+        auto* desc = (PIMAGE_IMPORT_DESCRIPTOR)(base + import_dir.VirtualAddress);
+
+        for (; rva_ok((uintptr_t)desc - base + sizeof(IMAGE_IMPORT_DESCRIPTOR) - 1) && desc->Name != 0; ++desc) {
+            if (!rva_ok(desc->Name)) {
+                continue;
+            }
+
+            auto* dll_name = (const char*)(base + desc->Name);
+
+            // Ensure the string is within bounds (scan for null terminator)
+            bool name_valid = false;
+            for (auto* p = dll_name; (uintptr_t)p < module_end; ++p) {
+                if (*p == '\0') { name_valid = true; break; }
+            }
+            if (!name_valid) {
+                continue;
+            }
+
+            // Lowercase the DLL name for consistent keys
+            std::string dll_lower = dll_name;
+            std::transform(dll_lower.begin(), dll_lower.end(), dll_lower.begin(), ::tolower);
+
+            auto int_rva = desc->OriginalFirstThunk ? desc->OriginalFirstThunk : desc->FirstThunk;
+            if (!rva_ok(int_rva, sizeof(IMAGE_THUNK_DATA)) || !rva_ok(desc->FirstThunk, sizeof(IMAGE_THUNK_DATA))) {
+                continue;
+            }
+
+            // OriginalFirstThunk = Import Name Table (names), FirstThunk = IAT (addresses)
+            auto* int_entry = (PIMAGE_THUNK_DATA)(base + int_rva);
+            auto* iat_entry = (PIMAGE_THUNK_DATA)(base + desc->FirstThunk);
+
+            for (; rva_ok((uintptr_t)int_entry - base, sizeof(IMAGE_THUNK_DATA)) && int_entry->u1.AddressOfData != 0; ++int_entry, ++iat_entry) {
+                // Skip ordinal imports
+                if (IMAGE_SNAP_BY_ORDINAL(int_entry->u1.Ordinal)) {
+                    auto ordinal = IMAGE_ORDINAL(int_entry->u1.Ordinal);
+                    auto key = dll_lower + "!#" + std::to_string(ordinal);
+                    auto iat_addr = (uintptr_t)&iat_entry->u1.Function;
+
+                    result.name_to_addr[std::move(key)] = iat_addr;
+                    result.addr_to_name[iat_addr] = dll_lower + "!#" + std::to_string(ordinal);
+                    continue;
+                }
+
+                if (!rva_ok((uintptr_t)int_entry->u1.AddressOfData, sizeof(IMAGE_IMPORT_BY_NAME))) {
+                    continue;
+                }
+
+                auto* hint_name = (PIMAGE_IMPORT_BY_NAME)(base + int_entry->u1.AddressOfData);
+
+                // Verify the name string is within bounds
+                bool func_name_valid = false;
+                for (auto* p = (const char*)hint_name->Name; (uintptr_t)p < module_end; ++p) {
+                    if (*p == '\0') { func_name_valid = true; break; }
+                }
+                if (!func_name_valid) {
+                    continue;
+                }
+
+                auto key = dll_lower + "!" + (const char*)hint_name->Name;
+                auto iat_addr = (uintptr_t)&iat_entry->u1.Function;
+
+                result.addr_to_name[iat_addr] = key;
+                result.name_to_addr[std::move(key)] = iat_addr;
+            }
+        }
+
+        return result;
+    }
+
     namespace {
         constexpr uint32_t MACHO_MH_MAGIC_64   = 0xFEEDFACF;
         constexpr uint32_t MACHO_FAT_MAGIC_BE   = 0xBEBAFECA; // big-endian FAT_MAGIC as read on little-endian
