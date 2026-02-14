@@ -1303,10 +1303,23 @@ namespace utility {
             return blocks;
         }
 
-        // gather all split points (block starts) first, then we will build blocks in pass 2
-        std::unordered_set<uintptr_t> split_set;
-        split_set.reserve(64);
+        // Cached instruction info from single decode pass
+        struct InsnInfo {
+            uintptr_t addr;
+            uintptr_t next;       // addr + length
+            uintptr_t branch_target; // resolved direct branch target, or 0
+            uint8_t is_branch : 1;   // non-call branch
+            uint8_t is_conditional : 1;
+            uint8_t is_terminator : 1; // ret/int3
+        };
 
+        // Thread-local buffer to avoid repeated heap allocations
+        thread_local std::vector<InsnInfo> insn_cache;
+        insn_cache.clear();
+
+        // Single decode pass: collect split points AND instruction info
+        thread_local std::unordered_set<uintptr_t> split_set;
+        split_set.clear();
         split_set.insert(fn_start);
         split_set.insert(fn_end);
 
@@ -1321,15 +1334,21 @@ namespace utility {
                 return false;
             }
 
+            InsnInfo info{};
+            info.addr = ip;
+            info.next = next;
+
             if (ix.BranchInfo.IsBranch && ix.Category != ND_CAT_CALL) {
-                // fallthrough always starts new block
+                info.is_branch = 1;
+                info.is_conditional = ix.BranchInfo.IsConditional ? 1 : 0;
+
                 if (next >= fn_start && next <= fn_end) {
                     split_set.insert(next);
                 }
 
-                // direct branch target
                 if (!ix.BranchInfo.IsIndirect) {
                     if (auto dest = utility::resolve_displacement(ip, &ix); dest) {
+                        info.branch_target = *dest;
                         if (*dest >= fn_start && *dest <= fn_end) {
                             split_set.insert(*dest);
                         }
@@ -1337,18 +1356,20 @@ namespace utility {
                 }
             }
 
-            // terminators also split
             if (ix.Instruction == ND_INS_RETN || ix.Instruction == ND_INS_INT3) {
+                info.is_terminator = 1;
                 if (next >= fn_start && next <= fn_end) {
                     split_set.insert(next);
                 }
             }
 
+            insn_cache.push_back(info);
             return true;
         });
 
-        // sort split points
-        std::vector<uintptr_t> splits(split_set.begin(), split_set.end());
+        // Sort split points
+        thread_local std::vector<uintptr_t> splits;
+        splits.assign(split_set.begin(), split_set.end());
         std::sort(splits.begin(), splits.end());
 
         if (splits.size() < 2) {
@@ -1357,7 +1378,8 @@ namespace utility {
 
         blocks.reserve(splits.size());
 
-        // pass 2, build blocks from split points
+        // Build blocks from cached instructions (no second decode)
+        size_t insn_idx = 0;
         for (size_t i = 0; i + 1 < splits.size(); ++i) {
             uintptr_t start = splits[i];
             uintptr_t end   = splits[i + 1];
@@ -1366,44 +1388,25 @@ namespace utility {
                 break;
             }
 
-            LinearBlock bb{};
+            auto& bb = blocks.emplace_back();
             bb.start = start;
             bb.end   = start;
 
-            utility::linear_decode((uint8_t*)start, end - start,
-                [&](const utility::ExhaustionContext& ctx)
-            {
-                const auto ip   = ctx.addr;
-                const auto& ix  = ctx.instrux;
-                const auto next = ip + ix.Length;
+            // Advance to instructions in this block
+            while (insn_idx < insn_cache.size() && insn_cache[insn_idx].addr < start)
+                insn_idx++;
 
-                if (ip >= end) {
-                    return false;
+            for (size_t j = insn_idx; j < insn_cache.size() && insn_cache[j].addr < end; j++) {
+                const auto& info = insn_cache[j];
+                bb.end = info.next;
+
+                if (info.is_branch) {
+                    if (info.branch_target != 0)
+                        bb.branches.push_back(info.branch_target);
+                    if (info.is_conditional)
+                        bb.branches.push_back(info.next);
                 }
-
-                // record branches
-                if (ix.BranchInfo.IsBranch && ix.Category != ND_CAT_CALL) {
-                    if (!ix.BranchInfo.IsIndirect) {
-                        if (auto dest = utility::resolve_displacement(ip, &ix); dest) {
-                            bb.branches.push_back(*dest);
-                        }
-                    }
-
-                    if (ix.BranchInfo.IsConditional) {
-                        bb.branches.push_back(next);
-                    }
-                }
-
-                bb.end = next;
-
-                if (ix.Category == ND_CAT_CALL) {
-                    return true;
-                }
-
-                return true;
-            });
-
-            blocks.push_back(bb);
+            }
         }
 
         return blocks;
@@ -1426,7 +1429,7 @@ namespace utility {
         size_t total_added_entries = 0;
 
         for (auto i = 0; i < std::max<size_t>(sorted_entries.size() / NUM_BUCKETS, 1); ++i) {
-            Bucket bucket{};
+            auto& bucket = buckets.emplace_back();
             const auto bucket_index = i * NUM_BUCKETS;
             bucket.start_range = get_begin(sorted_entries[bucket_index]);
             const auto next_index = std::min<size_t>((i + 1) * NUM_BUCKETS, sorted_entries.size());
@@ -1439,8 +1442,6 @@ namespace utility {
 
                 ++total_added_entries;
             }
-
-            buckets.push_back(bucket);
         }
 
         // Can happen, but can also happen if the number of entries is less than NUM_BUCKETS
