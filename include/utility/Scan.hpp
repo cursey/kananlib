@@ -144,7 +144,8 @@ namespace utility {
         constexpr uint64_t fib_mult = 11400714819323198485ULL;
         #define SEEN_HASH(p) ((size_t)((uint64_t)(uintptr_t)(p) * fib_mult >> (64 - tls_bits)))
 
-        std::vector<uint8_t*> branches{};
+        thread_local std::vector<uint8_t*> branches{};
+        branches.clear();
         branches.push_back(start);
 
         uint32_t total_branches_seen = 0;
