@@ -75,7 +75,7 @@ void ensure_com_initialized() {
 #endif
 }
 
-std::optional<std::string> get_pdb_path(const uint8_t* module) {
+std::optional<std::string> get_pdb_path(const uint8_t* module, const std::string& module_filepath) {
     if (module == nullptr) {
         SPDLOG_ERROR("get_pdb_path: module pointer is null");
         return std::nullopt;
@@ -170,6 +170,22 @@ std::optional<std::string> get_pdb_path(const uint8_t* module) {
         if (file_exists(local_pdb_path.string())) {
             pdb_cache[cache_key] = local_pdb_path.string();
             return local_pdb_path.string();
+        }
+
+        // check if base file exists locally next to the module (some software ships PDBs alongside the executable)
+        std::string module_dir;
+        if (!module_filepath.empty()) {
+            module_dir = std::filesystem::path(module_filepath).parent_path().string();
+        } else {
+            auto mod_path = utility::get_module_path((HMODULE)module);
+            if (mod_path) module_dir = std::filesystem::path(*mod_path).parent_path().string();
+        }
+        std::filesystem::path local_base_pdb_path = std::filesystem::path(module_dir) / std::filesystem::path(pdb_filename).filename();
+        SPDLOG_INFO("Checking for local PDB at: {}", local_base_pdb_path.string());
+        if (file_exists(local_base_pdb_path.string())) {
+            SPDLOG_INFO("Found local PDB at: {}", local_base_pdb_path.string());
+            pdb_cache[cache_key] = local_base_pdb_path.string();
+            return local_base_pdb_path.string();
         }
 
         // create directories
@@ -577,7 +593,7 @@ std::optional<std::string> get_symbol_name(const uint8_t* module, uintptr_t rva)
 #endif
 }
 
-std::unordered_map<uintptr_t, std::string> get_symbol_map(const uint8_t* module) {
+std::unordered_map<uintptr_t, std::string> get_symbol_map(const uint8_t* module, const std::string& module_filepath) {
     std::unordered_map<uintptr_t, std::string> result;
 
     if (module == nullptr) {
@@ -589,7 +605,7 @@ std::unordered_map<uintptr_t, std::string> get_symbol_map(const uint8_t* module)
     ensure_com_initialized();
 
     // get PDB path
-    auto pdb_path_opt = get_pdb_path(module);
+    auto pdb_path_opt = get_pdb_path(module, module_filepath);
     if (!pdb_path_opt) {
         SPDLOG_ERROR("Failed to get PDB path for module");
         return result;

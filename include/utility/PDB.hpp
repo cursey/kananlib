@@ -30,10 +30,10 @@ namespace utility::pdb {
         std::vector<StructMember> members;
     };
 
-    std::optional<std::string> get_pdb_path(const uint8_t* module);
+    std::optional<std::string> get_pdb_path(const uint8_t* module, const std::string& module_filepath = "");
     std::optional<uintptr_t> get_symbol_address(const uint8_t* module, std::string_view symbol_name);
     std::optional<std::string> get_symbol_name(const uint8_t* module, uintptr_t rva);
-    std::unordered_map<uintptr_t, std::string> get_symbol_map(const uint8_t* module);
+    std::unordered_map<uintptr_t, std::string> get_symbol_map(const uint8_t* module, const std::string& module_filepath = "");
     std::vector<std::string> enumerate_symbols(const uint8_t* module, size_t max_symbols = 100);
     
     // Structure analysis functions (requires KANANLIB_USE_DIA_SDK to be defined)

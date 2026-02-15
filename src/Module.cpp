@@ -24,6 +24,7 @@ namespace utility {
     struct ModuleRange {
         uintptr_t begin;
         uintptr_t end;
+        std::wstring path;
     };
 
     std::vector<ModuleRange> g_module_ranges{};
@@ -126,7 +127,17 @@ namespace utility {
 
     std::optional<std::string> get_module_path(HMODULE module) {
         wchar_t filename[MAX_PATH]{0};
-        if (GetModuleFileNameW(module, filename, MAX_PATH) >= MAX_PATH) {
+        if (auto res = GetModuleFileNameW(module, filename, MAX_PATH); res >= MAX_PATH || res == 0) {
+            // Look in our module ranges
+            {
+                std::shared_lock _{g_module_ranges_mutex};
+                for (const auto& range : g_module_ranges) {
+                    if (range.begin == (uintptr_t)module) {
+                        return utility::narrow(range.path);
+                    }
+                }
+            }
+
             return {};
         }
 
@@ -135,7 +146,17 @@ namespace utility {
 
     std::optional<std::wstring> get_module_pathw(HMODULE module) {
         wchar_t filename[MAX_PATH]{0};
-        if (GetModuleFileNameW(module, filename, MAX_PATH) >= MAX_PATH) {
+        if (auto res = GetModuleFileNameW(module, filename, MAX_PATH); res >= MAX_PATH || res == 0) {
+            // Look in our module ranges
+            {
+                std::shared_lock _{g_module_ranges_mutex};
+                for (const auto& range : g_module_ranges) {
+                    if (range.begin == (uintptr_t)module) {
+                        return range.path;
+                    }
+                }
+            }
+
             return {};
         }
 
@@ -144,7 +165,19 @@ namespace utility {
 
     std::optional<std::string> get_module_directory(HMODULE module) {
         wchar_t filename[MAX_PATH]{ 0 };
-        if (GetModuleFileNameW(module, filename, MAX_PATH) >= MAX_PATH) {
+        if (auto res = GetModuleFileNameW(module, filename, MAX_PATH); res >= MAX_PATH || res == 0) {
+            // Look in our module ranges
+            {
+                std::shared_lock _{g_module_ranges_mutex};
+                for (const auto& range : g_module_ranges) {
+                    if (range.begin == (uintptr_t)module) {
+                        auto path = std::filesystem::path{ range.path };
+                        path.remove_filename();
+                        return utility::narrow(path.wstring());
+                    }
+                }
+            }
+
             return {};
         }
 
@@ -155,7 +188,19 @@ namespace utility {
 
     std::optional<std::wstring> get_module_directoryw(HMODULE module) {
         wchar_t filename[MAX_PATH]{ 0 };
-        if (GetModuleFileNameW(module, filename, MAX_PATH) >= MAX_PATH) {
+        if (auto res = GetModuleFileNameW(module, filename, MAX_PATH); res >= MAX_PATH || res == 0) {
+            // Look in our module ranges
+            {
+                std::shared_lock _{g_module_ranges_mutex};
+                for (const auto& range : g_module_ranges) {
+                    if (range.begin == (uintptr_t)module) {
+                        auto path = std::filesystem::path{ range.path };
+                        path.remove_filename();
+                        return path.wstring();
+                    }
+                }
+            }
+
             return {};
         }
 
@@ -696,7 +741,7 @@ namespace utility {
 
         {
             std::unique_lock _{ g_module_ranges_mutex };
-            g_module_ranges.push_back({ (uintptr_t)mapped_base, (uintptr_t)mapped_base + ntHeaders->OptionalHeader.SizeOfImage });
+            g_module_ranges.push_back({ (uintptr_t)mapped_base, (uintptr_t)mapped_base + ntHeaders->OptionalHeader.SizeOfImage, wpath });
         }
 
         return FakeModule{ (HMODULE)mapped_base, file_handle, mapping_handle };
@@ -1038,7 +1083,7 @@ namespace utility {
         // Register in module ranges
         {
             std::unique_lock _{ g_module_ranges_mutex };
-            g_module_ranges.push_back({ (uintptr_t)mapped_base, (uintptr_t)mapped_base + total_size });
+            g_module_ranges.push_back({ (uintptr_t)mapped_base, (uintptr_t)mapped_base + total_size, std::filesystem::path{path}.wstring() });
         }
 
         return FakeModule{ (HMODULE)mapped_base, nullptr, nullptr, true };
