@@ -1334,7 +1334,7 @@ namespace utility {
                 return false;
             }
 
-            InsnInfo info{};
+            auto& info = insn_cache.emplace_back();
             info.addr = ip;
             info.next = next;
 
@@ -1363,7 +1363,6 @@ namespace utility {
                 }
             }
 
-            insn_cache.push_back(info);
             return true;
         });
 
@@ -1973,7 +1972,8 @@ namespace utility {
         const auto middle_rva = middle - module;
 
         // For the case where there's weird obfuscation or something
-        std::vector<Bucket*> candidates{};
+        thread_local std::vector<Bucket*> candidates{};
+        candidates.clear();
 
         {
             std::shared_lock _{bucket_mtx};
