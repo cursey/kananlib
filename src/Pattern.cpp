@@ -90,7 +90,7 @@ namespace utility {
 
             ++it_wildcard;
         } catch(...) { // MAKE SURE YOU HAVE EXCEPTION HANDLING FOR ACCESS VIOLATIONS!!!!!!!!
-            ++it_wildcard;
+            it_wildcard = (uint8_t*)(((uintptr_t)it_wildcard & ~0xFFF) + 0x1000);
             continue;
         } while ((it_wildcard - first_non_wildcard_index) < (uint8_t*)end_scan_from);
 
