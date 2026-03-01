@@ -1097,9 +1097,10 @@ namespace utility {
     void linear_decode(uint8_t* ip, size_t max_size, std::function<bool(ExhaustionContext&)> callback) {
         ExhaustionContext ctx{};
         ctx.branch_start = (uintptr_t)ip;
+        ctx.addr = (uintptr_t)ip;
 
         for (size_t i = 0; i < max_size;) try {
-            const auto status = NdDecodeEx(&ctx.instrux, ip, 64, ND_CODE_64, ND_DATA_64);
+            const auto status = NdDecodeEx(&ctx.instrux, (uint8_t*)ctx.addr, 64, ND_CODE_64, ND_DATA_64);
 
             if (!ND_SUCCESS(status)) {
                 break;
@@ -1107,14 +1108,12 @@ namespace utility {
 
             auto& ix = ctx.instrux;
 
-            ctx.addr = (uintptr_t)ip;
-
             if (!callback(ctx)) {
                 break;
             }
 
             i += ix.Length;
-            ip += ix.Length;
+            ctx.addr += ix.Length;
         } catch (...) {
             SPDLOG_ERROR("Exception caught during linear_decode at {:x}", (uintptr_t)ip);
             break;
