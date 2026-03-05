@@ -7,4 +7,5 @@
 #define SPDLOG_INFO(...)
 #define SPDLOG_ERROR(...)
 #define SPDLOG_DEBUG(...)
+#define SPDLOG_WARN(...)
 #endif
