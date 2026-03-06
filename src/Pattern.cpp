@@ -92,8 +92,12 @@ namespace utility {
     optional<uintptr_t> Pattern::find_single(uintptr_t start, size_t length, const vector<int16_t>& pat) {
         auto patternLength = pat.size();
 
-        if (patternLength == 0 || length < patternLength) {
+        if (patternLength == 0) {
             return start; // Empty pattern matches immediately
+        }
+
+        if (length < patternLength) {
+            return {};
         }
 
         auto actual_end = start + length;
