@@ -2149,6 +2149,102 @@ namespace utility {
         return std::nullopt;
     }
 
+    std::optional<uintptr_t> resolve_scope_table_owner(HMODULE module, uintptr_t filter_func) {
+#if defined(_M_AMD64)
+        KANANLIB_BENCH();
+
+        const auto base = (uintptr_t)module;
+        const auto filter_entry = find_function_entry(filter_func);
+
+        if (!filter_entry) {
+            return std::nullopt;
+        }
+
+        const auto filter_rva = filter_entry->BeginAddress;
+
+        const auto dos = (PIMAGE_DOS_HEADER)module;
+        if (dos->e_magic != IMAGE_DOS_SIGNATURE) {
+            return std::nullopt;
+        }
+
+        const auto nt = (PIMAGE_NT_HEADERS)(base + dos->e_lfanew);
+        if (nt->Signature != IMAGE_NT_SIGNATURE) {
+            return std::nullopt;
+        }
+
+        const auto& exc_dir = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXCEPTION];
+        const auto entries = (PIMAGE_RUNTIME_FUNCTION_ENTRY)(base + exc_dir.VirtualAddress);
+        const auto count = exc_dir.Size / sizeof(IMAGE_RUNTIME_FUNCTION_ENTRY);
+        const auto module_size = utility::get_module_size(module).value_or(0);
+
+        for (size_t i = 0; i < count; ++i) {
+            const auto& entry = entries[i];
+
+            if (entry.BeginAddress == 0 || entry.EndAddress == 0 || entry.UnwindData == 0) {
+                continue;
+            }
+
+            if (entry.BeginAddress >= module_size || entry.UnwindData >= module_size) {
+                continue;
+            }
+
+            const auto ui = (undocumented::UNWIND_INFO*)(base + entry.UnwindData);
+
+            // Only interested in functions with exception handlers
+            if (!(ui->Flags & (UNW_FLAG_EHANDLER | UNW_FLAG_UHANDLER))) {
+                continue;
+            }
+
+            // After unwind codes (DWORD-aligned), there's the exception handler RVA,
+            // then the handler-specific data (scope table for SEH handlers).
+            const auto codes_end = (DWORD*)&ui->UnwindCode[(ui->CountOfCodes + 1) & ~1];
+            // codes_end[0] = exception handler RVA (e.g. __C_specific_handler)
+            // codes_end[1] = scope table count
+
+            const auto handler_rva = codes_end[0];
+            if (handler_rva == 0 || handler_rva >= module_size) {
+                continue;
+            }
+
+            const auto scope_count = codes_end[1];
+
+            // Sanity check scope count
+            if (scope_count == 0 || scope_count > 256) {
+                continue;
+            }
+
+            // Scope table entries start at codes_end[2]
+            struct ScopeRecord {
+                DWORD BeginAddress;
+                DWORD EndAddress;
+                DWORD HandlerAddress;
+                DWORD JumpTarget;
+            };
+
+            const auto scopes = (const ScopeRecord*)&codes_end[2];
+
+            for (DWORD s = 0; s < scope_count; ++s) {
+                if (scopes[s].HandlerAddress == filter_rva) {
+                    // The scope record's BeginAddress is inside the __try block of the
+                    // owning function. Resolve the actual function start from there,
+                    // as the RUNTIME_FUNCTION entry we're iterating may not be the
+                    // primary entry for the function.
+                    const auto try_block_addr = base + scopes[s].BeginAddress;
+                    const auto owner = find_function_start_unwind(try_block_addr);
+
+                    if (owner) {
+                        SPDLOG_INFO("Found scope table owner for filter {:x} -> function at RVA {:x}",
+                            filter_rva, *owner - base);
+                        return owner;
+                    }
+                }
+            }
+        }
+#endif
+
+        return std::nullopt;
+    }
+
     std::optional<uintptr_t> find_function_from_string_ref(HMODULE module, std::string_view str, bool zero_terminated) {
         KANANLIB_BENCH();
 

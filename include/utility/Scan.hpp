@@ -411,6 +411,11 @@ namespace utility {
     // same as prev, but keeps going backwards until the "function" it lands on
     // is actually called somewhere within the module
     std::optional<uintptr_t> find_function_start_with_call(uintptr_t middle);
+
+    // Given a function that is an SEH exception filter, finds the owning function
+    // by scanning .pdata scope tables for a reference to the filter's RVA.
+    std::optional<uintptr_t> resolve_scope_table_owner(HMODULE module, uintptr_t filter_func);
+
     std::optional<uintptr_t> find_function_from_string_ref(HMODULE module, std::string_view str, bool zero_terminated = false);
     std::optional<uintptr_t> find_function_from_string_ref(HMODULE module, std::wstring_view str, bool zero_terminated = false);
 
