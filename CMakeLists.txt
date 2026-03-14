@@ -162,6 +162,7 @@ target_include_directories(kananlib PUBLIC
 
 target_link_libraries(kananlib PUBLIC
 	bddisasm::bddisasm
+	bddisasm::bdshemu
 	spdlog::spdlog
 	shlwapi
 )
@@ -257,6 +258,7 @@ target_include_directories(kananlib-nolog PUBLIC
 
 target_link_libraries(kananlib-nolog PUBLIC
 	bddisasm::bddisasm
+	bddisasm::bdshemu
 	spdlog::spdlog
 	shlwapi
 )
