@@ -37,7 +37,8 @@ include-directories = ["include"]
 compile-features = ["cxx_std_20"]
 compile-options = ["/EHa"]
 link-libraries = [
-    "bddisasm::bddisasm", 
+    "bddisasm::bddisasm",
+    "bddisasm::bdshemu",
     "spdlog::spdlog", 
     "shlwapi",
     "kananlib"

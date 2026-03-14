@@ -101,6 +101,7 @@ target_include_directories(kananlib-test PRIVATE
 
 target_link_libraries(kananlib-test PRIVATE
 	bddisasm::bddisasm
+	bddisasm::bdshemu
 	spdlog::spdlog
 	shlwapi
 	kananlib
