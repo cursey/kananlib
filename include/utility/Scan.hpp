@@ -114,7 +114,7 @@ namespace utility {
         // Flat open-addressing hash set for seen addresses.
         // Thread-local buffer avoids heap alloc/free on every call.
         // Dirty list avoids zeroing the whole table — only used slots are cleared.
-        const size_t table_capacity = max_size < 1024 ? 1024 : max_size * 2;
+        const size_t table_capacity = std::max<size_t>(65536, max_size * 64);
         size_t table_bits = 4; // minimum 16 slots
         while ((size_t{1} << table_bits) < table_capacity * 2) ++table_bits; // load factor <= 0.5
         const size_t needed = size_t{1} << table_bits;
