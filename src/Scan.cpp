@@ -2123,7 +2123,17 @@ namespace utility {
             return std::nullopt;
         }
 
+        static thread_local std::unordered_set<uintptr_t> visited{};
+        auto _ = utility::ScopeGuard{[&]() { visited.clear(); }};
+
         for (auto func = find_function_start_unwind(middle); func.has_value(); func = find_function_start_unwind(*func - 1)) {
+            if (visited.contains(*func)) {
+                SPDLOG_ERROR("Detected cycle while finding function start with call for {:x}, aborting (TODO: Fix this?)", middle);
+                break;
+            }
+
+            visited.insert(*func);
+
             SPDLOG_INFO(" Checking if {:x} is a real function", *func);
 
             const auto ref = utility::scan_displacement_reference(module, *func, [&](uintptr_t ref) {
