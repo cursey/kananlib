@@ -852,6 +852,111 @@ namespace utility {
         return result;
     }
 
+    std::optional<ExportMap> get_module_exports(HMODULE module) {
+        if (module == nullptr) {
+            return std::nullopt;
+        }
+
+        const auto base = (uintptr_t)module;
+        auto* dos = (PIMAGE_DOS_HEADER)base;
+
+        if (dos->e_magic != IMAGE_DOS_SIGNATURE) {
+            return std::nullopt;
+        }
+
+        auto* nt = (PIMAGE_NT_HEADERS)(base + dos->e_lfanew);
+
+        if (nt->Signature != IMAGE_NT_SIGNATURE) {
+            return std::nullopt;
+        }
+
+        const auto module_size = (size_t)nt->OptionalHeader.SizeOfImage;
+        const auto module_end = base + module_size;
+
+        auto rva_ok = [&](uintptr_t rva, size_t min_size = 1) -> bool {
+            return rva >= 1 && rva + min_size <= module_size;
+        };
+
+        auto& export_dir_entry = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT];
+
+        if (export_dir_entry.VirtualAddress == 0 || export_dir_entry.Size == 0) {
+            return std::nullopt;
+        }
+
+        if (!rva_ok(export_dir_entry.VirtualAddress, sizeof(IMAGE_EXPORT_DIRECTORY))) {
+            return std::nullopt;
+        }
+
+        auto* exp = (PIMAGE_EXPORT_DIRECTORY)(base + export_dir_entry.VirtualAddress);
+
+        // Forwarded exports store a string RVA inside the export directory region
+        // instead of a real function RVA. We skip these (no local VA).
+        const auto forward_begin = (uintptr_t)export_dir_entry.VirtualAddress;
+        const auto forward_end = forward_begin + export_dir_entry.Size;
+
+        if (!rva_ok(exp->AddressOfFunctions, sizeof(uint32_t)) ||
+            !rva_ok(exp->AddressOfNames, sizeof(uint32_t)) ||
+            !rva_ok(exp->AddressOfNameOrdinals, sizeof(uint16_t))) {
+            return std::nullopt;
+        }
+
+        auto* functions = (const uint32_t*)(base + exp->AddressOfFunctions);
+        auto* names = (const uint32_t*)(base + exp->AddressOfNames);
+        auto* ordinals = (const uint16_t*)(base + exp->AddressOfNameOrdinals);
+
+        ExportMap result{};
+
+        for (uint32_t i = 0; i < exp->NumberOfNames; ++i) {
+            // Bounds-check the name/ordinal array slots themselves.
+            if (!rva_ok(exp->AddressOfNames + ((size_t)i + 1) * sizeof(uint32_t) - 1) ||
+                !rva_ok(exp->AddressOfNameOrdinals + ((size_t)i + 1) * sizeof(uint16_t) - 1)) {
+                break;
+            }
+
+            const auto name_rva = names[i];
+            if (!rva_ok(name_rva)) {
+                continue;
+            }
+
+            // Verify the name string is within bounds (scan for null terminator).
+            auto* name = (const char*)(base + name_rva);
+            bool name_valid = false;
+            for (auto* p = name; (uintptr_t)p < module_end; ++p) {
+                if (*p == '\0') { name_valid = true; break; }
+            }
+            if (!name_valid) {
+                continue;
+            }
+
+            const auto ord = ordinals[i];
+            if (ord >= exp->NumberOfFunctions) {
+                continue;
+            }
+
+            if (!rva_ok(exp->AddressOfFunctions + ((size_t)ord + 1) * sizeof(uint32_t) - 1)) {
+                continue;
+            }
+
+            const auto func_rva = functions[ord];
+            if (func_rva == 0) {
+                continue;
+            }
+
+            // Skip forwarders (RVA points inside the export directory).
+            if (func_rva >= forward_begin && func_rva < forward_end) {
+                continue;
+            }
+
+            const auto va = base + (uintptr_t)func_rva;
+
+            std::string key = name;
+            result.addr_to_name[va] = key;
+            result.name_to_addr[std::move(key)] = va;
+        }
+
+        return result;
+    }
+
     namespace {
         constexpr uint32_t MACHO_MH_MAGIC_64   = 0xFEEDFACF;
         constexpr uint32_t MACHO_FAT_MAGIC_BE   = 0xBEBAFECA; // big-endian FAT_MAGIC as read on little-endian

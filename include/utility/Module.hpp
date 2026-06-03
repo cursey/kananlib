@@ -131,4 +131,15 @@ namespace utility {
     };
 
     std::optional<ImportMap> get_module_imports(HMODULE module);
+
+    // Export table for a PE module, keyed by export name.
+    // name_to_addr: "FunctionName" -> function VA
+    // addr_to_name: function VA -> "FunctionName"
+    // Forwarded and nameless (ordinal-only) exports are not included.
+    struct ExportMap {
+        std::unordered_map<std::string, uintptr_t> name_to_addr{};
+        std::unordered_map<uintptr_t, std::string> addr_to_name{};
+    };
+
+    std::optional<ExportMap> get_module_exports(HMODULE module);
 }

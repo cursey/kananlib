@@ -64,6 +64,9 @@ static void print_usage(const char* prog) {
          << "  imports [filter]\n"
          << "      List IAT entries (PE only). Optional substring filter (e.g. \"kernel32!\").\n"
          << "\n"
+         << "  exports [filter]\n"
+         << "      List export table entries (PE only). Optional substring filter.\n"
+         << "\n"
          << "  list_functions [--count N]\n"
          << "      Enumerate functions discovered by .pdata + heuristics.\n"
          << "\n"
@@ -505,6 +508,41 @@ static int cmd_resolve_displacement(const char* argv0, HMODULE module, size_t si
     return 0;
 }
 
+static int cmd_exports(const char* argv0, HMODULE module, size_t size, uintptr_t base, int argc, const char* argv[]) {
+    string filter;
+    for (int i = 3; i < argc; ++i) {
+        if (filter.empty()) {
+            filter = argv[i];
+        } else {
+            cerr << "Error: unknown option: " << argv[i] << "\n";
+            print_usage(argv0);
+            return 1;
+        }
+    }
+
+    auto exports = utility::get_module_exports(module);
+    if (!exports) {
+        cerr << "Error: failed to read export table (not a PE, or no exports?)\n";
+        return 1;
+    }
+
+    vector<pair<string, uintptr_t>> entries;
+    entries.reserve(exports->name_to_addr.size());
+    for (auto& [name, addr] : exports->name_to_addr) {
+        if (!filter.empty() && name.find(filter) == string::npos) continue;
+        entries.emplace_back(name, addr);
+    }
+    std::sort(entries.begin(), entries.end());
+
+    cout << "Found " << std::dec << entries.size() << " export(s):\n";
+    for (auto& [name, addr] : entries) {
+        cout << "  0x" << std::hex << addr
+             << " (RVA 0x" << (addr - base) << ")  "
+             << name << "\n";
+    }
+    return 0;
+}
+
 static int cmd_imports(const char* argv0, HMODULE module, size_t size, uintptr_t base, int argc, const char* argv[]) {
     string filter;
     for (int i = 3; i < argc; ++i) {
@@ -707,6 +745,8 @@ int main(int argc, const char* argv[]) {
         return cmd_function_bounds(argv[0], handle, *module_size, base, argc, argv);
     } else if (command == "resolve_displacement") {
         return cmd_resolve_displacement(argv[0], handle, *module_size, base, argc, argv);
+    } else if (command == "exports") {
+        return cmd_exports(argv[0], handle, *module_size, base, argc, argv);
     } else if (command == "imports") {
         return cmd_imports(argv[0], handle, *module_size, base, argc, argv);
     } else if (command == "collect_string_references") {
