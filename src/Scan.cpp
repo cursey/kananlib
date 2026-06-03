@@ -444,11 +444,26 @@ namespace utility {
         concurrency::parallel_for((size_t)0, segments.size(), [&](size_t i) {
             const auto& segment = segments[i];
 
-            const auto len = i < segments.size() - 1 ? segment.length + 4 : segment.length; // +4 because scan_relative_reference_scalar checks if i + 4 < end
+            const auto scan_start = segment.start;
+            const auto scan_end =
+                i < segments.size() - 1
+                    ? std::min(segment.start + segment.length + 4, end)
+                    : segment.start + segment.length;
 
-            if (auto result = scan_relative_reference(segment.start, len, ptr, filter); result.has_value()) {
-                std::scoped_lock lock{ mutex };
-                results.push_back(*result);
+            for (auto cur = scan_start; cur < scan_end;) {
+                const auto remaining = scan_end - cur;
+
+                auto result = scan_relative_reference(cur, remaining, ptr, filter);
+                if (!result.has_value()) {
+                    break;
+                }
+
+                {
+                    std::scoped_lock lock{ mutex };
+                    results.push_back(*result);
+                }
+
+                cur = *result + 1;
             }
         });
 
