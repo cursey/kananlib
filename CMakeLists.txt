@@ -7,12 +7,11 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_BINARY_DIR)
 	message(FATAL_ERROR "In-tree builds are not supported. Run CMake from a separate directory: cmake -B build")
 endif()
 
-# Regenerate CMakeLists.txt automatically in the root project
 set(CMKR_ROOT_PROJECT OFF)
 if(CMAKE_CURRENT_SOURCE_DIR STREQUAL CMAKE_SOURCE_DIR)
 	set(CMKR_ROOT_PROJECT ON)
 
-	# Bootstrap cmkr
+	# Bootstrap cmkr and automatically regenerate CMakeLists.txt
 	include(cmkr.cmake OPTIONAL RESULT_VARIABLE CMKR_INCLUDE_RESULT)
 	if(CMKR_INCLUDE_RESULT)
 		cmkr()
@@ -20,10 +19,8 @@ if(CMAKE_CURRENT_SOURCE_DIR STREQUAL CMAKE_SOURCE_DIR)
 
 	# Enable folder support
 	set_property(GLOBAL PROPERTY USE_FOLDERS ON)
-endif()
 
-# Create a configure-time dependency on cmake.toml to improve IDE support
-if(CMKR_ROOT_PROJECT)
+	# Create a configure-time dependency on cmake.toml to improve IDE support
 	configure_file(cmake.toml cmake.toml COPYONLY)
 endif()
 
@@ -71,9 +68,13 @@ endif()
 
 include(FetchContent)
 
+# Fix warnings about DOWNLOAD_EXTRACT_TIMESTAMP
+if(POLICY CMP0135)
+	cmake_policy(SET CMP0135 NEW)
+endif()
 if(KANANLIB_FETCH_BDDISASM OR KANANLIB_STANDALONE_BUILD) # fetch-bddisasm
 	message(STATUS "Fetching bddisasm (v1.37.0)...")
-	FetchContent_Declare(bddisasm
+	FetchContent_Declare(bddisasm SYSTEM
 		GIT_REPOSITORY
 			"https://github.com/bitdefender/bddisasm"
 		GIT_TAG
@@ -86,7 +87,7 @@ if(KANANLIB_FETCH_BDDISASM OR KANANLIB_STANDALONE_BUILD) # fetch-bddisasm
 endif()
 if(KANANLIB_FETCH_SPDLOG OR KANANLIB_STANDALONE_BUILD) # fetch-spdlog
 	message(STATUS "Fetching spdlog (v1.12.0)...")
-	FetchContent_Declare(spdlog
+	FetchContent_Declare(spdlog SYSTEM
 		GIT_REPOSITORY
 			"https://github.com/gabime/spdlog"
 		GIT_TAG
@@ -97,11 +98,8 @@ if(KANANLIB_FETCH_SPDLOG OR KANANLIB_STANDALONE_BUILD) # fetch-spdlog
 	FetchContent_MakeAvailable(spdlog)
 
 endif()
-# Target kananlib
-set(CMKR_TARGET kananlib)
-set(kananlib_SOURCES "")
-
-list(APPEND kananlib_SOURCES
+# Target: kananlib
+set(kananlib_SOURCES
 	"src/Address.cpp"
 	"src/Config.cpp"
 	"src/Emulation.cpp"
@@ -139,18 +137,13 @@ list(APPEND kananlib_SOURCES
 	"include/utility/VtableHook.hpp"
 	"include/utility/thirdparty/InstructionSet.hpp"
 	"include/utility/thirdparty/parallel-util.hpp"
-)
-
-list(APPEND kananlib_SOURCES
 	cmake.toml
 )
 
-set(CMKR_SOURCES ${kananlib_SOURCES})
 add_library(kananlib STATIC)
 
-if(kananlib_SOURCES)
-	target_sources(kananlib PRIVATE ${kananlib_SOURCES})
-endif()
+target_sources(kananlib PRIVATE ${kananlib_SOURCES})
+source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${kananlib_SOURCES})
 
 target_compile_features(kananlib PUBLIC
 	cxx_std_20
@@ -167,6 +160,7 @@ target_link_libraries(kananlib PUBLIC
 	shlwapi
 )
 
+set(CMKR_TARGET kananlib)
 if (CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
     message(STATUS "MSVC")
     target_compile_options(kananlib PRIVATE /EHa)
@@ -190,14 +184,8 @@ if(KANANLIB_DIA_SDK_FOUND)
     message(STATUS "kananlib: DIA SDK support enabled for kananlib target")
 endif()
 
-unset(CMKR_TARGET)
-unset(CMKR_SOURCES)
-
-# Target kananlib-nolog
-set(CMKR_TARGET kananlib-nolog)
-set(kananlib-nolog_SOURCES "")
-
-list(APPEND kananlib-nolog_SOURCES
+# Target: kananlib-nolog
+set(kananlib-nolog_SOURCES
 	"src/Address.cpp"
 	"src/Config.cpp"
 	"src/Emulation.cpp"
@@ -235,18 +223,13 @@ list(APPEND kananlib-nolog_SOURCES
 	"include/utility/VtableHook.hpp"
 	"include/utility/thirdparty/InstructionSet.hpp"
 	"include/utility/thirdparty/parallel-util.hpp"
-)
-
-list(APPEND kananlib-nolog_SOURCES
 	cmake.toml
 )
 
-set(CMKR_SOURCES ${kananlib-nolog_SOURCES})
 add_library(kananlib-nolog STATIC)
 
-if(kananlib-nolog_SOURCES)
-	target_sources(kananlib-nolog PRIVATE ${kananlib-nolog_SOURCES})
-endif()
+target_sources(kananlib-nolog PRIVATE ${kananlib-nolog_SOURCES})
+source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${kananlib-nolog_SOURCES})
 
 target_compile_features(kananlib-nolog PUBLIC
 	cxx_std_20
@@ -267,6 +250,7 @@ target_compile_definitions(kananlib-nolog PUBLIC
 	SPDLOG_ACTIVE_LEVEL=SPDLOG_LEVEL_OFF
 )
 
+set(CMKR_TARGET kananlib-nolog)
 if (CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
     target_compile_options(kananlib-nolog PRIVATE /EHa)
 else()
@@ -288,6 +272,35 @@ if(KANANLIB_DIA_SDK_FOUND)
     message(STATUS "kananlib: DIA SDK support enabled for kananlib-nolog target")
 endif()
 
-unset(CMKR_TARGET)
-unset(CMKR_SOURCES)
+# Target: kananlib-cli
+set(kananlib-cli_SOURCES
+	"src/cli/kananlib-cli.cpp"
+	cmake.toml
+)
 
+add_executable(kananlib-cli)
+
+target_sources(kananlib-cli PRIVATE ${kananlib-cli_SOURCES})
+source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${kananlib-cli_SOURCES})
+
+target_compile_features(kananlib-cli PRIVATE
+	cxx_std_20
+)
+
+target_include_directories(kananlib-cli PRIVATE
+	include
+)
+
+target_link_libraries(kananlib-cli PRIVATE
+	kananlib
+)
+
+get_directory_property(CMKR_VS_STARTUP_PROJECT DIRECTORY ${PROJECT_SOURCE_DIR} DEFINITION VS_STARTUP_PROJECT)
+if(NOT CMKR_VS_STARTUP_PROJECT)
+	set_property(DIRECTORY ${PROJECT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT kananlib-cli)
+endif()
+
+set(CMKR_TARGET kananlib-cli)
+if (CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+    target_compile_options(kananlib-cli PRIVATE /EHa)
+endif()

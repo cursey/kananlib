@@ -124,10 +124,16 @@ if(KANANLIB_DIA_SDK_FOUND)
 endif()
 """
 
-# TODO: define a target for each of your executables/libraries like this:
-#[target.myexecutable]
-#type = "executable" # static, shared
-#sources = ["src/kananlib/*.cpp", "include/kananlib/*.hpp"]
-#include-directories = ["include"]
-#compile-features = ["cxx_std_11"]
-#link-libraries = ["target-or-library"]
+# CLI tool for mapping binaries and scanning in-process
+[target.kananlib-cli]
+type = "executable"
+sources = ["src/cli/kananlib-cli.cpp"]
+include-directories = ["include"]
+compile-features = ["cxx_std_20"]
+link-libraries = ["kananlib"]
+
+cmake-after="""
+if (CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+    target_compile_options(kananlib-cli PRIVATE /EHa)
+endif()
+"""
