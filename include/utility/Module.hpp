@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <utility>
 #include <optional>
 #include <string>
 #include <vector>
@@ -95,6 +96,18 @@ namespace utility {
             other.file_handle = nullptr;
             other.mapping_handle = nullptr;
             other.is_virtual_alloc = false;
+        }
+
+        FakeModule& operator=(FakeModule&& other) noexcept {
+            if (this != &other) {
+                // Swap into `other` so its destructor releases our old resources.
+                std::swap(module, other.module);
+                std::swap(file_handle, other.file_handle);
+                std::swap(mapping_handle, other.mapping_handle);
+                std::swap(is_virtual_alloc, other.is_virtual_alloc);
+            }
+
+            return *this;
         }
 
         // Sets everything to null so the destructor won't clean up. 
