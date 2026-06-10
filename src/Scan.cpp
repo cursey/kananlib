@@ -1190,6 +1190,7 @@ namespace utility {
                 last_block.start = ctx.branch_start;
                 last_block.end = ctx.branch_start + ctx.instrux.Length;
                 last_block.instruction_count = 0;
+                last_block.is_call_block = false;
             }
 
             last_block.end = ctx.addr + ctx.instrux.Length;
