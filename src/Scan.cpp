@@ -1144,6 +1144,28 @@ namespace utility {
 
         const auto should_copy_instructions = options.copy_instructions;
 
+        // Emit a completed block into the next output slot, reusing that slot's
+        // existing instructions/branches vector capacity (swap, not copy) so
+        // repeated calls that pass the same `blocks` buffer do not re-allocate a
+        // per-block instruction vector each time. Scalars are copied so last_block's
+        // post-emit state matches the original copy-based behaviour; only the heap
+        // vectors move. `count` is the number of slots written this call.
+        size_t count = 0;
+        const auto emit = [&](BasicBlock& src) {
+            if (count < blocks.size()) {
+                BasicBlock& dst = blocks[count];
+                dst.start = src.start;
+                dst.end = src.end;
+                dst.instruction_count = src.instruction_count;
+                dst.is_call_block = src.is_call_block;
+                std::swap(dst.instructions, src.instructions);
+                std::swap(dst.branches, src.branches);
+            } else {
+                blocks.push_back(src);
+            }
+            ++count;
+        };
+
         utility::exhaustive_decode((uint8_t*)start, options.max_size, [&](utility::ExhaustionContext& ctx) {
             if (ctx.instrux.BranchInfo.IsBranch && ctx.instrux.Category != ND_CAT_CALL) {
                 if (ctx.instrux.BranchInfo.IsConditional) {
@@ -1160,8 +1182,7 @@ namespace utility {
             }
 
             if (ctx.branch_start != previous_branch_start) {
-                blocks.push_back(last_block);
-                //SPDLOG_INFO("Found basic block from {:x} to {:x}", last_block.start, last_block.end);
+                emit(last_block);
 
                 previous_branch_start = ctx.branch_start;
                 last_block.instructions.clear();
@@ -1173,7 +1194,7 @@ namespace utility {
 
             last_block.end = ctx.addr + ctx.instrux.Length;
             ++last_block.instruction_count;
-            
+
             if (should_copy_instructions) {
                 last_block.instructions.push_back({ ctx.addr, ctx.instrux });
             }
@@ -1187,11 +1208,13 @@ namespace utility {
             return ExhaustionResult::CONTINUE;
         });
 
-        // Push the last block if it's not equal to the last one we pushed (can happen if the last instruction is a ret or int3, etc)
-        if (blocks.empty() || blocks.back().start != last_block.start || blocks.back().end != last_block.end) {
-            blocks.push_back(last_block);
-            //SPDLOG_INFO("Found basic block from {:x} to {:x}", last_block.start, last_block.end);
+        // Emit the last block if it differs from the one we last emitted (can happen
+        // if the final instruction is a ret/int3/etc).
+        if (count == 0 || blocks[count - 1].start != last_block.start || blocks[count - 1].end != last_block.end) {
+            emit(last_block);
         }
+
+        blocks.resize(count); // drop any slots left over from a larger prior call
 
         if (options.sort || options.merge_call_blocks) {
             std::sort(blocks.begin(), blocks.end(), [](const BasicBlock& a, const BasicBlock& b) {
@@ -1226,7 +1249,6 @@ namespace utility {
                 blocks.resize(write);
             }
         }
-
     }
 
     std::vector<BasicBlock> collect_basic_blocks(uintptr_t start, const BasicBlockCollectOptions& options) {
