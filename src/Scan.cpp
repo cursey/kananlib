@@ -1135,9 +1135,7 @@ namespace utility {
         }
     }
 
-    std::vector<BasicBlock> collect_basic_blocks(uintptr_t start, const BasicBlockCollectOptions& options) {
-        std::vector<BasicBlock> blocks{};
-        blocks.reserve(1024);
+    void collect_basic_blocks_into(uintptr_t start, const BasicBlockCollectOptions& options, std::vector<BasicBlock>& blocks) {
         uintptr_t previous_branch_start = start;
 
         BasicBlock last_block{};
@@ -1229,6 +1227,11 @@ namespace utility {
             }
         }
 
+    }
+
+    std::vector<BasicBlock> collect_basic_blocks(uintptr_t start, const BasicBlockCollectOptions& options) {
+        std::vector<BasicBlock> blocks{};
+        collect_basic_blocks_into(start, options, blocks);
         return blocks;
     }
 
