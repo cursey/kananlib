@@ -957,6 +957,52 @@ namespace utility {
         return result;
     }
 
+    std::optional<std::vector<ModuleSection>> get_module_sections(HMODULE module) {
+        if (module == nullptr) {
+            return std::nullopt;
+        }
+
+        const auto base = (uintptr_t)module;
+        auto* dos = (PIMAGE_DOS_HEADER)base;
+
+        if (dos->e_magic != IMAGE_DOS_SIGNATURE) {
+            return std::nullopt;
+        }
+
+        auto* nt = (PIMAGE_NT_HEADERS)(base + dos->e_lfanew);
+
+        if (nt->Signature != IMAGE_NT_SIGNATURE) {
+            return std::nullopt;
+        }
+
+        std::vector<ModuleSection> sections{};
+        const auto num_sections = nt->FileHeader.NumberOfSections;
+        sections.reserve(num_sections);
+
+        auto* section = IMAGE_FIRST_SECTION(nt);
+
+        for (uint16_t i = 0; i < num_sections; ++i, ++section) {
+            ModuleSection sec{};
+
+            // Truncate the section name to the first null, or use all 8 chars.
+            auto name_len = 0u;
+            for (; name_len < IMAGE_SIZEOF_SHORT_NAME && section->Name[name_len] != '\0'; ++name_len)
+                ;
+            sec.name.assign((const char*)section->Name, name_len);
+
+            sec.virtual_address = base + section->VirtualAddress;
+            sec.virtual_size = section->Misc.VirtualSize;
+            sec.raw_size = section->SizeOfRawData;
+            sec.raw_pointer = section->PointerToRawData;
+            sec.characteristics = section->Characteristics;
+
+            sections.push_back(std::move(sec));
+        }
+
+        return sections;
+    }
+
+
     namespace {
         constexpr uint32_t MACHO_MH_MAGIC_64   = 0xFEEDFACF;
         constexpr uint32_t MACHO_FAT_MAGIC_BE   = 0xBEBAFECA; // big-endian FAT_MAGIC as read on little-endian

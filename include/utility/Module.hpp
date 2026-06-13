@@ -144,6 +144,17 @@ namespace utility {
     };
 
     std::optional<ImportMap> get_module_imports(HMODULE module);
+    // PE section descriptor.
+    struct ModuleSection {
+        std::string name;
+        uintptr_t virtual_address;   // Absolute VA (base + section VirtualAddress)
+        size_t virtual_size;         // VirtualSize
+        size_t raw_size;             // SizeOfRawData
+        uintptr_t raw_pointer;       // PointerToRawData
+        uint32_t characteristics;
+    };
+
+    std::optional<std::vector<ModuleSection>> get_module_sections(HMODULE module);
 
     // Export table for a PE module, keyed by export name.
     // name_to_addr: "FunctionName" -> function VA

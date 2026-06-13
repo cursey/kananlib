@@ -66,6 +66,8 @@ static void print_usage(const char* prog) {
          << "\n"
          << "  exports [filter]\n"
          << "      List export table entries (PE only). Optional substring filter.\n"
+         << "  sections\n"
+         << "      List PE section table entries (PE only).\n"
          << "\n"
          << "  list_functions [--count N]\n"
          << "      Enumerate functions discovered by .pdata + heuristics.\n"
@@ -578,6 +580,55 @@ static int cmd_imports(const char* argv0, HMODULE module, size_t size, uintptr_t
     return 0;
 }
 
+static int cmd_sections(const char* argv0, HMODULE module, size_t size, uintptr_t base, int argc, const char* argv[]) {
+    string filter;
+    for (int i = 3; i < argc; ++i) {
+        if (filter.empty()) {
+            filter = argv[i];
+        } else {
+            cerr << "Error: unknown option: " << argv[i] << "\n";
+            print_usage(argv0);
+            return 1;
+        }
+    }
+
+    auto sections = utility::get_module_sections(module);
+    if (!sections) {
+        cerr << "Error: failed to read section table (not a PE?)\n";
+        return 1;
+    }
+
+    cout << "Found " << std::dec << sections->size() << " section(s):\n";
+    for (auto& sec : *sections) {
+        if (!filter.empty() && sec.name.find(filter) == string::npos) continue;
+
+        // Decode common characteristic flags
+        vector<string> flags;
+        if (sec.characteristics & IMAGE_SCN_MEM_EXECUTE)     flags.push_back("EXEC");
+        if (sec.characteristics & IMAGE_SCN_MEM_READ)       flags.push_back("READ");
+        if (sec.characteristics & IMAGE_SCN_MEM_WRITE)      flags.push_back("WRITE");
+        if (sec.characteristics & IMAGE_SCN_CNT_CODE)       flags.push_back("CODE");
+        if (sec.characteristics & IMAGE_SCN_CNT_INITIALIZED_DATA) flags.push_back("INIT_DATA");
+        if (sec.characteristics & IMAGE_SCN_CNT_UNINITIALIZED_DATA) flags.push_back("UNINIT_DATA");
+
+        string flags_str;
+        for (size_t i = 0; i < flags.size(); ++i) {
+            if (i > 0) flags_str += "|";
+            flags_str += flags[i];
+        }
+
+        cout << "  " << std::setw(8) << sec.name
+             << "  VA 0x" << std::hex << sec.virtual_address
+             << "  (RVA 0x" << (sec.virtual_address - base) << ")"
+             << "  Size 0x" << sec.virtual_size
+             << "  Raw 0x" << sec.raw_pointer
+             << ":0x" << sec.raw_size
+             << "  [" << flags_str << "]\n";
+    }
+
+    return 0;
+}
+
 static int cmd_find_relative_reference(const char* argv0, HMODULE module, size_t size, uintptr_t base, int argc, const char* argv[]) {
     if (argc < 4) {
         cerr << "Error: find_relative_reference requires an RVA argument\n";
@@ -749,6 +800,8 @@ int main(int argc, const char* argv[]) {
         return cmd_exports(argv[0], handle, *module_size, base, argc, argv);
     } else if (command == "imports") {
         return cmd_imports(argv[0], handle, *module_size, base, argc, argv);
+    } else if (command == "sections") {
+        return cmd_sections(argv[0], handle, *module_size, base, argc, argv);
     } else if (command == "collect_string_references") {
         return cmd_collect_string_references(argv[0], handle, *module_size, base, argc, argv);
     } else if (command == "list_functions") {
