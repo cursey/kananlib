@@ -190,3 +190,46 @@ if(NOT TARGET kananlib)
     add_subdirectory(kananlib)
 endif()
 """
+
+
+# Test for additional Scan functions
+[target.kananlib-scan-test]
+type = "executable"
+sources = ["TestScan.cpp"]
+include-directories = ["include"]
+compile-features = ["cxx_std_20"]
+compile-options = ["/EHa"]
+link-libraries = [
+    "bddisasm::bddisasm",
+    "bddisasm::bdshemu",
+    "spdlog::spdlog",
+    "shlwapi",
+    "kananlib"
+]
+cmake-before="""
+if(NOT TARGET kananlib)
+    add_subdirectory(kananlib)
+endif()
+"""
+
+
+# Test for PDB + RTTI deep coverage
+[target.kananlib-pdb-rtti-test]
+type = "executable"
+sources = ["TestPDBRTTI.cpp"]
+include-directories = ["include"]
+compile-features = ["cxx_std_20"]
+compile-options = ["/EHa"]
+compile-definitions = ["KANANLIB_USE_DIA_SDK"]
+link-libraries = [
+    "bddisasm::bddisasm",
+    "bddisasm::bdshemu",
+    "spdlog::spdlog",
+    "shlwapi",
+    "kananlib"
+]
+cmake-before="""
+if(NOT TARGET kananlib)
+    add_subdirectory(kananlib)
+endif()
+"""

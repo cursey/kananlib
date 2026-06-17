@@ -19,9 +19,13 @@
   - `test/build/Release/kananlib-stress-test.exe`
   - `test/build/Release/kananlib-utils-test.exe`
   - `test/build/Release/kananlib-advanced-test.exe`
-- **Note:** LSP/clangd will show errors (wrong compiler version). MSVC builds cleanly.
+  - `test/build/Release/kananlib-vtablehook-test.exe`
+  - `test/build/Release/kananlib-input-test.exe`
+  - `test/build/Release/kananlib-registry-test.exe`
   - `test/build/Release/kananlib-module-test.exe`
-
+  - `test/build/Release/kananlib-scan-test.exe`
+  - `test/build/Release/kananlib-pdb-rtti-test.exe`
+- **Note:** LSP/clangd will show errors (wrong compiler version). MSVC builds cleanly.
 ## What Was Done (4 commits)
 
 ### Commit 1: `b6360e9` — Fix structural weaknesses in test suite
@@ -62,6 +66,37 @@
   - **Registry:** nonexistent key/value returning nullopt, type mismatch handling
 - Added 3 new targets to `cmake.toml` and `CMakeLists.txt`: kananlib-vtablehook-test, kananlib-input-test, kananlib-registry-test
 
+### Commit 5: <pending> — Add Scan function tests
+- Created `test/TestScan.cpp` — 8 tests across Scan module
+  - **scan_reverse:** reverse direction pattern scan in controlled buffer
+  - **scan_data:** raw byte scan (start/length + HMODULE overloads, scan_data_t typed version, negative case)
+  - **scan_ptr:** pointer value scan (aligned + noalign overloads, negative case)
+  - **scan_opcode:** find instruction by opcode byte (RET, MOV, negative case)
+  - **scan_mnemonic:** find instruction by mnemonic string (NOP, XOR, RETN, negative case)
+  - **get_insn_size:** instruction length for NOP/XOR/MOV/RET/PUSH/REX-prefixed MOV
+  - **calculate_absolute:** resolve relative offset to absolute (positive, custom offset, negative/backwards)
+  - **decode_one:** decode single instruction (NOP/MOV/RET/XOR, zero-length edge case)
+- Added `kananlib-scan-test` target to `cmake.toml` and `CMakeLists.txt`
+
+### Commit 6: <pending> — Add PDB + RTTI deep coverage tests
+- Created `test/TestPDBRTTI.cpp` — 11 tests across PDB and RTTI modules
+  - **PDB (4 tests, require DIA SDK):**
+    - `test_pdb_get_symbol_name` — resolve RVA back to symbol name (roundtrip with get_symbol_address)
+    - `test_pdb_get_symbol_map` — get full symbol map, verify non-empty and contains known symbols
+    - `test_pdb_enumerate_symbols` — list symbols from PDB, verify non-empty and non-null names
+    - `test_pdb_negative` — null module handling for get_symbol_address, get_symbol_name, get_symbol_map, enumerate_symbols
+  - **RTTI (7 tests):**
+    - `test_rtti_is_vtable` — verify known vtable detected, null/stack addresses rejected
+    - `test_rtti_get_locator` — get CompleteObjectLocator from polymorphic objects
+    - `test_rtti_get_type_info` — get type_info, verify name matches expected class
+    - `test_rtti_derives_from` — inheritance check (base/derived self-match, derived-from-base, negative reverse)
+    - `test_rtti_find_vtable_partial` — partial name match search
+    - `test_rtti_find_vtable_regex` — regex name match search
+    - `test_rtti_find_all_vtables` — enumerate all vtables in executable, verify test classes present
+  - Key technique: `#ifdef KANANLIB_USE_DIA_SDK` guards around PDB tests (DIA SDK is PRIVATE on kananlib target)
+  - Key technique: compile-definition `KANANLIB_USE_DIA_SDK` passed to test target in cmake.toml
+- Added `kananlib-pdb-rtti-test` target to `cmake.toml` and `CMakeLists.txt`
+
 ## Current Test Coverage
 
 | Executable | Tests | Modules Covered |
@@ -74,7 +109,9 @@
 | `kananlib-input-test` | 3 | Input |
 | `kananlib-registry-test` | 3 | Registry |
 | `kananlib-module-test` | 30 | Module (all functions) |
-| **Total** | **119** | **17 of 19 modules** |
+| `kananlib-scan-test` | 8 | Scan (reverse, data, ptr, opcode, mnemonic, insn_size, calculate_absolute, decode_one) |
+| `kananlib-pdb-rtti-test` | 11 | PDB (symbol_name, symbol_map, enumerate_symbols, negative), RTTI (is_vtable, get_locator, get_type_info, derives_from, find_vtable_partial, find_vtable_regex, find_all_vtables) |
+| **Total** | **138** | **19 of 19 modules** |
 
 ## Gap Analysis — Untested and Partially Tested Modules
 
@@ -102,43 +139,26 @@
    - All major functions now covered: get_executable, get_module, get_module_size (3 overloads), get_module_within, get_dll_imagebase, get_module_path/w, get_module_directory/w, get_loaded_module_names, get_module_count, read_module_from_disk, get_original_bytes, get_module_imports, get_module_exports, get_module_sections, LoaderLockGuard, FakeModule move/detach, map_view_of_pe, map_view_of_file
    - Negative cases: nullptr for imports/exports/sections, nonexistent module name
 
-5. **Scan** (`include/utility/Scan.hpp`, `src/Scan.cpp`) — partially covered, many functions untested
+5. **Scan** (`include/utility/Scan.hpp`, `src/Scan.cpp`) — TESTED (8 new tests, `kananlib-scan-test`)
    - Tested: `scan`, `scan_string`, `scan_strings`, `scan_displacement_reference`, `scan_relative_reference`, `resolve_instruction`, `collect_basic_blocks`, `exhaustive_decode`
-   - NOT tested:
-     - `scan_reverse` — reverse direction scan
-     - `scan_data(HMODULE, data, size)` / `scan_data_t` — raw byte scan
-     - `scan_ptr` / `scan_ptr_noalign` — pointer value scan
-     - `scan_opcode` — find opcode by byte
-     - `scan_mnemonic` — find instruction by mnemonic
+   - Now also tested (Phase 8): `scan_reverse`, `scan_data` (start/length + HMODULE), `scan_data_t`, `scan_ptr` (aligned + noalign), `scan_opcode`, `scan_mnemonic`, `get_insn_size`, `calculate_absolute`, `decode_one`
+   - Remaining untested:
      - `scan_disasm` — find instruction by pattern
-     - `get_insn_size` — get instruction size at address
-     - `calculate_absolute` — resolve relative offset to absolute
-     - `decode_one` — decode single instruction
-     - `resolve_displacement` — resolve RIP-relative target
+     - `resolve_displacement` — resolve RIP-relative target (used internally, tested indirectly)
+6. **PDB** (`include/utility/PDB.hpp`, `src/PDB.cpp`) — TESTED (4 tests, `kananlib-pdb-rtti-test`, requires DIA SDK)
+   - Tested: `get_symbol_name` (RVA roundtrip), `get_symbol_map` (full map, known symbol lookup), `enumerate_symbols` (list, non-null names), null-module negative cases
+   - Previously tested: `get_pdb_path`, `get_symbol_address`, `get_struct_info`, `enumerate_structs`, `generate_c_struct` (in `kananlib-test`)
+   - Remaining untested: `scan_disasm`, `resolve_displacement` (internal, tested indirectly)
 
-6. **PDB** (`include/utility/PDB.hpp`, `src/PDB.cpp`) — only `get_pdb_path` + type functions tested
-   - NOT tested:
-     - `get_symbol_address(module, name)` — resolve symbol name to address
-     - `get_symbol_name(module, rva)` — resolve address to symbol name
-     - `get_symbol_map(module)` — full symbol map
-     - `enumerate_symbols(module, max)` — list symbols
-     - `get_struct_info(module, name)` — struct layout via DIA SDK
-     - `enumerate_structs(module)` — list structs via DIA SDK
-     - `generate_c_struct(info)` — C header generation
-
-7. **RTTI** (`include/utility/RTTI.hpp`, `src/RTTI.cpp`) — only COL/find_vtable tested
-   - NOT tested:
-     - `is_vtable(ptr)` — check if pointer is a vtable
-     - `get_locator(obj)` / `get_type_info(obj)` — get COL/TI from object
-     - `derives_from(obj, name)` — inheritance check
-     - `find_vtable_partial(name)` — partial name match
-     - `find_vtable_regex(name)` — regex match
+7. **RTTI** (`include/utility/RTTI.hpp`, `src/RTTI.cpp`) — TESTED (7 tests, `kananlib-pdb-rtti-test`)
+   - Tested: `is_vtable` (known vtable + negative), `get_locator`, `get_type_info`, `derives_from` (self/inheritance/negative), `find_vtable_partial`, `find_vtable_regex`, `find_all_vtables`
+   - Previously tested: `find_vtable`, `find_object_ptr` (in `kananlib-test`)
+   - Remaining untested:
      - `find_vtables_derived_from(name)` — all derived vtables
-     - `find_all_vtables(module)` — enumerate all vtables
-     - `find_object_inline(name)` / `find_object_ptr(name)` / `find_objects_ptr(name)` — find static instances
+     - `find_object_inline(name)` / `find_objects_ptr(name)` — find static instances
 
 ### Well-tested (no major gaps)
-String, Pattern, Address, Config, ScopeGuard, Benchmark, Memory, Patch, PointerHook, VtableHook, Input, Registry, Module
+String, Pattern, Address, Config, ScopeGuard, Benchmark, Memory, Patch, PointerHook, VtableHook, Input, Registry, Module, Scan, PDB, RTTI
 
 ## Key Implementation Notes for Next Session
 
@@ -207,14 +227,13 @@ static void* g_hook_target = nullptr;  // must be global/static for VirtualProte
 - [x] Phase 6: Write tests for Registry (3 tests, `kananlib-registry-test`)
 - [x] Phase 7: Write tests for Module utilities (30 tests, `kananlib-module-test`)
   - All functions tested: get_executable, get_module, get_module_size (3 overloads), get_module_within, get_dll_imagebase, get_module_path/w, get_module_directory/w, get_loaded_module_names, get_module_count, read_module_from_disk, get_original_bytes, get_module_imports, get_module_exports, get_module_sections, LoaderLockGuard, FakeModule move/detach, map_view_of_pe, map_view_of_file
-- [ ] Phase 8: Write tests for additional Scan functions (~8 tests, add to `kananlib-utils-test` or new target)
-  - `scan_reverse`, `scan_data`, `scan_ptr`, `scan_opcode`, `scan_mnemonic`
-  - `get_insn_size`, `calculate_absolute`, `decode_one`
-  - Use VirtualAlloc'd buffer with known code or scan own module
-- [ ] Phase 9: Write tests for PDB + RTTI deep coverage (~10 tests, add to `kananlib-test` or new target)
-  - PDB: `get_symbol_address`, `get_symbol_name`, `get_symbol_map`, `enumerate_symbols`
-  - RTTI: `is_vtable`, `get_locator`, `get_type_info`, `derives_from`, `find_all_vtables`
-  - Test on loaded modules (ntdll, kernel32) and existing RTTITest classes
+- [x] Phase 8: Write tests for additional Scan functions (8 tests, `kananlib-scan-test`)
+  - All functions tested: scan_reverse, scan_data (start/length + HMODULE), scan_ptr (aligned + noalign), scan_opcode, scan_mnemonic, get_insn_size, calculate_absolute (positive/custom/negative), decode_one
+  - Uses VirtualAlloc RWX buffer with known x86-64 instruction bytes
+- [x] Phase 9: Write tests for PDB + RTTI deep coverage (11 tests, `kananlib-pdb-rtti-test`)
+  - PDB: `get_symbol_name`, `get_symbol_map`, `enumerate_symbols`, negative cases (null module)
+  - RTTI: `is_vtable`, `get_locator`, `get_type_info`, `derives_from`, `find_vtable_partial`, `find_vtable_regex`, `find_all_vtables`
+  - PDB tests guarded by `#ifdef KANANLIB_USE_DIA_SDK` (define passed to test target)
 - [ ] Phase 10: Write tests for Emulation (~4 tests, `kananlib-emulation-test`)
   - ShemuContext construction with VirtualAlloc'd buffer
   - Simple instruction emulation (`mov eax, 1; ret`)

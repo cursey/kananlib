@@ -396,3 +396,90 @@ get_directory_property(CMKR_VS_STARTUP_PROJECT DIRECTORY ${PROJECT_SOURCE_DIR} D
 if(NOT CMKR_VS_STARTUP_PROJECT)
 	set_property(DIRECTORY ${PROJECT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT kananlib-module-test)
 endif()
+
+
+# Target: kananlib-scan-test
+set(CMKR_TARGET kananlib-scan-test)
+if(NOT TARGET kananlib)
+    add_subdirectory(kananlib)
+endif()
+
+set(kananlib-scan-test_SOURCES
+	TestScan.cpp
+	cmake.toml
+)
+
+add_executable(kananlib-scan-test)
+
+target_sources(kananlib-scan-test PRIVATE ${kananlib-scan-test_SOURCES})
+source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${kananlib-scan-test_SOURCES})
+
+target_compile_features(kananlib-scan-test PRIVATE
+	cxx_std_20
+)
+
+target_compile_options(kananlib-scan-test PRIVATE
+	"/EHa"
+)
+
+target_include_directories(kananlib-scan-test PRIVATE
+	include
+)
+
+target_link_libraries(kananlib-scan-test PRIVATE
+	bddisasm::bddisasm
+	bddisasm::bdshemu
+	spdlog::spdlog
+	shlwapi
+	kananlib
+)
+
+get_directory_property(CMKR_VS_STARTUP_PROJECT DIRECTORY ${PROJECT_SOURCE_DIR} DEFINITION VS_STARTUP_PROJECT)
+if(NOT CMKR_VS_STARTUP_PROJECT)
+	set_property(DIRECTORY ${PROJECT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT kananlib-scan-test)
+endif()
+
+# Target: kananlib-pdb-rtti-test
+set(CMKR_TARGET kananlib-pdb-rtti-test)
+if(NOT TARGET kananlib)
+    add_subdirectory(kananlib)
+endif()
+
+set(kananlib-pdb-rtti-test_SOURCES
+	TestPDBRTTI.cpp
+	cmake.toml
+)
+
+add_executable(kananlib-pdb-rtti-test)
+
+target_sources(kananlib-pdb-rtti-test PRIVATE ${kananlib-pdb-rtti-test_SOURCES})
+source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${kananlib-pdb-rtti-test_SOURCES})
+
+target_compile_features(kananlib-pdb-rtti-test PRIVATE
+	cxx_std_20
+)
+
+target_compile_options(kananlib-pdb-rtti-test PRIVATE
+	"/EHa"
+)
+
+target_compile_definitions(kananlib-pdb-rtti-test PRIVATE
+	KANANLIB_USE_DIA_SDK
+)
+
+target_include_directories(kananlib-pdb-rtti-test PRIVATE
+	include
+)
+
+target_link_libraries(kananlib-pdb-rtti-test PRIVATE
+	bddisasm::bddisasm
+	bddisasm::bdshemu
+	spdlog::spdlog
+	shlwapi
+	kananlib
+)
+
+get_directory_property(CMKR_VS_STARTUP_PROJECT DIRECTORY ${PROJECT_SOURCE_DIR} DEFINITION VS_STARTUP_PROJECT)
+if(NOT CMKR_VS_STARTUP_PROJECT)
+	set_property(DIRECTORY ${PROJECT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT kananlib-pdb-rtti-test)
+endif()
