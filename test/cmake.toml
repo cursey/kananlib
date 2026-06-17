@@ -111,3 +111,8 @@ sources = ["TestEmulation.cpp"]
 [target.kananlib-bug-regression-test]
 type = "kananlib-test-template"
 sources = ["TestBugRegression.cpp"]
+
+# Regression tests for scan bugs (unsigned wrap, NULL module crash)
+[target.kananlib-scan-bug-regression-test]
+type = "kananlib-test-template"
+sources = ["TestScanBugRegression.cpp"]

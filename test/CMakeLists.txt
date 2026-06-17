@@ -591,3 +591,46 @@ if(NOT CMKR_VS_STARTUP_PROJECT)
 endif()
 
 add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
+
+# Target: kananlib-scan-bug-regression-test
+set(CMKR_TARGET kananlib-scan-bug-regression-test)
+if(NOT TARGET kananlib)
+    add_subdirectory(kananlib)
+endif()
+
+set(kananlib-scan-bug-regression-test_SOURCES
+	TestScanBugRegression.cpp
+	cmake.toml
+)
+
+add_executable(kananlib-scan-bug-regression-test)
+
+target_sources(kananlib-scan-bug-regression-test PRIVATE ${kananlib-scan-bug-regression-test_SOURCES})
+source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${kananlib-scan-bug-regression-test_SOURCES})
+
+target_compile_features(kananlib-scan-bug-regression-test PRIVATE
+	cxx_std_20
+)
+
+target_compile_options(kananlib-scan-bug-regression-test PRIVATE
+	"/EHa"
+)
+
+target_include_directories(kananlib-scan-bug-regression-test PRIVATE
+	include
+)
+
+target_link_libraries(kananlib-scan-bug-regression-test PRIVATE
+	bddisasm::bddisasm
+	bddisasm::bdshemu
+	spdlog::spdlog
+	shlwapi
+	kananlib
+)
+
+get_directory_property(CMKR_VS_STARTUP_PROJECT DIRECTORY ${PROJECT_SOURCE_DIR} DEFINITION VS_STARTUP_PROJECT)
+if(NOT CMKR_VS_STARTUP_PROJECT)
+	set_property(DIRECTORY ${PROJECT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT kananlib-scan-bug-regression-test)
+endif()
+
+add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})

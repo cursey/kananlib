@@ -57,12 +57,18 @@ namespace utility {
 
     optional<uintptr_t> scan(const string& module, uintptr_t start, const string& pattern) {
         HMODULE mod = GetModuleHandleA(module.c_str());
-        return scan(start, (get_module_size(mod).value_or(0) - start + (uintptr_t)mod), pattern);
+        if (!mod) {
+            return {};
+        }
+        return scan(start, get_module_size(mod).value_or(0) - (start - (uintptr_t)mod), pattern);
     }
 
     optional<uintptr_t> scan(const wstring& module, uintptr_t start, const string& pattern) {
         HMODULE mod = GetModuleHandleW(module.c_str());
-        return scan(start, (get_module_size(mod).value_or(0) - start + (uintptr_t)mod), pattern);
+        if (!mod) {
+            return {};
+        }
+        return scan(start, get_module_size(mod).value_or(0) - (start - (uintptr_t)mod), pattern);
     }
 
     optional<uintptr_t> scan(HMODULE module, const string& pattern) {
@@ -85,6 +91,11 @@ namespace utility {
         KANANLIB_BENCH();
 
         if (start == 0 || length == 0) {
+            return {};
+        }
+
+        // Guard against unsigned underflow in the loop bound `start - length`.
+        if (length > start) {
             return {};
         }
 
@@ -169,6 +180,11 @@ namespace utility {
         KANANLIB_BENCH();
 
         if (start == 0 || length == 0) {
+            return {};
+        }
+
+        // Guard against unsigned underflow in the loop bound `start - length`.
+        if (length > start) {
             return {};
         }
 
