@@ -151,3 +151,39 @@ get_directory_property(CMKR_VS_STARTUP_PROJECT DIRECTORY ${PROJECT_SOURCE_DIR} D
 if(NOT CMKR_VS_STARTUP_PROJECT)
 	set_property(DIRECTORY ${PROJECT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT kananlib-stress-test)
 endif()
+
+
+# Target: kananlib-utils-test
+set(CMKR_TARGET kananlib-utils-test)
+if(NOT TARGET kananlib)
+    add_subdirectory(kananlib)
+endif()
+
+set(kananlib-utils-test_SOURCES
+	TestUtils.cpp
+	cmake.toml
+)
+
+add_executable(kananlib-utils-test)
+
+target_sources(kananlib-utils-test PRIVATE ${kananlib-utils-test_SOURCES})
+source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${kananlib-utils-test_SOURCES})
+
+target_compile_features(kananlib-utils-test PRIVATE
+	cxx_std_20
+)
+
+target_compile_options(kananlib-utils-test PRIVATE
+	"/EHa"
+)
+
+target_include_directories(kananlib-utils-test PRIVATE
+	include
+)
+
+target_link_libraries(kananlib-utils-test PRIVATE
+	bddisasm::bddisasm
+	spdlog::spdlog
+	shlwapi
+	kananlib
+)
