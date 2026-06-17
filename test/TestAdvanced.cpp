@@ -132,6 +132,35 @@ int test_get_valid_regions() {
 }
 
 // ============================================================================
+// findInCache / isGoodReadPtr — length overflow must not report a bad read good
+//
+// BUG: findInCache() tests `start <= ptr && ptr + len < end`. `ptr + len` is
+// uintptr_t arithmetic; when len is large enough that ptr + len wraps past
+// UINTPTR_MAX, the wrapped (tiny) value compares < end and the cached region
+// is returned -- so isGoodReadPtr() reports a read of nearly the whole address
+// space as VALID. A pointer-safety predicate returning true for an impossible
+// read is exactly the failure it exists to prevent.
+//
+// We first prime the thread-local cache with a real region (len=1 call), then
+// probe the SAME base with a length chosen so base + len overflows to 0.
+// ============================================================================
+
+int test_is_good_read_ptr_length_overflow() {
+    int x = 42;
+    const uintptr_t base = (uintptr_t)&x;
+
+    // Prime the cache with the region containing &x.
+    TEST_ASSERT(utility::isGoodReadPtr(base, sizeof(x)));
+
+    // Choose len so that base + len == 0 (mod 2^64): a read spanning almost the
+    // entire address space. This can never be a valid readable range.
+    const size_t overflow_len = (size_t)(0 - base);
+    TEST_ASSERT(!utility::isGoodReadPtr(base, overflow_len));
+
+    return 0;
+}
+
+// ============================================================================
 // Patch tests (need PAGE_EXECUTE_READWRITE buffer)
 // ============================================================================
 
@@ -311,6 +340,7 @@ int main() try {
     RUN_TEST(test_is_good_code_ptr);
     RUN_TEST(test_is_stub_code);
     RUN_TEST(test_get_valid_regions);
+    RUN_TEST(test_is_good_read_ptr_length_overflow);
 
     // Patch.
     RUN_TEST(test_patch_enable_disable);
