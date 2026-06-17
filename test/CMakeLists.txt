@@ -187,3 +187,39 @@ target_link_libraries(kananlib-utils-test PRIVATE
 	shlwapi
 	kananlib
 )
+
+
+# Target: kananlib-advanced-test
+set(CMKR_TARGET kananlib-advanced-test)
+if(NOT TARGET kananlib)
+    add_subdirectory(kananlib)
+endif()
+
+set(kananlib-advanced-test_SOURCES
+	TestAdvanced.cpp
+	cmake.toml
+)
+
+add_executable(kananlib-advanced-test)
+
+target_sources(kananlib-advanced-test PRIVATE ${kananlib-advanced-test_SOURCES})
+source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${kananlib-advanced-test_SOURCES})
+
+target_compile_features(kananlib-advanced-test PRIVATE
+	cxx_std_20
+)
+
+target_compile_options(kananlib-advanced-test PRIVATE
+	"/EHa"
+)
+
+target_include_directories(kananlib-advanced-test PRIVATE
+	include
+)
+
+target_link_libraries(kananlib-advanced-test PRIVATE
+	bddisasm::bddisasm
+	spdlog::spdlog
+	shlwapi
+	kananlib
+)

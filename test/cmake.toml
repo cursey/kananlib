@@ -90,3 +90,22 @@ if(NOT TARGET kananlib)
 endif()
 """
 
+
+# Tests for advanced modules: ScopeGuard, Benchmark, Memory, Patch, PointerHook
+[target.kananlib-advanced-test]
+type = "executable"
+sources = ["TestAdvanced.cpp"]
+include-directories = ["include"]
+compile-features = ["cxx_std_20"]
+compile-options = ["/EHa"]
+link-libraries = [
+    "bddisasm::bddisasm",
+    "spdlog::spdlog",
+    "shlwapi",
+    "kananlib"
+]
+cmake-before="""
+if(NOT TARGET kananlib)
+    add_subdirectory(kananlib)
+endif()
+"""
