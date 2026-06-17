@@ -354,3 +354,45 @@ get_directory_property(CMKR_VS_STARTUP_PROJECT DIRECTORY ${PROJECT_SOURCE_DIR} D
 if(NOT CMKR_VS_STARTUP_PROJECT)
 	set_property(DIRECTORY ${PROJECT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT kananlib-registry-test)
 endif()
+
+
+# Target: kananlib-module-test
+set(CMKR_TARGET kananlib-module-test)
+if(NOT TARGET kananlib)
+    add_subdirectory(kananlib)
+endif()
+
+set(kananlib-module-test_SOURCES
+	TestModule.cpp
+	cmake.toml
+)
+
+add_executable(kananlib-module-test)
+
+target_sources(kananlib-module-test PRIVATE ${kananlib-module-test_SOURCES})
+source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${kananlib-module-test_SOURCES})
+
+target_compile_features(kananlib-module-test PRIVATE
+	cxx_std_20
+)
+
+target_compile_options(kananlib-module-test PRIVATE
+	"/EHa"
+)
+
+target_include_directories(kananlib-module-test PRIVATE
+	include
+)
+
+target_link_libraries(kananlib-module-test PRIVATE
+	bddisasm::bddisasm
+	bddisasm::bdshemu
+	spdlog::spdlog
+	shlwapi
+	kananlib
+)
+
+get_directory_property(CMKR_VS_STARTUP_PROJECT DIRECTORY ${PROJECT_SOURCE_DIR} DEFINITION VS_STARTUP_PROJECT)
+if(NOT CMKR_VS_STARTUP_PROJECT)
+	set_property(DIRECTORY ${PROJECT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT kananlib-module-test)
+endif()

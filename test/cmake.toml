@@ -169,3 +169,24 @@ if(NOT TARGET kananlib)
     add_subdirectory(kananlib)
 endif()
 """
+
+
+# Test for Module utilities
+[target.kananlib-module-test]
+type = "executable"
+sources = ["TestModule.cpp"]
+include-directories = ["include"]
+compile-features = ["cxx_std_20"]
+compile-options = ["/EHa"]
+link-libraries = [
+    "bddisasm::bddisasm",
+    "bddisasm::bdshemu",
+    "spdlog::spdlog",
+    "shlwapi",
+    "kananlib"
+]
+cmake-before="""
+if(NOT TARGET kananlib)
+    add_subdirectory(kananlib)
+endif()
+"""
