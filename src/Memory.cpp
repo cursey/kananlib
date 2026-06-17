@@ -18,7 +18,11 @@ namespace utility {
             auto start = (uintptr_t)mbi.BaseAddress;
             auto end = start + mbi.RegionSize;
 
-            if (start <= ptr && ptr + len < end) {
+            // Compare without overflowing: the range [ptr, ptr+len) fits in
+            // [start, end) iff ptr is inside the region and len <= end - ptr.
+            // The old `ptr + len < end` wrapped when ptr + len overflowed,
+            // wrongly matching enormous lengths.
+            if (start <= ptr && ptr < end && len <= end - ptr) {
                 return mbi;
             }
         }
@@ -50,6 +54,15 @@ namespace utility {
         // Add it to our cache if its not there.
         if (!findInCache((uintptr_t)mbi.BaseAddress, 0)) {
             g_pages.push_back(mbi);
+        }
+
+        // VirtualQuery only describes the region containing ptr. The read
+        // [ptr, ptr+len) is valid only if it fits entirely within that region.
+        // Check overflow-safely (ptr + len can wrap).
+        const auto region_start = (uintptr_t)mbi.BaseAddress;
+        const auto region_end = region_start + mbi.RegionSize;
+        if (ptr < region_start || ptr >= region_end || len > region_end - ptr) {
+            return false;
         }
 
         return memoryHasAccess(mbi, access);
