@@ -15,10 +15,11 @@
 
 #include <Windows.h>
 
-#define STRESS_ASSERT(x) if (!(x)) { \
-    std::cout << "FAIL: " << #x << " @ " << __FILE__ << ":" << __LINE__ << std::endl; \
-    return 1; \
-}
+#include "TestHelpers.hpp"
+
+// STRESS_ASSERT now delegates to TEST_ASSERT from TestHelpers.hpp,
+// which logs file:line and returns 1 from the enclosing function.
+#define STRESS_ASSERT(x) TEST_ASSERT(x)
 
 // ============================================================================
 // Synthetic test functions with known CFG shapes
@@ -1585,40 +1586,39 @@ int main(int argc, char* argv[]) try {
     auto frozen = load_all_frozen();
 
     // Correctness tests (all use frozen addresses)
-    STRESS_ASSERT(test_linear_correctness(frozen.linear.addr()) == 0);
-    STRESS_ASSERT(test_if_else_correctness(frozen.if_else.addr()) == 0);
-    STRESS_ASSERT(test_loop_correctness(frozen.loop.addr()) == 0);
-    STRESS_ASSERT(test_nested_diamond_correctness(frozen.nested_diamond.addr()) == 0);
-    STRESS_ASSERT(test_multi_call_correctness(frozen.multi_call.addr()) == 0);
-    STRESS_ASSERT(test_many_branches_correctness(frozen.many_branches.addr()) == 0);
-    STRESS_ASSERT(test_deep_nested_loops_correctness(frozen.deep_nested_loops.addr()) == 0);
-    STRESS_ASSERT(test_early_returns_correctness(frozen.early_returns.addr()) == 0);
-    STRESS_ASSERT(test_else_if_chain_correctness(frozen.else_if_chain.addr()) == 0);
-    STRESS_ASSERT(test_call_branch_interleave_correctness(frozen.call_branch_interleave.addr()) == 0);
-    STRESS_ASSERT(test_long_linear_correctness(frozen.long_linear.addr()) == 0);
+    RUN_TEST_NAMED("linear_correctness",              test_linear_correctness(frozen.linear.addr()));
+    RUN_TEST_NAMED("if_else_correctness",             test_if_else_correctness(frozen.if_else.addr()));
+    RUN_TEST_NAMED("loop_correctness",                test_loop_correctness(frozen.loop.addr()));
+    RUN_TEST_NAMED("nested_diamond_correctness",      test_nested_diamond_correctness(frozen.nested_diamond.addr()));
+    RUN_TEST_NAMED("multi_call_correctness",          test_multi_call_correctness(frozen.multi_call.addr()));
+    RUN_TEST_NAMED("many_branches_correctness",       test_many_branches_correctness(frozen.many_branches.addr()));
+    RUN_TEST_NAMED("deep_nested_loops_correctness",   test_deep_nested_loops_correctness(frozen.deep_nested_loops.addr()));
+    RUN_TEST_NAMED("early_returns_correctness",       test_early_returns_correctness(frozen.early_returns.addr()));
+    RUN_TEST_NAMED("else_if_chain_correctness",       test_else_if_chain_correctness(frozen.else_if_chain.addr()));
+    RUN_TEST_NAMED("call_branch_interleave",          test_call_branch_interleave_correctness(frozen.call_branch_interleave.addr()));
+    RUN_TEST_NAMED("long_linear_correctness",         test_long_linear_correctness(frozen.long_linear.addr()));
 
     // Golden tests (frozen bytes, exact expected layout -- uses its own VirtualAlloc internally)
-    STRESS_ASSERT(test_golden() == 0);
+    RUN_TEST_NAMED("golden",                          test_golden());
 
     // Structural validation (all use frozen addresses)
-    STRESS_ASSERT(test_contiguous_coverage(frozen) == 0);
-    STRESS_ASSERT(test_option_variants(frozen.nested_diamond.addr()) == 0);
+    RUN_TEST_NAMED("contiguous_coverage",             test_contiguous_coverage(frozen));
+    RUN_TEST_NAMED("option_variants",                 test_option_variants(frozen.nested_diamond.addr()));
 
     // Consistency / idempotency (uses frozen addresses)
-    STRESS_ASSERT(test_consistency(frozen) == 0);
+    RUN_TEST_NAMED("consistency",                     test_consistency(frozen));
 
     // exhaustive_decode call-following tests (hand-crafted blobs)
-    STRESS_ASSERT(test_asm_simple_call() == 0);
-    STRESS_ASSERT(test_asm_chained_calls() == 0);
-    STRESS_ASSERT(test_asm_call_and_branch() == 0);
-    STRESS_ASSERT(test_asm_multi_target_call() == 0);
+    RUN_TEST_NAMED("asm_simple_call",                 test_asm_simple_call());
+    RUN_TEST_NAMED("asm_chained_calls",               test_asm_chained_calls());
+    RUN_TEST_NAMED("asm_call_and_branch",             test_asm_call_and_branch());
+    RUN_TEST_NAMED("asm_multi_target_call",           test_asm_multi_target_call());
 
-    // Performance benchmarks (use frozen addresses)
+    // Performance benchmarks (not pass/fail tracked)
     bench_exhaustive_decode(frozen);
     bench_collect_basic_blocks(frozen);
 
-    std::cout << std::endl << "===== All stress tests passed. =====" << std::endl;
-    return 0;
+    return test_summary();
 } catch (const std::exception& e) {
     std::cout << "Exception: " << e.what() << std::endl;
     return 1;
