@@ -106,3 +106,8 @@ compile-definitions = ["KANANLIB_USE_DIA_SDK"]
 [target.kananlib-emulation-test]
 type = "kananlib-test-template"
 sources = ["TestEmulation.cpp"]
+
+# Regression tests for bugs found during API audit
+[target.kananlib-bug-regression-test]
+type = "kananlib-test-template"
+sources = ["TestBugRegression.cpp"]
