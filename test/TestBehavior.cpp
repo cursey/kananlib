@@ -264,6 +264,90 @@ int test_threadsuspender_resume_then_destruct_no_double_unlock() {
 }
 
 // ============================================================================
+// ThreadSuspender — actually FREEZES other threads (the core contract).
+//
+// The tests above only check that the mutex protocol doesn't deadlock/crash.
+// This one verifies the behavior that gives ThreadSuspender its name: while a
+// suspender is alive, every OTHER thread stops executing, and after resume()
+// they run again.
+//
+// Method: a worker thread spins incrementing an atomic counter.
+//   1. Wait until the counter is visibly advancing (worker is running).
+//   2. Construct a ThreadSuspender on this thread -> worker gets SuspendThread'd.
+//   3. Take two counter snapshots ~100ms apart, both AFTER a settle delay so
+//      any in-flight increment has landed. They MUST be equal -> worker frozen.
+//   4. resume() -> the counter MUST start advancing again.
+// The whole thing is timeout-guarded so a regression can't wedge the runner.
+// ============================================================================
+
+int test_threadsuspender_actually_freezes_threads() {
+    auto fut = std::async(std::launch::async, []() -> int {
+        std::atomic<uint64_t> counter{0};
+        std::atomic<bool> stop{false};
+
+        std::thread worker([&]() {
+            while (!stop.load(std::memory_order_relaxed)) {
+                counter.fetch_add(1, std::memory_order_relaxed);
+                std::this_thread::yield();
+            }
+        });
+
+        auto wait_until_advances = [&](uint64_t from, std::chrono::milliseconds budget) -> bool {
+            const auto deadline = std::chrono::steady_clock::now() + budget;
+            while (std::chrono::steady_clock::now() < deadline) {
+                if (counter.load(std::memory_order_relaxed) > from) {
+                    return true;
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+            return false;
+        };
+
+        int rc = 0;
+        // 1. Worker must be running before we suspend it.
+        if (!wait_until_advances(0, std::chrono::seconds(2))) {
+            std::printf("  worker never started incrementing\n");
+            rc = 1;
+        } else {
+            // 2. Suspend everything except this thread.
+            utility::ThreadSuspender suspender;
+
+            // 3. Settle, then take two snapshots while suspended.
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+            const uint64_t a = counter.load(std::memory_order_relaxed);
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            const uint64_t b = counter.load(std::memory_order_relaxed);
+
+            std::printf("  while suspended: %llu -> %llu (delta %llu)\n",
+                        (unsigned long long)a, (unsigned long long)b,
+                        (unsigned long long)(b - a));
+            if (a != b) {
+                std::printf("  FAIL: worker kept running while suspended\n");
+                rc = 1;
+            }
+
+            // 4. Resume and confirm it runs again.
+            suspender.resume();
+            if (!wait_until_advances(b, std::chrono::seconds(2))) {
+                std::printf("  FAIL: worker did not resume after resume()\n");
+                rc = 1;
+            }
+        }
+
+        stop.store(true, std::memory_order_relaxed);
+        worker.join();
+        return rc;
+    });
+
+    if (fut.wait_for(std::chrono::seconds(15)) != std::future_status::ready) {
+        std::printf("  TIMED OUT: suspend/resume wedged\n");
+        TEST_ASSERT(false);
+    }
+    TEST_ASSERT(fut.get() == 0);
+    return 0;
+}
+
+// ============================================================================
 // for_each_uncached — via find_all_vtables on the executable module
 // Exercises the full path: find_all_vtables -> populate -> for_each_uncached
 // which is the function we guarded with get_module_size null check.
@@ -313,6 +397,7 @@ int main() try {
     RUN_TEST(test_threadsuspender_double_construct);
     RUN_TEST(test_threadsuspender_suspend_resume);
     RUN_TEST(test_threadsuspender_resume_then_destruct_no_double_unlock);
+    RUN_TEST(test_threadsuspender_actually_freezes_threads);
 
     // for_each_uncached (via find_all_vtables)
     RUN_TEST(test_find_all_vtables_executable);
