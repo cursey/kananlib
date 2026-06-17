@@ -109,3 +109,63 @@ if(NOT TARGET kananlib)
     add_subdirectory(kananlib)
 endif()
 """
+
+# Test for VtableHook
+[target.kananlib-vtablehook-test]
+type = "executable"
+sources = ["TestVtableHook.cpp"]
+include-directories = ["include"]
+compile-features = ["cxx_std_20"]
+compile-options = ["/EHa"]
+link-libraries = [
+    "bddisasm::bddisasm",
+    "bddisasm::bdshemu",
+    "spdlog::spdlog",
+    "shlwapi",
+    "kananlib"
+]
+cmake-before="""
+if(NOT TARGET kananlib)
+    add_subdirectory(kananlib)
+endif()
+"""
+
+# Test for Input
+[target.kananlib-input-test]
+type = "executable"
+sources = ["TestInput.cpp"]
+include-directories = ["include"]
+compile-features = ["cxx_std_20"]
+compile-options = ["/EHa"]
+link-libraries = [
+    "bddisasm::bddisasm",
+    "bddisasm::bdshemu",
+    "spdlog::spdlog",
+    "shlwapi",
+    "kananlib"
+]
+cmake-before="""
+if(NOT TARGET kananlib)
+    add_subdirectory(kananlib)
+endif()
+"""
+
+# Test for Registry
+[target.kananlib-registry-test]
+type = "executable"
+sources = ["TestRegistry.cpp"]
+include-directories = ["include"]
+compile-features = ["cxx_std_20"]
+compile-options = ["/EHa"]
+link-libraries = [
+    "bddisasm::bddisasm",
+    "bddisasm::bdshemu",
+    "spdlog::spdlog",
+    "shlwapi",
+    "kananlib"
+]
+cmake-before="""
+if(NOT TARGET kananlib)
+    add_subdirectory(kananlib)
+endif()
+"""

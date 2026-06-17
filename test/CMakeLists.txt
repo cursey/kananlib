@@ -152,7 +152,6 @@ if(NOT CMKR_VS_STARTUP_PROJECT)
 	set_property(DIRECTORY ${PROJECT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT kananlib-stress-test)
 endif()
 
-
 # Target: kananlib-utils-test
 set(CMKR_TARGET kananlib-utils-test)
 if(NOT TARGET kananlib)
@@ -188,6 +187,10 @@ target_link_libraries(kananlib-utils-test PRIVATE
 	kananlib
 )
 
+get_directory_property(CMKR_VS_STARTUP_PROJECT DIRECTORY ${PROJECT_SOURCE_DIR} DEFINITION VS_STARTUP_PROJECT)
+if(NOT CMKR_VS_STARTUP_PROJECT)
+	set_property(DIRECTORY ${PROJECT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT kananlib-utils-test)
+endif()
 
 # Target: kananlib-advanced-test
 set(CMKR_TARGET kananlib-advanced-test)
@@ -223,3 +226,131 @@ target_link_libraries(kananlib-advanced-test PRIVATE
 	shlwapi
 	kananlib
 )
+
+get_directory_property(CMKR_VS_STARTUP_PROJECT DIRECTORY ${PROJECT_SOURCE_DIR} DEFINITION VS_STARTUP_PROJECT)
+if(NOT CMKR_VS_STARTUP_PROJECT)
+	set_property(DIRECTORY ${PROJECT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT kananlib-advanced-test)
+endif()
+
+# Target: kananlib-vtablehook-test
+set(CMKR_TARGET kananlib-vtablehook-test)
+if(NOT TARGET kananlib)
+    add_subdirectory(kananlib)
+endif()
+
+set(kananlib-vtablehook-test_SOURCES
+	TestVtableHook.cpp
+	cmake.toml
+)
+
+add_executable(kananlib-vtablehook-test)
+
+target_sources(kananlib-vtablehook-test PRIVATE ${kananlib-vtablehook-test_SOURCES})
+source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${kananlib-vtablehook-test_SOURCES})
+
+target_compile_features(kananlib-vtablehook-test PRIVATE
+	cxx_std_20
+)
+
+target_compile_options(kananlib-vtablehook-test PRIVATE
+	"/EHa"
+)
+
+target_include_directories(kananlib-vtablehook-test PRIVATE
+	include
+)
+
+target_link_libraries(kananlib-vtablehook-test PRIVATE
+	bddisasm::bddisasm
+	bddisasm::bdshemu
+	spdlog::spdlog
+	shlwapi
+	kananlib
+)
+
+get_directory_property(CMKR_VS_STARTUP_PROJECT DIRECTORY ${PROJECT_SOURCE_DIR} DEFINITION VS_STARTUP_PROJECT)
+if(NOT CMKR_VS_STARTUP_PROJECT)
+	set_property(DIRECTORY ${PROJECT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT kananlib-vtablehook-test)
+endif()
+
+# Target: kananlib-input-test
+set(CMKR_TARGET kananlib-input-test)
+if(NOT TARGET kananlib)
+    add_subdirectory(kananlib)
+endif()
+
+set(kananlib-input-test_SOURCES
+	TestInput.cpp
+	cmake.toml
+)
+
+add_executable(kananlib-input-test)
+
+target_sources(kananlib-input-test PRIVATE ${kananlib-input-test_SOURCES})
+source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${kananlib-input-test_SOURCES})
+
+target_compile_features(kananlib-input-test PRIVATE
+	cxx_std_20
+)
+
+target_compile_options(kananlib-input-test PRIVATE
+	"/EHa"
+)
+
+target_include_directories(kananlib-input-test PRIVATE
+	include
+)
+
+target_link_libraries(kananlib-input-test PRIVATE
+	bddisasm::bddisasm
+	bddisasm::bdshemu
+	spdlog::spdlog
+	shlwapi
+	kananlib
+)
+
+get_directory_property(CMKR_VS_STARTUP_PROJECT DIRECTORY ${PROJECT_SOURCE_DIR} DEFINITION VS_STARTUP_PROJECT)
+if(NOT CMKR_VS_STARTUP_PROJECT)
+	set_property(DIRECTORY ${PROJECT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT kananlib-input-test)
+endif()
+
+# Target: kananlib-registry-test
+set(CMKR_TARGET kananlib-registry-test)
+if(NOT TARGET kananlib)
+    add_subdirectory(kananlib)
+endif()
+
+set(kananlib-registry-test_SOURCES
+	TestRegistry.cpp
+	cmake.toml
+)
+
+add_executable(kananlib-registry-test)
+
+target_sources(kananlib-registry-test PRIVATE ${kananlib-registry-test_SOURCES})
+source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${kananlib-registry-test_SOURCES})
+
+target_compile_features(kananlib-registry-test PRIVATE
+	cxx_std_20
+)
+
+target_compile_options(kananlib-registry-test PRIVATE
+	"/EHa"
+)
+
+target_include_directories(kananlib-registry-test PRIVATE
+	include
+)
+
+target_link_libraries(kananlib-registry-test PRIVATE
+	bddisasm::bddisasm
+	bddisasm::bdshemu
+	spdlog::spdlog
+	shlwapi
+	kananlib
+)
+
+get_directory_property(CMKR_VS_STARTUP_PROJECT DIRECTORY ${PROJECT_SOURCE_DIR} DEFINITION VS_STARTUP_PROJECT)
+if(NOT CMKR_VS_STARTUP_PROJECT)
+	set_property(DIRECTORY ${PROJECT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT kananlib-registry-test)
+endif()
