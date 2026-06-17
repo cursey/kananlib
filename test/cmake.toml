@@ -101,3 +101,8 @@ sources = ["TestScan.cpp"]
 type = "kananlib-test-template"
 sources = ["TestPDBRTTI.cpp"]
 compile-definitions = ["KANANLIB_USE_DIA_SDK"]
+
+# Test for Emulation (bddisasm ShemuContext)
+[target.kananlib-emulation-test]
+type = "kananlib-test-template"
+sources = ["TestEmulation.cpp"]

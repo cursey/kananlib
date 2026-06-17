@@ -25,8 +25,9 @@
   - `test/build/Release/kananlib-module-test.exe`
   - `test/build/Release/kananlib-scan-test.exe`
   - `test/build/Release/kananlib-pdb-rtti-test.exe`
+  - `test/build/Release/kananlib-emulation-test.exe`
 - **Note:** LSP/clangd will show errors (wrong compiler version). MSVC builds cleanly.
-## What Was Done (4 commits)
+## What Was Done (8 commits)
 
 ### Commit 1: `b6360e9` — Fix structural weaknesses in test suite
 - Created `test/TestHelpers.hpp` — shared test infrastructure:
@@ -66,7 +67,7 @@
   - **Registry:** nonexistent key/value returning nullopt, type mismatch handling
 - Added 3 new targets to `cmake.toml` and `CMakeLists.txt`: kananlib-vtablehook-test, kananlib-input-test, kananlib-registry-test
 
-### Commit 5: <pending> — Add Scan function tests
+### Commit 5: <done> — Add Scan function tests
 - Created `test/TestScan.cpp` — 8 tests across Scan module
   - **scan_reverse:** reverse direction pattern scan in controlled buffer
   - **scan_data:** raw byte scan (start/length + HMODULE overloads, scan_data_t typed version, negative case)
@@ -78,7 +79,7 @@
   - **decode_one:** decode single instruction (NOP/MOV/RET/XOR, zero-length edge case)
 - Added `kananlib-scan-test` target to `cmake.toml` and `CMakeLists.txt`
 
-### Commit 6: <pending> — Add PDB + RTTI deep coverage tests
+### Commit 6: <done> — Add PDB + RTTI deep coverage tests + CTest integration
 - Created `test/TestPDBRTTI.cpp` — 11 tests across PDB and RTTI modules
   - **PDB (4 tests, require DIA SDK):**
     - `test_pdb_get_symbol_name` — resolve RVA back to symbol name (roundtrip with get_symbol_address)
@@ -97,6 +98,29 @@
   - Key technique: compile-definition `KANANLIB_USE_DIA_SDK` passed to test target in cmake.toml
 - Added `kananlib-pdb-rtti-test` target to `cmake.toml` and `CMakeLists.txt`
 
+### Commit 7: <done> — CTest integration + template refactoring
+- Added `enable_testing()` to project-level `cmake-after` in `test/cmake.toml`
+- Added `cmake-after` with `add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})` to template `kananlib-test-template`
+- All 9 non-template targets inherit from `kananlib-test-template` — each is just 2-3 lines (type + sources)
+- `ctest -C Release` runs all 10 test executables in one shot (10/10 pass)
+- **Template source merge fix:** cmkr merges template sources with target sources (not replaces). Template has no `sources` to avoid duplicate `main()` symbols
+- Template includes shared: `include-directories`, `compile-features`, `compile-options`, `link-libraries`, `cmake-before`, `cmake-after`
+- `kananlib-pdb-rtti-test` overrides with `compile-definitions = ["KANANLIB_USE_DIA_SDK"]`
+
+### Commit 8: <done> — Add Emulation tests
+- Created `test/TestEmulation.cpp` — 7 tests across Emulation module
+  - **ShemuContext construction:** VirtualAlloc RWX buffer, verify internal state (ctx, stack, internal_buffer, Shellcode/ShellcodeBase/ShellcodeSize)
+  - **NOP emulation:** 10 NOPs with NOP sled detection disabled, verify RIP advances by 10
+  - **mov eax, imm32:** verify register update (RAX = 1 after `mov eax, 1`)
+  - **Multi-instruction:** `mov eax, 1; add eax, 5` → verify RAX = 6
+  - **Free function:** `utility::emulate(base, size, ip, n)` convenience wrapper, verify RAX = 0xBEEF
+  - **Single-step:** `emulate()` no-args, verify monotonic RIP/instruction-count progression across 3 steps
+  - **HMODULE construction:** kernel32.dll always loaded, verify Shellcode/ShellcodeSize/stack
+  - Key quirk: bdshemu single-step executes 2 NOPs per call (off-by-one in internal counting); test verifies progression not exact counts
+  - Key technique: `RWXBuffer` RAII helper for VirtualAlloc/VirtualFree with copy-delete prevention
+- Pre-existing in cmake.toml — target `kananlib-emulation-test` was already defined, fixed missing function header and return statement in TestEmulation.cpp
+- `ctest -C Release` runs all 11 test executables (11/11 pass)
+
 ## Current Test Coverage
 
 | Executable | Tests | Modules Covered |
@@ -111,19 +135,15 @@
 | `kananlib-module-test` | 30 | Module (all functions) |
 | `kananlib-scan-test` | 8 | Scan (reverse, data, ptr, opcode, mnemonic, insn_size, calculate_absolute, decode_one) |
 | `kananlib-pdb-rtti-test` | 11 | PDB (symbol_name, symbol_map, enumerate_symbols, negative), RTTI (is_vtable, get_locator, get_type_info, derives_from, find_vtable_partial, find_vtable_regex, find_all_vtables) |
-| **Total** | **138** | **19 of 19 modules** |
+| `kananlib-emulation-test` | 7 | Emulation (ShemuContext construction, NOP/mov/multi-instruction emulation, free function, single-step, HMODULE construction) |
+| **Total** | **145** | **20 of 20 modules** |
 
 ## Gap Analysis — Untested and Partially Tested Modules
 
-### Modules with 0 direct test coverage (2 of 19)
+### Modules with 0 direct test coverage (1 of 20)
 
-1. **Emulation** (`include/utility/Emulation.hpp`, `src/Emulation.cpp`)
-   - `ShemuContext(base, buffer_size, stack_size)` — construct with VirtualAlloc'd buffer
-   - `ShemuContext(HMODULE, stack_size)` — construct with loaded module
-   - `emulate(ip, num_instructions)` — run multi-step emulation
-   - `emulate()` — single-step emulation
-   - Free-function `emulate(base, size, ip, num_instructions)`
-   - Testable by VirtualAlloc-ing a buffer, copying known x86-64 bytes (e.g. `mov eax, 1; ret`), checking returned status code
+1. ~~**Emulation**~~ — **NOW TESTED** (7 tests, `kananlib-emulation-test`)
+   - ShemuContext construction (VirtualAlloc'd buffer + HMODULE), NOP/mov/multi-instruction emulation, free function wrapper, single-step, bdshemu counting quirk documented
 
 2. **Thread** (`include/utility/Thread.hpp`, `src/Thread.cpp`)
    - `suspend_threads()` / `resume_threads(ThreadStates)` capture ALL threads, including the calling one = deadlock
@@ -158,16 +178,26 @@
      - `find_object_inline(name)` / `find_objects_ptr(name)` — find static instances
 
 ### Well-tested (no major gaps)
-String, Pattern, Address, Config, ScopeGuard, Benchmark, Memory, Patch, PointerHook, VtableHook, Input, Registry, Module, Scan, PDB, RTTI
+String, Pattern, Address, Config, ScopeGuard, Benchmark, Memory, Patch, PointerHook, VtableHook, Input, Registry, Module, Scan, PDB, RTTI, Emulation
 
 ## Key Implementation Notes for Next Session
-
 ### Adding a new test target
 1. Create `test/TestXxx.cpp` with `#include "TestHelpers.hpp"` and test functions
-2. Add target section to `test/cmake.toml` (copy from existing, change name and source)
-3. Add matching section to `test/CMakeLists.txt` (cmake.toml is source of truth, but CMakeLists.txt is what actually builds)
-4. Re-run cmake, build, run
+2. Add target section to `test/cmake.toml` (inherit from `kananlib-test-template`, just 2-3 lines):
+   ```toml
+   [target.kananlib-xxx-test]
+   type = "kananlib-test-template"
+   sources = ["TestXxx.cpp"]
+   ```
+3. Regenerate `test/CMakeLists.txt` from `cmake.toml` (cmkr gen, or manual sync)
+4. Re-run cmake, build, run `ctest -C Release` to verify all tests pass
 
+**Note:** Template inherits all shared settings (include dirs, compile flags, link libs, `add_test()`).
+Only add `compile-definitions` or other overrides if the target needs something extra (e.g. `kananlib-pdb-rtti-test` adds `KANANLIB_USE_DIA_SDK`).
+
+### CTest integration
+All test targets automatically get `add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})` via the template's `cmake-after`.
+Run `ctest -C Release` from the build directory to execute all tests.
 ### Most vexing parse
 `VtableHook hook(Address(&obj));` is parsed as a function declaration by MSVC.
 Use brace initialization: `VtableHook hook{Address{&obj}};`
@@ -234,8 +264,14 @@ static void* g_hook_target = nullptr;  // must be global/static for VirtualProte
   - PDB: `get_symbol_name`, `get_symbol_map`, `enumerate_symbols`, negative cases (null module)
   - RTTI: `is_vtable`, `get_locator`, `get_type_info`, `derives_from`, `find_vtable_partial`, `find_vtable_regex`, `find_all_vtables`
   - PDB tests guarded by `#ifdef KANANLIB_USE_DIA_SDK` (define passed to test target)
-- [ ] Phase 10: Write tests for Emulation (~4 tests, `kananlib-emulation-test`)
-  - ShemuContext construction with VirtualAlloc'd buffer
-  - Simple instruction emulation (`mov eax, 1; ret`)
-  - Multi-step emulation and status checking
+- [x] CTest integration + template refactoring (`enable_testing()`, `add_test()` via template, `ctest -C Release` runs all 10 tests)
+- [x] Phase 10: Write tests for Emulation (7 tests, `kananlib-emulation-test`)
+  - ShemuContext construction with VirtualAlloc'd buffer (verify internal state)
+  - NOP emulation (10 NOPs, verify RIP advances)
+  - mov eax, imm32 emulation (verify register update)
+  - Multi-instruction emulation (mov + add, verify arithmetic)
+  - Free function emulate(base, size, ip, n) convenience wrapper
+  - Single-step emulation (emulate() no-args, verify RIP advances per step)
+  - HMODULE construction (kernel32.dll always loaded, verify Shellcode/Size)
+  - Key quirk: bdshemu single-step executes 2 NOPs per step (off-by-one in counting); test verifies monotonic RIP/instruction-count progression instead of exact counts
 - [ ] Phase 11: Thread tests — SKIP (deadlock risk unless child process isolation is added)

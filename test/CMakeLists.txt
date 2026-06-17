@@ -505,3 +505,46 @@ if(NOT CMKR_VS_STARTUP_PROJECT)
 endif()
 
 add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
+
+# Target: kananlib-emulation-test
+set(CMKR_TARGET kananlib-emulation-test)
+if(NOT TARGET kananlib)
+    add_subdirectory(kananlib)
+endif()
+
+set(kananlib-emulation-test_SOURCES
+	TestEmulation.cpp
+	cmake.toml
+)
+
+add_executable(kananlib-emulation-test)
+
+target_sources(kananlib-emulation-test PRIVATE ${kananlib-emulation-test_SOURCES})
+source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${kananlib-emulation-test_SOURCES})
+
+target_compile_features(kananlib-emulation-test PRIVATE
+	cxx_std_20
+)
+
+target_compile_options(kananlib-emulation-test PRIVATE
+	"/EHa"
+)
+
+target_include_directories(kananlib-emulation-test PRIVATE
+	include
+)
+
+target_link_libraries(kananlib-emulation-test PRIVATE
+	bddisasm::bddisasm
+	bddisasm::bdshemu
+	spdlog::spdlog
+	shlwapi
+	kananlib
+)
+
+get_directory_property(CMKR_VS_STARTUP_PROJECT DIRECTORY ${PROJECT_SOURCE_DIR} DEFINITION VS_STARTUP_PROJECT)
+if(NOT CMKR_VS_STARTUP_PROJECT)
+	set_property(DIRECTORY ${PROJECT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT kananlib-emulation-test)
+endif()
+
+add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
