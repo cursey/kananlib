@@ -10,6 +10,9 @@
 #include <vector>
 #include <future>
 #include <chrono>
+#include <thread>
+#include <atomic>
+#include <mutex>
 #include <Windows.h>
 
 #include <utility/Scan.hpp>
@@ -194,6 +197,73 @@ int test_threadsuspender_suspend_resume() {
 }
 
 // ============================================================================
+// ThreadSuspender — resume() followed by destructor must NOT double-unlock.
+//
+// BUG (now fixed): the ctor acquired g_suspend_mutex once, but BOTH resume()
+// and ~ThreadSuspender() called g_suspend_mutex.unlock(). The sequence
+// { ThreadSuspender s; s.resume(); } therefore unlocked the mutex TWICE while
+// locking it ONCE. The second unlock releases a lock the object no longer
+// owns -- undefined behavior (std::mutex::unlock by a non-owner). On MSVC's
+// SRWLOCK-backed mutex this corrupts the lock and deadlocks the process.
+//
+// FIX: ThreadSuspender holds a std::unique_lock that tracks ownership. resume()
+// and the destructor each release only if they still own the lock, so the
+// mutex is unlocked exactly once no matter the call order.
+//
+// We can't safely demonstrate the *buggy* path in-process (it triggers UB that
+// hangs the runner -- verified manually). Instead this regression test pins the
+// ownership invariant that makes the bug impossible, and verifies the global
+// mutex is left clean. A reintroduced double-unlock fails the owns_lock() check
+// (or corrupts the mutex, caught by the surrounding timeout).
+//
+// Single worker thread only: ThreadSuspender::suspend_threads() suspends every
+// OTHER thread, so a second thread contending on the mutex would be suspended
+// while holding it and deadlock the test by construction. We keep all mutex
+// access on the one worker thread.
+// ============================================================================
+
+namespace utility { namespace detail { extern std::mutex g_suspend_mutex; } }
+
+int test_threadsuspender_resume_then_destruct_no_double_unlock() {
+    struct Result { bool owned_after_ctor; bool released_after_resume; bool clean_after_scope; };
+
+    auto fut = std::async(std::launch::async, []() -> Result {
+        Result r{};
+        {
+            utility::ThreadSuspender s;
+            // ctor must have taken ownership of the mutex.
+            r.owned_after_ctor = s.lock.owns_lock();
+
+            s.resume();
+            // resume() must release ownership so the destructor does NOT
+            // unlock a second time. This is the exact invariant the bug broke.
+            r.released_after_resume = !s.lock.owns_lock();
+            // scope end -> destructor runs; with the fix it is a no-op for the
+            // already-released lock (no double-unlock).
+        }
+
+        // With the mutex released exactly once, it must be cleanly lockable.
+        r.clean_after_scope = utility::detail::g_suspend_mutex.try_lock();
+        if (r.clean_after_scope) {
+            utility::detail::g_suspend_mutex.unlock();
+        }
+        return r;
+    });
+
+    // A reintroduced double-unlock corrupts the lock and can hang; bound it.
+    if (fut.wait_for(std::chrono::seconds(10)) != std::future_status::ready) {
+        std::printf("  TIMED OUT: resume()+destruct corrupted the mutex (double-unlock?)\n");
+        TEST_ASSERT(false);
+    }
+
+    Result r = fut.get();
+    TEST_ASSERT(r.owned_after_ctor);        // ctor acquired the lock
+    TEST_ASSERT(r.released_after_resume);   // resume() released it (dtor won't re-unlock)
+    TEST_ASSERT(r.clean_after_scope);       // mutex left in a clean, lockable state
+    return 0;
+}
+
+// ============================================================================
 // for_each_uncached — via find_all_vtables on the executable module
 // Exercises the full path: find_all_vtables -> populate -> for_each_uncached
 // which is the function we guarded with get_module_size null check.
@@ -242,6 +312,7 @@ int main() try {
     // ThreadSuspender
     RUN_TEST(test_threadsuspender_double_construct);
     RUN_TEST(test_threadsuspender_suspend_resume);
+    RUN_TEST(test_threadsuspender_resume_then_destruct_no_double_unlock);
 
     // for_each_uncached (via find_all_vtables)
     RUN_TEST(test_find_all_vtables_executable);

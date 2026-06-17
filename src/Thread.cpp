@@ -79,7 +79,7 @@ ThreadSuspender::ThreadSuspender()  {
         lock_loader(0, NULL, &loader_magic);
     }
 
-    detail::g_suspend_mutex.lock();
+    lock = std::unique_lock<std::mutex>(detail::g_suspend_mutex);
     states = suspend_threads();
 
     if (lock_loader != nullptr && unlock_loader != nullptr) {
@@ -90,12 +90,16 @@ ThreadSuspender::ThreadSuspender()  {
 
 ThreadSuspender::~ThreadSuspender() {
     resume_threads(states);
-    detail::g_suspend_mutex.unlock();
+    if (lock.owns_lock()) {
+        lock.unlock();
+    }
 }
 
 void ThreadSuspender::resume() {
     resume_threads(states);
     states.clear();
-    detail::g_suspend_mutex.unlock();
+    if (lock.owns_lock()) {
+        lock.unlock();
+    }
 }
 }
