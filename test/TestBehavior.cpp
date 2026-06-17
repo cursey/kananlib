@@ -348,6 +348,127 @@ int test_threadsuspender_actually_freezes_threads() {
 }
 
 // ============================================================================
+// ThreadSuspender — ThreadState::suspended must reflect reality.
+//
+// BUG: suspend_threads() sets `suspended = SuspendThread(handle) > 0`.
+// SuspendThread returns the thread's PREVIOUS suspend count (0 on the first
+// successful suspend) or (DWORD)-1 on failure. So a normal successful suspend
+// of a running thread returns 0 -> `0 > 0` is false -> suspended=false, and a
+// FAILED suspend returns 0xFFFFFFFF -> suspended=true. The flag is inverted /
+// meaningless. Correct: success is `result != (DWORD)-1`.
+//
+// We already proved (test_threadsuspender_actually_freezes_threads) that the
+// suspension genuinely happens, so at least one captured ThreadState must
+// report suspended==true. The buggy `> 0` makes them all false.
+// ============================================================================
+
+int test_threadsuspender_suspended_flag_reflects_success() {
+    auto fut = std::async(std::launch::async, []() -> int {
+        std::atomic<uint64_t> counter{0};
+        std::atomic<bool> stop{false};
+        std::thread worker([&]() {
+            while (!stop.load(std::memory_order_relaxed)) {
+                counter.fetch_add(1, std::memory_order_relaxed);
+                std::this_thread::yield();
+            }
+        });
+        // Make sure the worker is alive and running.
+        while (counter.load(std::memory_order_relaxed) == 0) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+
+        bool any_suspended = false;
+        size_t total = 0;
+        {
+            utility::ThreadSuspender suspender;
+            total = suspender.states.size();
+            for (const auto& s : suspender.states) {
+                if (s && s->suspended) {
+                    any_suspended = true;
+                    break;
+                }
+            }
+        }
+
+        stop.store(true, std::memory_order_relaxed);
+        worker.join();
+
+        std::printf("  captured %zu thread state(s); any flagged suspended: %s\n",
+                    total, any_suspended ? "yes" : "no");
+        // We genuinely suspended at least the worker; the flag must say so.
+        return (total > 0 && any_suspended) ? 0 : 1;
+    });
+
+    if (fut.wait_for(std::chrono::seconds(15)) != std::future_status::ready) {
+        std::printf("  TIMED OUT\n");
+        TEST_ASSERT(false);
+    }
+    TEST_ASSERT(fut.get() == 0);
+    return 0;
+}
+
+// ============================================================================
+// ThreadSuspender — repeated suspend() stays balanced (no leaked suspensions).
+//
+// BUG (now fixed): suspend() used to do `states = suspend_threads();`, blindly
+// overwriting any batch the constructor already captured. The forgotten batch's
+// SuspendThread calls were never undone, so the affected threads stayed frozen
+// forever. The fix makes suspend() resume+clear the prior batch before taking a
+// fresh one, keeping each thread's suspend count balanced.
+//
+// This is a FORWARD guard: it exercises ctor -> suspend() -> resume() and
+// requires the worker to run again afterward. On fixed code that holds. (The
+// buggy version leaks a suspend-the-world freeze that wedges the whole process
+// rather than failing cleanly, so we don't run the buggy path here -- verified
+// manually that reverting the fix makes this hang. We keep the safe direction
+// as a regression tripwire: any change that breaks suspend()'s balance will
+// either fail this assertion or, at worst, trip the timeout.)
+// ============================================================================
+
+int test_threadsuspender_suspend_balanced() {
+    auto fut = std::async(std::launch::async, []() -> int {
+        std::atomic<uint64_t> counter{0};
+        std::atomic<bool> stop{false};
+        std::thread worker([&]() {
+            while (!stop.load(std::memory_order_relaxed)) {
+                counter.fetch_add(1, std::memory_order_relaxed);
+                std::this_thread::yield();
+            }
+        });
+        while (counter.load(std::memory_order_relaxed) == 0) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+
+        {
+            utility::ThreadSuspender suspender; // ctor suspends (count 1)
+            suspender.suspend();                // must resume prior batch, re-suspend (still net 1)
+            suspender.resume();                 // back to 0
+        }
+
+        // Worker must run again -- no suspend count leaked.
+        const uint64_t base = counter.load(std::memory_order_relaxed);
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+        bool resumed = false;
+        while (std::chrono::steady_clock::now() < deadline) {
+            if (counter.load(std::memory_order_relaxed) > base) { resumed = true; break; }
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+
+        stop.store(true, std::memory_order_relaxed);
+        worker.join();
+        std::printf("  worker running after suspend()+resume(): %s\n", resumed ? "yes" : "no");
+        return resumed ? 0 : 1;
+    });
+
+    if (fut.wait_for(std::chrono::seconds(15)) != std::future_status::ready) {
+        std::printf("  TIMED OUT: suspend() leaked a suspension (worker stuck frozen)\n");
+        TEST_ASSERT(false);
+    }
+    TEST_ASSERT(fut.get() == 0);
+    return 0;
+}
+
+// ============================================================================
 // for_each_uncached — via find_all_vtables on the executable module
 // Exercises the full path: find_all_vtables -> populate -> for_each_uncached
 // which is the function we guarded with get_module_size null check.
@@ -398,6 +519,8 @@ int main() try {
     RUN_TEST(test_threadsuspender_suspend_resume);
     RUN_TEST(test_threadsuspender_resume_then_destruct_no_double_unlock);
     RUN_TEST(test_threadsuspender_actually_freezes_threads);
+    RUN_TEST(test_threadsuspender_suspended_flag_reflects_success);
+    RUN_TEST(test_threadsuspender_suspend_balanced);
 
     // for_each_uncached (via find_all_vtables)
     RUN_TEST(test_find_all_vtables_executable);

@@ -26,9 +26,7 @@ struct ThreadSuspender {
 
     virtual ~ThreadSuspender();
 
-    void suspend() {
-        states = suspend_threads();
-    }
+    void suspend();
 
     void resume();
 
