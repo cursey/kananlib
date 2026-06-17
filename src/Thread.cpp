@@ -90,18 +90,12 @@ ThreadSuspender::ThreadSuspender()  {
 
 ThreadSuspender::~ThreadSuspender() {
     resume_threads(states);
-    
-    if (!states.empty()) {
-        detail::g_suspend_mutex.unlock();
-    }
+    detail::g_suspend_mutex.unlock();
 }
 
 void ThreadSuspender::resume() {
     resume_threads(states);
-
-    if (!states.empty()) {
-        states.clear();
-        detail::g_suspend_mutex.unlock();
-    }
+    states.clear();
+    detail::g_suspend_mutex.unlock();
 }
 }

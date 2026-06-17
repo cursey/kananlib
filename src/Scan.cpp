@@ -334,6 +334,9 @@ namespace utility {
         const auto data = (uint8_t*)str.c_str();
         const auto size = str.size() + (zero_terminated ? 1 : 0);
         const auto module_size = get_module_size(module).value_or(0);
+        if (module_size < str.length() + 1) {
+            return {};
+        }
         const auto end = (uintptr_t)module + module_size - (str.length() + 1);
 
         std::vector<uintptr_t> results{};
@@ -358,7 +361,11 @@ namespace utility {
         const auto data = (uint8_t*)str.c_str();
         const auto size = (str.size() + (zero_terminated ? 1 : 0)) * sizeof(wchar_t);
         const auto module_size = get_module_size(module).value_or(0);
-        const auto end = (uintptr_t)module + module_size - (str.length() + 1) * sizeof(wchar_t);
+        const auto wsearch_len = (str.length() + 1) * sizeof(wchar_t);
+        if (module_size < wsearch_len) {
+            return {};
+        }
+        const auto end = (uintptr_t)module + module_size - wsearch_len;
 
         std::vector<uintptr_t> results{};
 
@@ -381,6 +388,9 @@ namespace utility {
 
         const auto data = (uint8_t*)str.c_str();
         const auto size = str.size() + (zero_terminated ? 1 : 0);
+        if (length < str.length() + 1) {
+            return {};
+        }
         const auto end = start + length - (str.length() + 1);
 
         std::vector<uintptr_t> results{};
@@ -404,7 +414,11 @@ namespace utility {
 
         const auto data = (uint8_t*)str.c_str();
         const auto size = (str.size() + (zero_terminated ? 1 : 0)) * sizeof(wchar_t);
-        const auto end = start + length - (str.length() + 1) * sizeof(wchar_t);
+        const auto wsearch_len = (str.length() + 1) * sizeof(wchar_t);
+        if (length < wsearch_len) {
+            return {};
+        }
+        const auto end = start + length - wsearch_len;
 
         std::vector<uintptr_t> results{};
 

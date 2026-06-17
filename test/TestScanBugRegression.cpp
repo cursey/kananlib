@@ -156,6 +156,36 @@ int test_scan_reverse_not_found() {
     TEST_ASSERT(!result.has_value());
     return 0;
 }
+// ============================================================================
+// Bug 3: scan_strings unsigned wrap in `end` calculation
+// ============================================================================
+
+// When length < str.length() + 1, the expression `start + length - (str.length() + 1)`
+// wraps to near SIZE_MAX. The function should return empty instead of scanning the
+// entire address space.
+int test_scan_strings_short_length_no_crash() {
+    ScanTestPage page;
+
+    // "hello world" is 11 chars, so str.length()+1 = 12.
+    // length = 5 < 12, so end = start + 5 - 12 wraps.
+    const auto results = utility::scan_strings((uintptr_t)page.data, 5, std::string{"hello world"}, false);
+
+    // Should return empty, not crash or return garbage.
+    TEST_ASSERT(results.empty());
+    return 0;
+}
+
+// Same bug for the wstring variant: `start + length - (str.length()+1)*sizeof(wchar_t)`
+int test_scan_strings_wstring_short_length_no_crash() {
+    ScanTestPage page;
+
+    // L"hello world" is 11 wchar_t, so (str.length()+1)*sizeof(wchar_t) = 24.
+    // length = 10 < 24, so end wraps.
+    const auto results = utility::scan_strings((uintptr_t)page.data, 10, std::wstring{L"hello world"}, false);
+
+    TEST_ASSERT(results.empty());
+    return 0;
+}
 
 // ============================================================================
 // main
@@ -170,6 +200,8 @@ int main() try {
     RUN_TEST(test_scan_reverse_basic);
     RUN_TEST(test_scan_data_reverse_basic);
     RUN_TEST(test_scan_reverse_not_found);
+    RUN_TEST(test_scan_strings_short_length_no_crash);
+    RUN_TEST(test_scan_strings_wstring_short_length_no_crash);
 
     return test_summary();
 } catch (const std::exception& e) {

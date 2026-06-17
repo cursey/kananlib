@@ -116,3 +116,8 @@ sources = ["TestBugRegression.cpp"]
 [target.kananlib-scan-bug-regression-test]
 type = "kananlib-test-template"
 sources = ["TestScanBugRegression.cpp"]
+
+# Behavior tests for modified functions (scan_strings, ThreadSuspender, for_each_uncached)
+[target.kananlib-behavior-test]
+type = "kananlib-test-template"
+sources = ["TestBehavior.cpp"]

@@ -36,7 +36,14 @@ void for_each_uncached(HMODULE m, std::function<void(const Vtable&)> predicate) 
     KANANLIB_BENCH();
 
     const auto begin = (uintptr_t)m;
-    const auto end = begin + *utility::get_module_size(m);
+    const auto module_size = utility::get_module_size(m);
+    if (!module_size) {
+        return;
+    }
+    if (*module_size < sizeof(void*)) {
+        return;
+    }
+    const auto end = begin + *module_size;
 
     for (auto i = begin; i < end - sizeof(void*); i += sizeof(void*)) try {
         const auto fake_obj = (void*)i;
