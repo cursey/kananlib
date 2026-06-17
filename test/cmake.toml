@@ -17,6 +17,7 @@ execute_process(
 )
 """
 cmake-after="""
+enable_testing()
 message(STATUS ${PROJECT_SOURCE_DIR})
 """
 
@@ -32,7 +33,6 @@ shallow = true
 
 [template.kananlib-test-template]
 type = "executable"
-sources = ["Main.cpp"]
 include-directories = ["include"]
 compile-features = ["cxx_std_20"]
 compile-options = ["/EHa"]
@@ -48,188 +48,56 @@ if(NOT TARGET kananlib)
     add_subdirectory(kananlib)
 endif()
 """
+cmake-after="""
+add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
+"""
 
 [target.kananlib-test]
 type = "kananlib-test-template"
+sources = ["Main.cpp"]
 
 # Stress tests for exhaustive_decode and collect_basic_blocks
 [target.kananlib-stress-test]
-type = "executable"
+type = "kananlib-test-template"
 sources = ["StressTest.cpp"]
-include-directories = ["include"]
-compile-features = ["cxx_std_20"]
-compile-options = ["/EHa"]
-link-libraries = [
-    "bddisasm::bddisasm",
-    "spdlog::spdlog",
-    "shlwapi",
-    "kananlib"
-]
-cmake-before="""
-if(NOT TARGET kananlib)
-    add_subdirectory(kananlib)
-endif()
-"""
 
 # Tests for utility modules: Pattern, String, Address, Config
 [target.kananlib-utils-test]
-type = "executable"
+type = "kananlib-test-template"
 sources = ["TestUtils.cpp"]
-include-directories = ["include"]
-compile-features = ["cxx_std_20"]
-compile-options = ["/EHa"]
-link-libraries = [
-    "bddisasm::bddisasm",
-    "spdlog::spdlog",
-    "shlwapi",
-    "kananlib"
-]
-cmake-before="""
-if(NOT TARGET kananlib)
-    add_subdirectory(kananlib)
-endif()
-"""
-
 
 # Tests for advanced modules: ScopeGuard, Benchmark, Memory, Patch, PointerHook
 [target.kananlib-advanced-test]
-type = "executable"
+type = "kananlib-test-template"
 sources = ["TestAdvanced.cpp"]
-include-directories = ["include"]
-compile-features = ["cxx_std_20"]
-compile-options = ["/EHa"]
-link-libraries = [
-    "bddisasm::bddisasm",
-    "spdlog::spdlog",
-    "shlwapi",
-    "kananlib"
-]
-cmake-before="""
-if(NOT TARGET kananlib)
-    add_subdirectory(kananlib)
-endif()
-"""
 
 # Test for VtableHook
 [target.kananlib-vtablehook-test]
-type = "executable"
+type = "kananlib-test-template"
 sources = ["TestVtableHook.cpp"]
-include-directories = ["include"]
-compile-features = ["cxx_std_20"]
-compile-options = ["/EHa"]
-link-libraries = [
-    "bddisasm::bddisasm",
-    "bddisasm::bdshemu",
-    "spdlog::spdlog",
-    "shlwapi",
-    "kananlib"
-]
-cmake-before="""
-if(NOT TARGET kananlib)
-    add_subdirectory(kananlib)
-endif()
-"""
 
 # Test for Input
 [target.kananlib-input-test]
-type = "executable"
+type = "kananlib-test-template"
 sources = ["TestInput.cpp"]
-include-directories = ["include"]
-compile-features = ["cxx_std_20"]
-compile-options = ["/EHa"]
-link-libraries = [
-    "bddisasm::bddisasm",
-    "bddisasm::bdshemu",
-    "spdlog::spdlog",
-    "shlwapi",
-    "kananlib"
-]
-cmake-before="""
-if(NOT TARGET kananlib)
-    add_subdirectory(kananlib)
-endif()
-"""
 
 # Test for Registry
 [target.kananlib-registry-test]
-type = "executable"
+type = "kananlib-test-template"
 sources = ["TestRegistry.cpp"]
-include-directories = ["include"]
-compile-features = ["cxx_std_20"]
-compile-options = ["/EHa"]
-link-libraries = [
-    "bddisasm::bddisasm",
-    "bddisasm::bdshemu",
-    "spdlog::spdlog",
-    "shlwapi",
-    "kananlib"
-]
-cmake-before="""
-if(NOT TARGET kananlib)
-    add_subdirectory(kananlib)
-endif()
-"""
-
 
 # Test for Module utilities
 [target.kananlib-module-test]
-type = "executable"
+type = "kananlib-test-template"
 sources = ["TestModule.cpp"]
-include-directories = ["include"]
-compile-features = ["cxx_std_20"]
-compile-options = ["/EHa"]
-link-libraries = [
-    "bddisasm::bddisasm",
-    "bddisasm::bdshemu",
-    "spdlog::spdlog",
-    "shlwapi",
-    "kananlib"
-]
-cmake-before="""
-if(NOT TARGET kananlib)
-    add_subdirectory(kananlib)
-endif()
-"""
-
 
 # Test for additional Scan functions
 [target.kananlib-scan-test]
-type = "executable"
+type = "kananlib-test-template"
 sources = ["TestScan.cpp"]
-include-directories = ["include"]
-compile-features = ["cxx_std_20"]
-compile-options = ["/EHa"]
-link-libraries = [
-    "bddisasm::bddisasm",
-    "bddisasm::bdshemu",
-    "spdlog::spdlog",
-    "shlwapi",
-    "kananlib"
-]
-cmake-before="""
-if(NOT TARGET kananlib)
-    add_subdirectory(kananlib)
-endif()
-"""
-
 
 # Test for PDB + RTTI deep coverage
 [target.kananlib-pdb-rtti-test]
-type = "executable"
+type = "kananlib-test-template"
 sources = ["TestPDBRTTI.cpp"]
-include-directories = ["include"]
-compile-features = ["cxx_std_20"]
-compile-options = ["/EHa"]
 compile-definitions = ["KANANLIB_USE_DIA_SDK"]
-link-libraries = [
-    "bddisasm::bddisasm",
-    "bddisasm::bdshemu",
-    "spdlog::spdlog",
-    "shlwapi",
-    "kananlib"
-]
-cmake-before="""
-if(NOT TARGET kananlib)
-    add_subdirectory(kananlib)
-endif()
-"""

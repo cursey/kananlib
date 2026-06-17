@@ -41,6 +41,7 @@ execute_process(
 
 project(kananlibtest)
 
+enable_testing()
 message(STATUS ${PROJECT_SOURCE_DIR})
 
 include(FetchContent)
@@ -112,6 +113,8 @@ if(NOT CMKR_VS_STARTUP_PROJECT)
 	set_property(DIRECTORY ${PROJECT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT kananlib-test)
 endif()
 
+add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
+
 # Target: kananlib-stress-test
 set(CMKR_TARGET kananlib-stress-test)
 if(NOT TARGET kananlib)
@@ -142,6 +145,7 @@ target_include_directories(kananlib-stress-test PRIVATE
 
 target_link_libraries(kananlib-stress-test PRIVATE
 	bddisasm::bddisasm
+	bddisasm::bdshemu
 	spdlog::spdlog
 	shlwapi
 	kananlib
@@ -151,6 +155,8 @@ get_directory_property(CMKR_VS_STARTUP_PROJECT DIRECTORY ${PROJECT_SOURCE_DIR} D
 if(NOT CMKR_VS_STARTUP_PROJECT)
 	set_property(DIRECTORY ${PROJECT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT kananlib-stress-test)
 endif()
+
+add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
 
 # Target: kananlib-utils-test
 set(CMKR_TARGET kananlib-utils-test)
@@ -182,6 +188,7 @@ target_include_directories(kananlib-utils-test PRIVATE
 
 target_link_libraries(kananlib-utils-test PRIVATE
 	bddisasm::bddisasm
+	bddisasm::bdshemu
 	spdlog::spdlog
 	shlwapi
 	kananlib
@@ -191,6 +198,8 @@ get_directory_property(CMKR_VS_STARTUP_PROJECT DIRECTORY ${PROJECT_SOURCE_DIR} D
 if(NOT CMKR_VS_STARTUP_PROJECT)
 	set_property(DIRECTORY ${PROJECT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT kananlib-utils-test)
 endif()
+
+add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
 
 # Target: kananlib-advanced-test
 set(CMKR_TARGET kananlib-advanced-test)
@@ -222,6 +231,7 @@ target_include_directories(kananlib-advanced-test PRIVATE
 
 target_link_libraries(kananlib-advanced-test PRIVATE
 	bddisasm::bddisasm
+	bddisasm::bdshemu
 	spdlog::spdlog
 	shlwapi
 	kananlib
@@ -231,6 +241,8 @@ get_directory_property(CMKR_VS_STARTUP_PROJECT DIRECTORY ${PROJECT_SOURCE_DIR} D
 if(NOT CMKR_VS_STARTUP_PROJECT)
 	set_property(DIRECTORY ${PROJECT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT kananlib-advanced-test)
 endif()
+
+add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
 
 # Target: kananlib-vtablehook-test
 set(CMKR_TARGET kananlib-vtablehook-test)
@@ -273,6 +285,8 @@ if(NOT CMKR_VS_STARTUP_PROJECT)
 	set_property(DIRECTORY ${PROJECT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT kananlib-vtablehook-test)
 endif()
 
+add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
+
 # Target: kananlib-input-test
 set(CMKR_TARGET kananlib-input-test)
 if(NOT TARGET kananlib)
@@ -313,6 +327,8 @@ get_directory_property(CMKR_VS_STARTUP_PROJECT DIRECTORY ${PROJECT_SOURCE_DIR} D
 if(NOT CMKR_VS_STARTUP_PROJECT)
 	set_property(DIRECTORY ${PROJECT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT kananlib-input-test)
 endif()
+
+add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
 
 # Target: kananlib-registry-test
 set(CMKR_TARGET kananlib-registry-test)
@@ -355,6 +371,7 @@ if(NOT CMKR_VS_STARTUP_PROJECT)
 	set_property(DIRECTORY ${PROJECT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT kananlib-registry-test)
 endif()
 
+add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
 
 # Target: kananlib-module-test
 set(CMKR_TARGET kananlib-module-test)
@@ -397,6 +414,7 @@ if(NOT CMKR_VS_STARTUP_PROJECT)
 	set_property(DIRECTORY ${PROJECT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT kananlib-module-test)
 endif()
 
+add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
 
 # Target: kananlib-scan-test
 set(CMKR_TARGET kananlib-scan-test)
@@ -439,6 +457,8 @@ if(NOT CMKR_VS_STARTUP_PROJECT)
 	set_property(DIRECTORY ${PROJECT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT kananlib-scan-test)
 endif()
 
+add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
+
 # Target: kananlib-pdb-rtti-test
 set(CMKR_TARGET kananlib-pdb-rtti-test)
 if(NOT TARGET kananlib)
@@ -463,10 +483,6 @@ target_compile_options(kananlib-pdb-rtti-test PRIVATE
 	"/EHa"
 )
 
-target_compile_definitions(kananlib-pdb-rtti-test PRIVATE
-	KANANLIB_USE_DIA_SDK
-)
-
 target_include_directories(kananlib-pdb-rtti-test PRIVATE
 	include
 )
@@ -479,7 +495,13 @@ target_link_libraries(kananlib-pdb-rtti-test PRIVATE
 	kananlib
 )
 
+target_compile_definitions(kananlib-pdb-rtti-test PRIVATE
+	KANANLIB_USE_DIA_SDK
+)
+
 get_directory_property(CMKR_VS_STARTUP_PROJECT DIRECTORY ${PROJECT_SOURCE_DIR} DEFINITION VS_STARTUP_PROJECT)
 if(NOT CMKR_VS_STARTUP_PROJECT)
 	set_property(DIRECTORY ${PROJECT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT kananlib-pdb-rtti-test)
 endif()
+
+add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
