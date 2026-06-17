@@ -1,5 +1,7 @@
 #include <cstdint>
 #include <iostream>
+#include <string>
+#include <string_view>
 
 #include <Windows.h>
 
@@ -63,6 +65,51 @@ int test_registry_read_known_dword() {
 }
 
 // ============================================================================
+// get_registry_dword must honor string_view length (not assume null-termination)
+//
+// BUG: the function passes subkey.data() / value.data() straight to
+// RegOpenKeyExA / RegQueryValueExA, which require null-terminated C strings.
+// std::string_view::data() is NOT guaranteed null-terminated, so a view that is
+// a prefix of a larger buffer makes the Reg* APIs read past the intended end
+// into trailing bytes -> wrong key/value name -> lookup fails.
+//
+// We read a known REG_DWORD two ways: once with null-terminated literals (the
+// baseline) and once with views over buffers that carry trailing garbage beyond
+// the view length. A correct implementation returns the same value both times;
+// the buggy one fails the view-based lookup because it reads the garbage.
+// ============================================================================
+
+int test_registry_string_view_not_null_terminated() {
+    // Baseline: null-terminated literals must find the value.
+    const auto baseline = utility::get_registry_dword(
+        HKEY_LOCAL_MACHINE,
+        "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion",
+        "CurrentMajorVersionNumber");
+
+    if (!baseline.has_value()) {
+        // Value not present on this OS build; nothing to prove.
+        std::cout << "  SKIP: CurrentMajorVersionNumber not present" << std::endl;
+        return 0;
+    }
+
+    // Buffers with trailing junk that is NOT part of the key/value name.
+    const std::string subkey_buf = "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersionZZZZZZ";
+    const std::string value_buf  = "CurrentMajorVersionNumberZZZZZZ";
+
+    const std::string_view subkey_view(subkey_buf.data(),
+        std::string("SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion").size());
+    const std::string_view value_view(value_buf.data(),
+        std::string("CurrentMajorVersionNumber").size());
+
+    const auto via_view = utility::get_registry_dword(HKEY_LOCAL_MACHINE, subkey_view, value_view);
+
+    TEST_ASSERT(via_view.has_value());
+    TEST_ASSERT(*via_view == *baseline);
+
+    return 0;
+}
+
+// ============================================================================
 // main
 // ============================================================================
 
@@ -73,6 +120,7 @@ int main() try {
     RUN_TEST(test_registry_nonexistent_key);
     RUN_TEST(test_registry_nonexistent_value);
     RUN_TEST(test_registry_read_known_dword);
+    RUN_TEST(test_registry_string_view_not_null_terminated);
 
     return test_summary();
 } catch (const std::exception& e) {
