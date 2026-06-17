@@ -48,15 +48,15 @@ namespace undocumented {
 
 namespace utility {
     optional<uintptr_t> scan(const string& module, const string& pattern) {
-        return scan(GetModuleHandleA(module.c_str()), pattern);
+        return scan(get_module(module), pattern);
     }
 
     optional<uintptr_t> scan(const wstring& module, const string& pattern) {
-        return scan(GetModuleHandleW(module.c_str()), pattern);
+        return scan(get_module(module), pattern);
     }
 
     optional<uintptr_t> scan(const string& module, uintptr_t start, const string& pattern) {
-        HMODULE mod = GetModuleHandleA(module.c_str());
+        HMODULE mod = get_module(module);
         if (!mod) {
             return {};
         }
@@ -64,7 +64,7 @@ namespace utility {
     }
 
     optional<uintptr_t> scan(const wstring& module, uintptr_t start, const string& pattern) {
-        HMODULE mod = GetModuleHandleW(module.c_str());
+        HMODULE mod = get_module(module);
         if (!mod) {
             return {};
         }

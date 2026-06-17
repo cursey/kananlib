@@ -68,7 +68,7 @@ void resume_threads(const ThreadStates& states) {
 }
 
 ThreadSuspender::ThreadSuspender()  {
-    auto ntdll = GetModuleHandleA("ntdll.dll");
+    auto ntdll = get_module("ntdll.dll");
     
     auto lock_loader = ntdll != nullptr ? (PFN_LdrLockLoaderLock)GetProcAddress(ntdll, "LdrLockLoaderLock") : nullptr;
     auto unlock_loader = ntdll != nullptr ? (PFN_LdrUnlockLoaderLock)GetProcAddress(ntdll, "LdrUnlockLoaderLock") : nullptr;

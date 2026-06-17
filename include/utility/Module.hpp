@@ -52,6 +52,7 @@ namespace utility {
 
     HMODULE get_executable();
     HMODULE get_module(const std::string& module);
+    HMODULE get_module(const std::wstring& module);
     HMODULE unlink(HMODULE module);
     HMODULE safe_unlink(HMODULE module);
     HMODULE find_partial_module(std::wstring_view name);
