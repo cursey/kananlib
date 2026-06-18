@@ -50,7 +50,7 @@ EXES=(
     kananlib-scan-coverage-test kananlib-module-coverage-test
     kananlib-rtti-coverage-test kananlib-misc-coverage-test
     kananlib-scan-bounds-test kananlib-scan-path-test kananlib-scan-resolve-test
-    kananlib-module-macho-test
+    kananlib-module-macho-test kananlib-pdb-edge-test
 )
 
 # --- Configure (instrumented) ---

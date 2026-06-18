@@ -161,3 +161,9 @@ sources = ["TestScanResolve.cpp"]
 [target.kananlib-module-macho-test]
 type = "kananlib-test-template"
 sources = ["TestModuleMachO.cpp"]
+
+# Coverage: PDB.cpp deterministic malformed/local CodeView branches
+[target.kananlib-pdb-edge-test]
+type = "kananlib-test-template"
+sources = ["TestPDBEdge.cpp"]
+compile-definitions = ["KANANLIB_USE_DIA_SDK"]

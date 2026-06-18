@@ -981,3 +981,45 @@ target_link_libraries(kananlib-module-macho-test PRIVATE
 )
 
 add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
+
+# Target: kananlib-pdb-edge-test
+set(CMKR_TARGET kananlib-pdb-edge-test)
+if(NOT TARGET kananlib)
+    add_subdirectory(kananlib)
+endif()
+
+set(kananlib-pdb-edge-test_SOURCES
+	TestPDBEdge.cpp
+	cmake.toml
+)
+
+add_executable(kananlib-pdb-edge-test)
+
+target_sources(kananlib-pdb-edge-test PRIVATE ${kananlib-pdb-edge-test_SOURCES})
+source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${kananlib-pdb-edge-test_SOURCES})
+
+target_compile_features(kananlib-pdb-edge-test PRIVATE
+	cxx_std_20
+)
+
+target_compile_options(kananlib-pdb-edge-test PRIVATE
+	"/EHa"
+)
+
+target_compile_definitions(kananlib-pdb-edge-test PRIVATE
+	KANANLIB_USE_DIA_SDK
+)
+
+target_include_directories(kananlib-pdb-edge-test PRIVATE
+	include
+)
+
+target_link_libraries(kananlib-pdb-edge-test PRIVATE
+	bddisasm::bddisasm
+	bddisasm::bdshemu
+	spdlog::spdlog
+	shlwapi
+	kananlib
+)
+
+add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
