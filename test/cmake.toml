@@ -141,3 +141,18 @@ sources = ["TestRTTICoverage.cpp"]
 [target.kananlib-misc-coverage-test]
 type = "kananlib-test-template"
 sources = ["TestMiscCoverage.cpp"]
+
+# Coverage: Scan.cpp function-bounds / buckets / function-start detection
+[target.kananlib-scan-bounds-test]
+type = "kananlib-test-template"
+sources = ["TestScanBounds.cpp"]
+
+# Coverage: Scan.cpp path-finder family (find_*_in_path, find_encapsulating_*, find_next_displacement)
+[target.kananlib-scan-path-test]
+type = "kananlib-test-template"
+sources = ["TestScanPath.cpp"]
+
+# Coverage: Scan.cpp resolver family (find_function_*_refs, string-ref collection, linear blocks)
+[target.kananlib-scan-resolve-test]
+type = "kananlib-test-template"
+sources = ["TestScanResolve.cpp"]

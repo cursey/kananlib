@@ -829,3 +829,117 @@ target_link_libraries(kananlib-misc-coverage-test PRIVATE
 )
 
 add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
+
+# Target: kananlib-scan-bounds-test
+set(CMKR_TARGET kananlib-scan-bounds-test)
+if(NOT TARGET kananlib)
+    add_subdirectory(kananlib)
+endif()
+
+set(kananlib-scan-bounds-test_SOURCES
+	TestScanBounds.cpp
+	cmake.toml
+)
+
+add_executable(kananlib-scan-bounds-test)
+
+target_sources(kananlib-scan-bounds-test PRIVATE ${kananlib-scan-bounds-test_SOURCES})
+source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${kananlib-scan-bounds-test_SOURCES})
+
+target_compile_features(kananlib-scan-bounds-test PRIVATE
+	cxx_std_20
+)
+
+target_compile_options(kananlib-scan-bounds-test PRIVATE
+	"/EHa"
+)
+
+target_include_directories(kananlib-scan-bounds-test PRIVATE
+	include
+)
+
+target_link_libraries(kananlib-scan-bounds-test PRIVATE
+	bddisasm::bddisasm
+	bddisasm::bdshemu
+	spdlog::spdlog
+	shlwapi
+	kananlib
+)
+
+add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
+
+# Target: kananlib-scan-path-test
+set(CMKR_TARGET kananlib-scan-path-test)
+if(NOT TARGET kananlib)
+    add_subdirectory(kananlib)
+endif()
+
+set(kananlib-scan-path-test_SOURCES
+	TestScanPath.cpp
+	cmake.toml
+)
+
+add_executable(kananlib-scan-path-test)
+
+target_sources(kananlib-scan-path-test PRIVATE ${kananlib-scan-path-test_SOURCES})
+source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${kananlib-scan-path-test_SOURCES})
+
+target_compile_features(kananlib-scan-path-test PRIVATE
+	cxx_std_20
+)
+
+target_compile_options(kananlib-scan-path-test PRIVATE
+	"/EHa"
+)
+
+target_include_directories(kananlib-scan-path-test PRIVATE
+	include
+)
+
+target_link_libraries(kananlib-scan-path-test PRIVATE
+	bddisasm::bddisasm
+	bddisasm::bdshemu
+	spdlog::spdlog
+	shlwapi
+	kananlib
+)
+
+add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
+
+# Target: kananlib-scan-resolve-test
+set(CMKR_TARGET kananlib-scan-resolve-test)
+if(NOT TARGET kananlib)
+    add_subdirectory(kananlib)
+endif()
+
+set(kananlib-scan-resolve-test_SOURCES
+	TestScanResolve.cpp
+	cmake.toml
+)
+
+add_executable(kananlib-scan-resolve-test)
+
+target_sources(kananlib-scan-resolve-test PRIVATE ${kananlib-scan-resolve-test_SOURCES})
+source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${kananlib-scan-resolve-test_SOURCES})
+
+target_compile_features(kananlib-scan-resolve-test PRIVATE
+	cxx_std_20
+)
+
+target_compile_options(kananlib-scan-resolve-test PRIVATE
+	"/EHa"
+)
+
+target_include_directories(kananlib-scan-resolve-test PRIVATE
+	include
+)
+
+target_link_libraries(kananlib-scan-resolve-test PRIVATE
+	bddisasm::bddisasm
+	bddisasm::bdshemu
+	spdlog::spdlog
+	shlwapi
+	kananlib
+)
+
+add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})

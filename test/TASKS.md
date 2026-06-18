@@ -170,7 +170,10 @@ against the buggy code, cite the failure, then apply the minimal fix.
 | `kananlib-module-coverage-test` | 26 | Module (ptr_from_rva, get_imagebase_va_from_ptr, find_partial_module, foreach_module, deeper imports/exports/sections, get_original_bytes, map_view edge cases, path/dir edges) |
 | `kananlib-rtti-coverage-test` | 18 | RTTI (derives_from both overloads + multi-level hierarchy, get_type_info, get_locator, find_vtable[s], find_vtables_derived_from, find_vtable_partial/regex, find_object_inline, find_objects_ptr, is_vtable) |
 | `kananlib-misc-coverage-test` | 16 | String (format_string all paths), Emulation (free emulate overloads, callback CONTINUE/BREAK/STEP_OVER, HMODULE ctor, status field) |
-| **Total** | **260** | **20 of 20 modules** |
+| `kananlib-scan-bounds-test` | 24 | Scan (populate_function_buckets_heuristic, find_function_entry, find_all_function_bounds, determine_function_bounds, find_function_start[_unwind/_with_call], find_virtual_function_start, resolve_scope_table_owner, resolve_instruction) |
+| `kananlib-scan-path-test` | 32 | Scan (find_next_displacement, find_{string_reference,pointer,displacement,mnemonic,register_usage,pattern}_in_path, find_encapsulating_function[_disp], find_encapsulating_virtual_function[_disp]) |
+| `kananlib-scan-resolve-test` | 20 | Scan (scan_ptr HMODULE, find_function_from_string_ref ascii/wide, find_function_with_string_refs/refs, find_virtual_function_*, get_disassembly_behind, collect_linear_blocks, collect_{ascii,unicode}_string_references, scan_displacement_references) |
+| **Total** | **336** | **20 of 20 modules** |
 
 ## Measured Line Coverage
 
@@ -186,18 +189,19 @@ deps, the test sources, and the CLI are filtered out. Run:
 
 HTML report: `test/build-cov/coverage-html/index.html`.
 
-### Totals (library, all 18 test executables)
+### Totals (library, all 21 test executables)
 
-| Metric | Before coverage push | After |
-|---|---|---|
-| **Lines** | 47.65% | **53.77%** (3132 / 6775 missed) |
-| Regions | 44.56% | **49.29%** |
-| Functions | 66.47% | **73.99%** |
-| Branches | 38.01% | **42.78%** |
+| Metric | Initial (post-segfault-fix) | After API-surface push | After Scan-deep push |
+|---|---|---|---|
+| **Lines** | 47.65% | 53.77% | **74.98%** (1695 / 6775 missed) |
+| Regions | 44.56% | 49.29% | **66.63%** |
+| Functions | 66.47% | 73.99% | **91.33%** |
+| Branches | 38.01% | 42.78% | **60.35%** |
 
-(The "before" baseline already includes `kananlib-test` running to completion after
-the `8324df8` segfault fix; the prior crashing-run baseline was only ~34% lines.)
-
+(The "initial" baseline already includes `kananlib-test` running to completion after
+the `8324df8` segfault fix; the prior crashing-run baseline was only ~34% lines.
+The Scan-deep push added 76 tests across `kananlib-scan-{bounds,path,resolve}-test`
+targeting the function-analysis/disassembly APIs, taking Scan.cpp from 37% to 84%.)
 ### Per-file line coverage (after)
 
 | File | Lines % | Missed | Notes |
@@ -218,21 +222,21 @@ the `8324df8` segfault fix; the prior crashing-run baseline was only ~34% lines.
 | `src/Emulation.cpp` | **85.6%** | 18 | was 51.2% |
 | `src/VtableHook.cpp` | 77.9% | 15 | |
 | `src/PointerHook.cpp` | 76.7% | 14 | |
-| `src/PDB.cpp` | 53.1% | 489 | DIA-SDK heavy; many error/format branches |
+| `src/PDB.cpp` | 53.1% | 489 | DIA-SDK heavy; many error/format branches (now the largest gap) |
 | `src/Module.cpp` | 45.7% | 534 | destructive APIs (`unlink`, `spoof_*`, `map_view_of_macho`) intentionally untested |
-| `src/Scan.cpp` | 37.3% | 1866 | largest file; deep disassembly/SIMD paths remain |
+| `src/Scan.cpp` | **84.0%** | 476 | was 37.3% — function-analysis/disassembly APIs now covered (Scan-deep push) |
 
 ### Remaining high-value gaps (diminishing returns per test)
 
-- **Scan.cpp (1866 missed):** AVX2/SIMD scan paths, `scan_disasm` deep branches, the
-  string-reference function resolver (`find_function_from_string_ref` and friends),
-  basic-block collection edge cases. Each needs hand-crafted code buffers.
-- **Module.cpp (534 missed):** destructive/loader-mutating APIs (`unlink`, `safe_unlink`,
-  `unlink_duplicate_modules`, `spoof_module_paths_in_exe_dir`, `load_module_from_current_directory`,
-  `map_view_of_macho`) — deliberately skipped because they mutate the running process or
-  need a Mach-O fixture. Would need an isolated harness.
+- **Module.cpp (534 missed, now the joint-largest gap):** destructive/loader-mutating
+  APIs (`unlink`, `safe_unlink`, `unlink_duplicate_modules`, `spoof_module_paths_in_exe_dir`,
+  `load_module_from_current_directory`, `map_view_of_macho`) — deliberately skipped because
+  they mutate the running process or need a Mach-O fixture. Would need an isolated harness.
 - **PDB.cpp (489 missed):** error/diagnostic branches and structure-formatting paths that
-  only fire on malformed/unusual PDBs.
+  only fire on malformed/unusual PDBs; DIA-SDK heavy.
+- **Scan.cpp (476 missed, down from 1866):** remaining are AVX2/SIMD fast-path variants of
+  scans already covered by their scalar paths, deep `scan_disasm`/branch-exhaustion corners,
+  and a few error branches in the function-bucket heuristics. Lower ROI per test now.
 
 ## Gap Analysis — Untested and Partially Tested Modules
 
@@ -377,4 +381,5 @@ static void* g_hook_target = nullptr;  // must be global/static for VirtualProte
 - [ ] Phase 13 (open): remaining Scan surface — `scan_disasm`, and a graceful-failure (not crash) audit of `scan_data_reverse` over unmapped memory (it uses raw `memcmp` with no SEH, unlike `Pattern::find_single`).
 - [x] Phase 14: clang coverage tooling — `test/coverage.sh` (LLVM source-based coverage via VS18-bundled clang 20). Fixed `kananlib-test` crashing under the instrumented build (commit `8324df8`): the string-ref→function raw call is gated `#ifndef __clang__` (resolver misresolves under clang's instrumented layout; MSVC path unchanged).
 - [x] Phase 15: coverage push — 4 new test executables (`kananlib-{scan,module,rtti,misc}-coverage-test`, +89 tests) for uncovered public API. Library line coverage 47.65% → **53.77%**; String.cpp 50→100%, RTTI 59.5→88.3%, Emulation 51→85.6%. All 18 executables green (260 tests). See "Measured Line Coverage" above.
-- [ ] Phase 16 (open): deeper Scan.cpp (1866 missed — SIMD scan paths, function-from-string-ref resolver) and an isolated harness for Module.cpp destructive APIs (`unlink`, `spoof_*`, `map_view_of_macho`).
+- [x] Phase 16: Scan-deep coverage — 3 new executables (`kananlib-scan-{bounds,path,resolve}-test`, +76 tests) for the function-analysis/disassembly APIs (function bounds, function-start/unwind, find_*_in_path, find_encapsulating_*, find_function_*_refs, linear blocks, string-ref collection). Scan.cpp 37.3% → **84.0%**; library line coverage 53.77% → **74.98%** (functions 91%, regions 67%, branches 60%). All 21 executables green (336 tests).
+- [ ] Phase 17 (open): isolated harness for Module.cpp destructive APIs (`unlink`/`spoof_*`/`map_view_of_macho`, 534 missed) and PDB.cpp malformed-input branches (489 missed) — the two remaining large gaps.
