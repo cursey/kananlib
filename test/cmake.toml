@@ -156,3 +156,8 @@ sources = ["TestScanPath.cpp"]
 [target.kananlib-scan-resolve-test]
 type = "kananlib-test-template"
 sources = ["TestScanResolve.cpp"]
+
+# Coverage: Module.cpp Mach-O mapper + safe destructive edge paths
+[target.kananlib-module-macho-test]
+type = "kananlib-test-template"
+sources = ["TestModuleMachO.cpp"]

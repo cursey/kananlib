@@ -943,3 +943,41 @@ target_link_libraries(kananlib-scan-resolve-test PRIVATE
 )
 
 add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
+
+# Target: kananlib-module-macho-test
+set(CMKR_TARGET kananlib-module-macho-test)
+if(NOT TARGET kananlib)
+    add_subdirectory(kananlib)
+endif()
+
+set(kananlib-module-macho-test_SOURCES
+	TestModuleMachO.cpp
+	cmake.toml
+)
+
+add_executable(kananlib-module-macho-test)
+
+target_sources(kananlib-module-macho-test PRIVATE ${kananlib-module-macho-test_SOURCES})
+source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${kananlib-module-macho-test_SOURCES})
+
+target_compile_features(kananlib-module-macho-test PRIVATE
+	cxx_std_20
+)
+
+target_compile_options(kananlib-module-macho-test PRIVATE
+	"/EHa"
+)
+
+target_include_directories(kananlib-module-macho-test PRIVATE
+	include
+)
+
+target_link_libraries(kananlib-module-macho-test PRIVATE
+	bddisasm::bddisasm
+	bddisasm::bdshemu
+	spdlog::spdlog
+	shlwapi
+	kananlib
+)
+
+add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
