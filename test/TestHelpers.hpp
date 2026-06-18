@@ -32,6 +32,7 @@ namespace kananlib_test {
 
     inline void run_test_impl(const char* name, int (*fn)(), const char* file, int line) {
         std::printf("\n[RUN ] %s (%s:%d)\n", name, file, line);
+        std::fflush(stdout); // ensure the banner is visible even if fn() crashes
         const auto t0 = std::chrono::high_resolution_clock::now();
         const int rc = fn();
         const auto t1 = std::chrono::high_resolution_clock::now();
