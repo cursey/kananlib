@@ -24,9 +24,6 @@ jobs:
   test:
     runs-on: windows-latest
     needs: build
-    strategy:
-      matrix:
-        target: [kananlib-test, kananlib-stress-test]
     steps:
       - name: Checkout
         uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
@@ -37,9 +34,9 @@ jobs:
       - name: Configure CMake
         run: cmake -S ${{github.workspace}}/test -B ${{github.workspace}}/test/build -G "Visual Studio 18 2026" -A x64 -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
 
-      - name: Build
-        run: cmake --build ${{github.workspace}}/test/build --config ${{env.BUILD_TYPE}} --target ${{matrix.target}}
+      - name: Build all tests
+        run: cmake --build ${{github.workspace}}/test/build --config ${{env.BUILD_TYPE}}
 
-      - name: Run test
-        run: ${{github.workspace}}/test/build/${{env.BUILD_TYPE}}/${{matrix.target}}.exe
+      - name: Run all tests
+        run: ctest --test-dir ${{github.workspace}}/test/build -C ${{env.BUILD_TYPE}} --output-on-failure
 

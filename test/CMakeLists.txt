@@ -41,6 +41,7 @@ execute_process(
 
 project(kananlibtest)
 
+enable_testing()
 message(STATUS ${PROJECT_SOURCE_DIR})
 
 include(FetchContent)
@@ -112,6 +113,8 @@ if(NOT CMKR_VS_STARTUP_PROJECT)
 	set_property(DIRECTORY ${PROJECT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT kananlib-test)
 endif()
 
+add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
+
 # Target: kananlib-stress-test
 set(CMKR_TARGET kananlib-stress-test)
 if(NOT TARGET kananlib)
@@ -142,6 +145,7 @@ target_include_directories(kananlib-stress-test PRIVATE
 
 target_link_libraries(kananlib-stress-test PRIVATE
 	bddisasm::bddisasm
+	bddisasm::bdshemu
 	spdlog::spdlog
 	shlwapi
 	kananlib
@@ -151,3 +155,871 @@ get_directory_property(CMKR_VS_STARTUP_PROJECT DIRECTORY ${PROJECT_SOURCE_DIR} D
 if(NOT CMKR_VS_STARTUP_PROJECT)
 	set_property(DIRECTORY ${PROJECT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT kananlib-stress-test)
 endif()
+
+add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
+
+# Target: kananlib-utils-test
+set(CMKR_TARGET kananlib-utils-test)
+if(NOT TARGET kananlib)
+    add_subdirectory(kananlib)
+endif()
+
+set(kananlib-utils-test_SOURCES
+	TestUtils.cpp
+	cmake.toml
+)
+
+add_executable(kananlib-utils-test)
+
+target_sources(kananlib-utils-test PRIVATE ${kananlib-utils-test_SOURCES})
+source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${kananlib-utils-test_SOURCES})
+
+target_compile_features(kananlib-utils-test PRIVATE
+	cxx_std_20
+)
+
+target_compile_options(kananlib-utils-test PRIVATE
+	"/EHa"
+)
+
+target_include_directories(kananlib-utils-test PRIVATE
+	include
+)
+
+target_link_libraries(kananlib-utils-test PRIVATE
+	bddisasm::bddisasm
+	bddisasm::bdshemu
+	spdlog::spdlog
+	shlwapi
+	kananlib
+)
+
+get_directory_property(CMKR_VS_STARTUP_PROJECT DIRECTORY ${PROJECT_SOURCE_DIR} DEFINITION VS_STARTUP_PROJECT)
+if(NOT CMKR_VS_STARTUP_PROJECT)
+	set_property(DIRECTORY ${PROJECT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT kananlib-utils-test)
+endif()
+
+add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
+
+# Target: kananlib-advanced-test
+set(CMKR_TARGET kananlib-advanced-test)
+if(NOT TARGET kananlib)
+    add_subdirectory(kananlib)
+endif()
+
+set(kananlib-advanced-test_SOURCES
+	TestAdvanced.cpp
+	cmake.toml
+)
+
+add_executable(kananlib-advanced-test)
+
+target_sources(kananlib-advanced-test PRIVATE ${kananlib-advanced-test_SOURCES})
+source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${kananlib-advanced-test_SOURCES})
+
+target_compile_features(kananlib-advanced-test PRIVATE
+	cxx_std_20
+)
+
+target_compile_options(kananlib-advanced-test PRIVATE
+	"/EHa"
+)
+
+target_include_directories(kananlib-advanced-test PRIVATE
+	include
+)
+
+target_link_libraries(kananlib-advanced-test PRIVATE
+	bddisasm::bddisasm
+	bddisasm::bdshemu
+	spdlog::spdlog
+	shlwapi
+	kananlib
+)
+
+get_directory_property(CMKR_VS_STARTUP_PROJECT DIRECTORY ${PROJECT_SOURCE_DIR} DEFINITION VS_STARTUP_PROJECT)
+if(NOT CMKR_VS_STARTUP_PROJECT)
+	set_property(DIRECTORY ${PROJECT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT kananlib-advanced-test)
+endif()
+
+add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
+
+# Target: kananlib-vtablehook-test
+set(CMKR_TARGET kananlib-vtablehook-test)
+if(NOT TARGET kananlib)
+    add_subdirectory(kananlib)
+endif()
+
+set(kananlib-vtablehook-test_SOURCES
+	TestVtableHook.cpp
+	cmake.toml
+)
+
+add_executable(kananlib-vtablehook-test)
+
+target_sources(kananlib-vtablehook-test PRIVATE ${kananlib-vtablehook-test_SOURCES})
+source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${kananlib-vtablehook-test_SOURCES})
+
+target_compile_features(kananlib-vtablehook-test PRIVATE
+	cxx_std_20
+)
+
+target_compile_options(kananlib-vtablehook-test PRIVATE
+	"/EHa"
+)
+
+target_include_directories(kananlib-vtablehook-test PRIVATE
+	include
+)
+
+target_link_libraries(kananlib-vtablehook-test PRIVATE
+	bddisasm::bddisasm
+	bddisasm::bdshemu
+	spdlog::spdlog
+	shlwapi
+	kananlib
+)
+
+get_directory_property(CMKR_VS_STARTUP_PROJECT DIRECTORY ${PROJECT_SOURCE_DIR} DEFINITION VS_STARTUP_PROJECT)
+if(NOT CMKR_VS_STARTUP_PROJECT)
+	set_property(DIRECTORY ${PROJECT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT kananlib-vtablehook-test)
+endif()
+
+add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
+
+# Target: kananlib-input-test
+set(CMKR_TARGET kananlib-input-test)
+if(NOT TARGET kananlib)
+    add_subdirectory(kananlib)
+endif()
+
+set(kananlib-input-test_SOURCES
+	TestInput.cpp
+	cmake.toml
+)
+
+add_executable(kananlib-input-test)
+
+target_sources(kananlib-input-test PRIVATE ${kananlib-input-test_SOURCES})
+source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${kananlib-input-test_SOURCES})
+
+target_compile_features(kananlib-input-test PRIVATE
+	cxx_std_20
+)
+
+target_compile_options(kananlib-input-test PRIVATE
+	"/EHa"
+)
+
+target_include_directories(kananlib-input-test PRIVATE
+	include
+)
+
+target_link_libraries(kananlib-input-test PRIVATE
+	bddisasm::bddisasm
+	bddisasm::bdshemu
+	spdlog::spdlog
+	shlwapi
+	kananlib
+)
+
+get_directory_property(CMKR_VS_STARTUP_PROJECT DIRECTORY ${PROJECT_SOURCE_DIR} DEFINITION VS_STARTUP_PROJECT)
+if(NOT CMKR_VS_STARTUP_PROJECT)
+	set_property(DIRECTORY ${PROJECT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT kananlib-input-test)
+endif()
+
+add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
+
+# Target: kananlib-registry-test
+set(CMKR_TARGET kananlib-registry-test)
+if(NOT TARGET kananlib)
+    add_subdirectory(kananlib)
+endif()
+
+set(kananlib-registry-test_SOURCES
+	TestRegistry.cpp
+	cmake.toml
+)
+
+add_executable(kananlib-registry-test)
+
+target_sources(kananlib-registry-test PRIVATE ${kananlib-registry-test_SOURCES})
+source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${kananlib-registry-test_SOURCES})
+
+target_compile_features(kananlib-registry-test PRIVATE
+	cxx_std_20
+)
+
+target_compile_options(kananlib-registry-test PRIVATE
+	"/EHa"
+)
+
+target_include_directories(kananlib-registry-test PRIVATE
+	include
+)
+
+target_link_libraries(kananlib-registry-test PRIVATE
+	bddisasm::bddisasm
+	bddisasm::bdshemu
+	spdlog::spdlog
+	shlwapi
+	kananlib
+)
+
+get_directory_property(CMKR_VS_STARTUP_PROJECT DIRECTORY ${PROJECT_SOURCE_DIR} DEFINITION VS_STARTUP_PROJECT)
+if(NOT CMKR_VS_STARTUP_PROJECT)
+	set_property(DIRECTORY ${PROJECT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT kananlib-registry-test)
+endif()
+
+add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
+
+# Target: kananlib-module-test
+set(CMKR_TARGET kananlib-module-test)
+if(NOT TARGET kananlib)
+    add_subdirectory(kananlib)
+endif()
+
+set(kananlib-module-test_SOURCES
+	TestModule.cpp
+	cmake.toml
+)
+
+add_executable(kananlib-module-test)
+
+target_sources(kananlib-module-test PRIVATE ${kananlib-module-test_SOURCES})
+source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${kananlib-module-test_SOURCES})
+
+target_compile_features(kananlib-module-test PRIVATE
+	cxx_std_20
+)
+
+target_compile_options(kananlib-module-test PRIVATE
+	"/EHa"
+)
+
+target_include_directories(kananlib-module-test PRIVATE
+	include
+)
+
+target_link_libraries(kananlib-module-test PRIVATE
+	bddisasm::bddisasm
+	bddisasm::bdshemu
+	spdlog::spdlog
+	shlwapi
+	kananlib
+)
+
+get_directory_property(CMKR_VS_STARTUP_PROJECT DIRECTORY ${PROJECT_SOURCE_DIR} DEFINITION VS_STARTUP_PROJECT)
+if(NOT CMKR_VS_STARTUP_PROJECT)
+	set_property(DIRECTORY ${PROJECT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT kananlib-module-test)
+endif()
+
+add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
+
+# Target: kananlib-scan-test
+set(CMKR_TARGET kananlib-scan-test)
+if(NOT TARGET kananlib)
+    add_subdirectory(kananlib)
+endif()
+
+set(kananlib-scan-test_SOURCES
+	TestScan.cpp
+	cmake.toml
+)
+
+add_executable(kananlib-scan-test)
+
+target_sources(kananlib-scan-test PRIVATE ${kananlib-scan-test_SOURCES})
+source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${kananlib-scan-test_SOURCES})
+
+target_compile_features(kananlib-scan-test PRIVATE
+	cxx_std_20
+)
+
+target_compile_options(kananlib-scan-test PRIVATE
+	"/EHa"
+)
+
+target_include_directories(kananlib-scan-test PRIVATE
+	include
+)
+
+target_link_libraries(kananlib-scan-test PRIVATE
+	bddisasm::bddisasm
+	bddisasm::bdshemu
+	spdlog::spdlog
+	shlwapi
+	kananlib
+)
+
+get_directory_property(CMKR_VS_STARTUP_PROJECT DIRECTORY ${PROJECT_SOURCE_DIR} DEFINITION VS_STARTUP_PROJECT)
+if(NOT CMKR_VS_STARTUP_PROJECT)
+	set_property(DIRECTORY ${PROJECT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT kananlib-scan-test)
+endif()
+
+add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
+
+# Target: kananlib-pdb-rtti-test
+set(CMKR_TARGET kananlib-pdb-rtti-test)
+if(NOT TARGET kananlib)
+    add_subdirectory(kananlib)
+endif()
+
+set(kananlib-pdb-rtti-test_SOURCES
+	TestPDBRTTI.cpp
+	cmake.toml
+)
+
+add_executable(kananlib-pdb-rtti-test)
+
+target_sources(kananlib-pdb-rtti-test PRIVATE ${kananlib-pdb-rtti-test_SOURCES})
+source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${kananlib-pdb-rtti-test_SOURCES})
+
+target_compile_features(kananlib-pdb-rtti-test PRIVATE
+	cxx_std_20
+)
+
+target_compile_options(kananlib-pdb-rtti-test PRIVATE
+	"/EHa"
+)
+
+target_include_directories(kananlib-pdb-rtti-test PRIVATE
+	include
+)
+
+target_link_libraries(kananlib-pdb-rtti-test PRIVATE
+	bddisasm::bddisasm
+	bddisasm::bdshemu
+	spdlog::spdlog
+	shlwapi
+	kananlib
+)
+
+target_compile_definitions(kananlib-pdb-rtti-test PRIVATE
+	KANANLIB_USE_DIA_SDK
+)
+
+get_directory_property(CMKR_VS_STARTUP_PROJECT DIRECTORY ${PROJECT_SOURCE_DIR} DEFINITION VS_STARTUP_PROJECT)
+if(NOT CMKR_VS_STARTUP_PROJECT)
+	set_property(DIRECTORY ${PROJECT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT kananlib-pdb-rtti-test)
+endif()
+
+add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
+
+# Target: kananlib-emulation-test
+set(CMKR_TARGET kananlib-emulation-test)
+if(NOT TARGET kananlib)
+    add_subdirectory(kananlib)
+endif()
+
+set(kananlib-emulation-test_SOURCES
+	TestEmulation.cpp
+	cmake.toml
+)
+
+add_executable(kananlib-emulation-test)
+
+target_sources(kananlib-emulation-test PRIVATE ${kananlib-emulation-test_SOURCES})
+source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${kananlib-emulation-test_SOURCES})
+
+target_compile_features(kananlib-emulation-test PRIVATE
+	cxx_std_20
+)
+
+target_compile_options(kananlib-emulation-test PRIVATE
+	"/EHa"
+)
+
+target_include_directories(kananlib-emulation-test PRIVATE
+	include
+)
+
+target_link_libraries(kananlib-emulation-test PRIVATE
+	bddisasm::bddisasm
+	bddisasm::bdshemu
+	spdlog::spdlog
+	shlwapi
+	kananlib
+)
+
+get_directory_property(CMKR_VS_STARTUP_PROJECT DIRECTORY ${PROJECT_SOURCE_DIR} DEFINITION VS_STARTUP_PROJECT)
+if(NOT CMKR_VS_STARTUP_PROJECT)
+	set_property(DIRECTORY ${PROJECT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT kananlib-emulation-test)
+endif()
+
+add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
+
+# Target: kananlib-bug-regression-test
+set(CMKR_TARGET kananlib-bug-regression-test)
+if(NOT TARGET kananlib)
+    add_subdirectory(kananlib)
+endif()
+
+set(kananlib-bug-regression-test_SOURCES
+	TestBugRegression.cpp
+	cmake.toml
+)
+
+add_executable(kananlib-bug-regression-test)
+
+target_sources(kananlib-bug-regression-test PRIVATE ${kananlib-bug-regression-test_SOURCES})
+source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${kananlib-bug-regression-test_SOURCES})
+
+target_compile_features(kananlib-bug-regression-test PRIVATE
+	cxx_std_20
+)
+
+target_compile_options(kananlib-bug-regression-test PRIVATE
+	"/EHa"
+)
+
+target_include_directories(kananlib-bug-regression-test PRIVATE
+	include
+)
+
+target_link_libraries(kananlib-bug-regression-test PRIVATE
+	bddisasm::bddisasm
+	bddisasm::bdshemu
+	spdlog::spdlog
+	shlwapi
+	kananlib
+)
+
+get_directory_property(CMKR_VS_STARTUP_PROJECT DIRECTORY ${PROJECT_SOURCE_DIR} DEFINITION VS_STARTUP_PROJECT)
+if(NOT CMKR_VS_STARTUP_PROJECT)
+	set_property(DIRECTORY ${PROJECT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT kananlib-bug-regression-test)
+endif()
+
+add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
+
+# Target: kananlib-scan-bug-regression-test
+set(CMKR_TARGET kananlib-scan-bug-regression-test)
+if(NOT TARGET kananlib)
+    add_subdirectory(kananlib)
+endif()
+
+set(kananlib-scan-bug-regression-test_SOURCES
+	TestScanBugRegression.cpp
+	cmake.toml
+)
+
+add_executable(kananlib-scan-bug-regression-test)
+
+target_sources(kananlib-scan-bug-regression-test PRIVATE ${kananlib-scan-bug-regression-test_SOURCES})
+source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${kananlib-scan-bug-regression-test_SOURCES})
+
+target_compile_features(kananlib-scan-bug-regression-test PRIVATE
+	cxx_std_20
+)
+
+target_compile_options(kananlib-scan-bug-regression-test PRIVATE
+	"/EHa"
+)
+
+target_include_directories(kananlib-scan-bug-regression-test PRIVATE
+	include
+)
+
+target_link_libraries(kananlib-scan-bug-regression-test PRIVATE
+	bddisasm::bddisasm
+	bddisasm::bdshemu
+	spdlog::spdlog
+	shlwapi
+	kananlib
+)
+
+get_directory_property(CMKR_VS_STARTUP_PROJECT DIRECTORY ${PROJECT_SOURCE_DIR} DEFINITION VS_STARTUP_PROJECT)
+if(NOT CMKR_VS_STARTUP_PROJECT)
+	set_property(DIRECTORY ${PROJECT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT kananlib-scan-bug-regression-test)
+endif()
+
+add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
+
+# Target: kananlib-behavior-test
+set(CMKR_TARGET kananlib-behavior-test)
+if(NOT TARGET kananlib)
+    add_subdirectory(kananlib)
+endif()
+
+set(kananlib-behavior-test_SOURCES
+	TestBehavior.cpp
+	cmake.toml
+)
+
+add_executable(kananlib-behavior-test)
+
+target_sources(kananlib-behavior-test PRIVATE ${kananlib-behavior-test_SOURCES})
+source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${kananlib-behavior-test_SOURCES})
+
+target_compile_features(kananlib-behavior-test PRIVATE
+	cxx_std_20
+)
+
+target_compile_options(kananlib-behavior-test PRIVATE
+	"/EHa"
+)
+
+target_include_directories(kananlib-behavior-test PRIVATE
+	include
+)
+
+target_link_libraries(kananlib-behavior-test PRIVATE
+	bddisasm::bddisasm
+	bddisasm::bdshemu
+	spdlog::spdlog
+	shlwapi
+	kananlib
+)
+
+get_directory_property(CMKR_VS_STARTUP_PROJECT DIRECTORY ${PROJECT_SOURCE_DIR} DEFINITION VS_STARTUP_PROJECT)
+if(NOT CMKR_VS_STARTUP_PROJECT)
+	set_property(DIRECTORY ${PROJECT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT kananlib-behavior-test)
+endif()
+
+add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
+
+# Target: kananlib-scan-coverage-test
+set(CMKR_TARGET kananlib-scan-coverage-test)
+if(NOT TARGET kananlib)
+    add_subdirectory(kananlib)
+endif()
+
+set(kananlib-scan-coverage-test_SOURCES
+	TestScanCoverage.cpp
+	cmake.toml
+)
+
+add_executable(kananlib-scan-coverage-test)
+
+target_sources(kananlib-scan-coverage-test PRIVATE ${kananlib-scan-coverage-test_SOURCES})
+source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${kananlib-scan-coverage-test_SOURCES})
+
+target_compile_features(kananlib-scan-coverage-test PRIVATE
+	cxx_std_20
+)
+
+target_compile_options(kananlib-scan-coverage-test PRIVATE
+	"/EHa"
+)
+
+target_include_directories(kananlib-scan-coverage-test PRIVATE
+	include
+)
+
+target_link_libraries(kananlib-scan-coverage-test PRIVATE
+	bddisasm::bddisasm
+	bddisasm::bdshemu
+	spdlog::spdlog
+	shlwapi
+	kananlib
+)
+
+add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
+
+# Target: kananlib-module-coverage-test
+set(CMKR_TARGET kananlib-module-coverage-test)
+if(NOT TARGET kananlib)
+    add_subdirectory(kananlib)
+endif()
+
+set(kananlib-module-coverage-test_SOURCES
+	TestModuleCoverage.cpp
+	cmake.toml
+)
+
+add_executable(kananlib-module-coverage-test)
+
+target_sources(kananlib-module-coverage-test PRIVATE ${kananlib-module-coverage-test_SOURCES})
+source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${kananlib-module-coverage-test_SOURCES})
+
+target_compile_features(kananlib-module-coverage-test PRIVATE
+	cxx_std_20
+)
+
+target_compile_options(kananlib-module-coverage-test PRIVATE
+	"/EHa"
+)
+
+target_include_directories(kananlib-module-coverage-test PRIVATE
+	include
+)
+
+target_link_libraries(kananlib-module-coverage-test PRIVATE
+	bddisasm::bddisasm
+	bddisasm::bdshemu
+	spdlog::spdlog
+	shlwapi
+	kananlib
+)
+
+add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
+
+# Target: kananlib-rtti-coverage-test
+set(CMKR_TARGET kananlib-rtti-coverage-test)
+if(NOT TARGET kananlib)
+    add_subdirectory(kananlib)
+endif()
+
+set(kananlib-rtti-coverage-test_SOURCES
+	TestRTTICoverage.cpp
+	cmake.toml
+)
+
+add_executable(kananlib-rtti-coverage-test)
+
+target_sources(kananlib-rtti-coverage-test PRIVATE ${kananlib-rtti-coverage-test_SOURCES})
+source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${kananlib-rtti-coverage-test_SOURCES})
+
+target_compile_features(kananlib-rtti-coverage-test PRIVATE
+	cxx_std_20
+)
+
+target_compile_options(kananlib-rtti-coverage-test PRIVATE
+	"/EHa"
+)
+
+target_include_directories(kananlib-rtti-coverage-test PRIVATE
+	include
+)
+
+target_link_libraries(kananlib-rtti-coverage-test PRIVATE
+	bddisasm::bddisasm
+	bddisasm::bdshemu
+	spdlog::spdlog
+	shlwapi
+	kananlib
+)
+
+add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
+
+# Target: kananlib-misc-coverage-test
+set(CMKR_TARGET kananlib-misc-coverage-test)
+if(NOT TARGET kananlib)
+    add_subdirectory(kananlib)
+endif()
+
+set(kananlib-misc-coverage-test_SOURCES
+	TestMiscCoverage.cpp
+	cmake.toml
+)
+
+add_executable(kananlib-misc-coverage-test)
+
+target_sources(kananlib-misc-coverage-test PRIVATE ${kananlib-misc-coverage-test_SOURCES})
+source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${kananlib-misc-coverage-test_SOURCES})
+
+target_compile_features(kananlib-misc-coverage-test PRIVATE
+	cxx_std_20
+)
+
+target_compile_options(kananlib-misc-coverage-test PRIVATE
+	"/EHa"
+)
+
+target_include_directories(kananlib-misc-coverage-test PRIVATE
+	include
+)
+
+target_link_libraries(kananlib-misc-coverage-test PRIVATE
+	bddisasm::bddisasm
+	bddisasm::bdshemu
+	spdlog::spdlog
+	shlwapi
+	kananlib
+)
+
+add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
+
+# Target: kananlib-scan-bounds-test
+set(CMKR_TARGET kananlib-scan-bounds-test)
+if(NOT TARGET kananlib)
+    add_subdirectory(kananlib)
+endif()
+
+set(kananlib-scan-bounds-test_SOURCES
+	TestScanBounds.cpp
+	cmake.toml
+)
+
+add_executable(kananlib-scan-bounds-test)
+
+target_sources(kananlib-scan-bounds-test PRIVATE ${kananlib-scan-bounds-test_SOURCES})
+source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${kananlib-scan-bounds-test_SOURCES})
+
+target_compile_features(kananlib-scan-bounds-test PRIVATE
+	cxx_std_20
+)
+
+target_compile_options(kananlib-scan-bounds-test PRIVATE
+	"/EHa"
+)
+
+target_include_directories(kananlib-scan-bounds-test PRIVATE
+	include
+)
+
+target_link_libraries(kananlib-scan-bounds-test PRIVATE
+	bddisasm::bddisasm
+	bddisasm::bdshemu
+	spdlog::spdlog
+	shlwapi
+	kananlib
+)
+
+add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
+
+# Target: kananlib-scan-path-test
+set(CMKR_TARGET kananlib-scan-path-test)
+if(NOT TARGET kananlib)
+    add_subdirectory(kananlib)
+endif()
+
+set(kananlib-scan-path-test_SOURCES
+	TestScanPath.cpp
+	cmake.toml
+)
+
+add_executable(kananlib-scan-path-test)
+
+target_sources(kananlib-scan-path-test PRIVATE ${kananlib-scan-path-test_SOURCES})
+source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${kananlib-scan-path-test_SOURCES})
+
+target_compile_features(kananlib-scan-path-test PRIVATE
+	cxx_std_20
+)
+
+target_compile_options(kananlib-scan-path-test PRIVATE
+	"/EHa"
+)
+
+target_include_directories(kananlib-scan-path-test PRIVATE
+	include
+)
+
+target_link_libraries(kananlib-scan-path-test PRIVATE
+	bddisasm::bddisasm
+	bddisasm::bdshemu
+	spdlog::spdlog
+	shlwapi
+	kananlib
+)
+
+add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
+
+# Target: kananlib-scan-resolve-test
+set(CMKR_TARGET kananlib-scan-resolve-test)
+if(NOT TARGET kananlib)
+    add_subdirectory(kananlib)
+endif()
+
+set(kananlib-scan-resolve-test_SOURCES
+	TestScanResolve.cpp
+	cmake.toml
+)
+
+add_executable(kananlib-scan-resolve-test)
+
+target_sources(kananlib-scan-resolve-test PRIVATE ${kananlib-scan-resolve-test_SOURCES})
+source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${kananlib-scan-resolve-test_SOURCES})
+
+target_compile_features(kananlib-scan-resolve-test PRIVATE
+	cxx_std_20
+)
+
+target_compile_options(kananlib-scan-resolve-test PRIVATE
+	"/EHa"
+)
+
+target_include_directories(kananlib-scan-resolve-test PRIVATE
+	include
+)
+
+target_link_libraries(kananlib-scan-resolve-test PRIVATE
+	bddisasm::bddisasm
+	bddisasm::bdshemu
+	spdlog::spdlog
+	shlwapi
+	kananlib
+)
+
+add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
+
+# Target: kananlib-module-macho-test
+set(CMKR_TARGET kananlib-module-macho-test)
+if(NOT TARGET kananlib)
+    add_subdirectory(kananlib)
+endif()
+
+set(kananlib-module-macho-test_SOURCES
+	TestModuleMachO.cpp
+	cmake.toml
+)
+
+add_executable(kananlib-module-macho-test)
+
+target_sources(kananlib-module-macho-test PRIVATE ${kananlib-module-macho-test_SOURCES})
+source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${kananlib-module-macho-test_SOURCES})
+
+target_compile_features(kananlib-module-macho-test PRIVATE
+	cxx_std_20
+)
+
+target_compile_options(kananlib-module-macho-test PRIVATE
+	"/EHa"
+)
+
+target_include_directories(kananlib-module-macho-test PRIVATE
+	include
+)
+
+target_link_libraries(kananlib-module-macho-test PRIVATE
+	bddisasm::bddisasm
+	bddisasm::bdshemu
+	spdlog::spdlog
+	shlwapi
+	kananlib
+)
+
+add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
+
+# Target: kananlib-pdb-edge-test
+set(CMKR_TARGET kananlib-pdb-edge-test)
+if(NOT TARGET kananlib)
+    add_subdirectory(kananlib)
+endif()
+
+set(kananlib-pdb-edge-test_SOURCES
+	TestPDBEdge.cpp
+	cmake.toml
+)
+
+add_executable(kananlib-pdb-edge-test)
+
+target_sources(kananlib-pdb-edge-test PRIVATE ${kananlib-pdb-edge-test_SOURCES})
+source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${kananlib-pdb-edge-test_SOURCES})
+
+target_compile_features(kananlib-pdb-edge-test PRIVATE
+	cxx_std_20
+)
+
+target_compile_options(kananlib-pdb-edge-test PRIVATE
+	"/EHa"
+)
+
+target_compile_definitions(kananlib-pdb-edge-test PRIVATE
+	KANANLIB_USE_DIA_SDK
+)
+
+target_include_directories(kananlib-pdb-edge-test PRIVATE
+	include
+)
+
+target_link_libraries(kananlib-pdb-edge-test PRIVATE
+	bddisasm::bddisasm
+	bddisasm::bdshemu
+	spdlog::spdlog
+	shlwapi
+	kananlib
+)
+
+add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})

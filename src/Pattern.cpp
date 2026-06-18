@@ -29,10 +29,12 @@ namespace utility {
         : m_segments{}
     {
         // Split pattern string at '*' tokens to produce segments.
-        // Syntax: "AA BB * CC DD" or "AA BB *128 CC DD" (max gap in bytes).
+        // Syntax: "AA BB * CC DD" (default max gap) or "AA BB *[128] CC DD"
+        // (bracketed max gap in bytes). The gap size MUST be bracketed: a bare
+        // "*128" is treated as a plain '*' with the default gap.
         // Spaces around '*' are handled by splitting on whitespace tokens.
 
-        // Tokenize by spaces first so we can detect '*' and '*N' tokens.
+        // Tokenize by spaces first so we can detect '*' and '*[N]' tokens.
         std::vector<std::string> tokens;
         {
             size_t i = 0;

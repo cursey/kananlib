@@ -42,7 +42,9 @@ ThreadStates suspend_threads() {
                 SPDLOG_INFO("Suspending {}", (uint32_t)te.th32ThreadID);
 
                 state->thread_id = te.th32ThreadID;
-                state->suspended = SuspendThread(thread_handle) > 0;
+                // SuspendThread returns the previous suspend count, or
+                // (DWORD)-1 on failure. Success is "not -1", NOT "> 0".
+                state->suspended = SuspendThread(thread_handle) != (DWORD)-1;
                 states.emplace_back(std::move(state));
 
                 CloseHandle(thread_handle);
@@ -67,9 +69,13 @@ void resume_threads(const ThreadStates& states) {
     }
 }
 
-ThreadSuspender::ThreadSuspender()  {
-    auto ntdll = GetModuleHandleA("ntdll.dll");
-    
+namespace detail {
+// Suspends every other thread while holding the loader lock, so we never
+// freeze a thread in the middle of a DLL load (which would deadlock anything
+// that later touches the loader). Returns the captured states.
+static ThreadStates suspend_world_locked() {
+    auto ntdll = get_module("ntdll.dll");
+
     auto lock_loader = ntdll != nullptr ? (PFN_LdrLockLoaderLock)GetProcAddress(ntdll, "LdrLockLoaderLock") : nullptr;
     auto unlock_loader = ntdll != nullptr ? (PFN_LdrUnlockLoaderLock)GetProcAddress(ntdll, "LdrUnlockLoaderLock") : nullptr;
 
@@ -79,29 +85,48 @@ ThreadSuspender::ThreadSuspender()  {
         lock_loader(0, NULL, &loader_magic);
     }
 
-    detail::g_suspend_mutex.lock();
-    states = suspend_threads();
+    ThreadStates states = suspend_threads();
 
     if (lock_loader != nullptr && unlock_loader != nullptr) {
         unlock_loader(0, loader_magic);
         SPDLOG_INFO("Unlocked loader lock.");
     }
+
+    return states;
+}
+}
+
+ThreadSuspender::ThreadSuspender()  {
+    lock = std::unique_lock<std::mutex>(detail::g_suspend_mutex);
+    states = detail::suspend_world_locked();
 }
 
 ThreadSuspender::~ThreadSuspender() {
     resume_threads(states);
-    
-    if (!states.empty()) {
-        detail::g_suspend_mutex.unlock();
+    states.clear();
+    if (lock.owns_lock()) {
+        lock.unlock();
     }
+}
+
+void ThreadSuspender::suspend() {
+    // Acquire the global suspend lock if we don't already hold it (e.g. when
+    // suspend() is used standalone instead of via the constructor).
+    if (!lock.owns_lock()) {
+        lock = std::unique_lock<std::mutex>(detail::g_suspend_mutex);
+    }
+    // Resume any previously-captured batch first so repeated suspend() calls
+    // don't leak suspend counts (which would freeze those threads forever).
+    resume_threads(states);
+    states.clear();
+    states = detail::suspend_world_locked();
 }
 
 void ThreadSuspender::resume() {
     resume_threads(states);
-
-    if (!states.empty()) {
-        states.clear();
-        detail::g_suspend_mutex.unlock();
+    states.clear();
+    if (lock.owns_lock()) {
+        lock.unlock();
     }
 }
 }

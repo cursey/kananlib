@@ -48,21 +48,43 @@ namespace undocumented {
 
 namespace utility {
     optional<uintptr_t> scan(const string& module, const string& pattern) {
-        return scan(GetModuleHandleA(module.c_str()), pattern);
+        return scan(get_module(module), pattern);
     }
 
     optional<uintptr_t> scan(const wstring& module, const string& pattern) {
-        return scan(GetModuleHandleW(module.c_str()), pattern);
+        return scan(get_module(module), pattern);
     }
 
     optional<uintptr_t> scan(const string& module, uintptr_t start, const string& pattern) {
-        HMODULE mod = GetModuleHandleA(module.c_str());
-        return scan(start, (get_module_size(mod).value_or(0) - start + (uintptr_t)mod), pattern);
+        HMODULE mod = get_module(module);
+        if (!mod) {
+            return {};
+        }
+
+        const auto base = (uintptr_t)mod;
+        const auto module_size = get_module_size(mod).value_or(0);
+        const auto end = base + module_size;
+        if (module_size == 0 || end < base || start < base || start >= end) {
+            return {};
+        }
+
+        return scan(start, end - start, pattern);
     }
 
     optional<uintptr_t> scan(const wstring& module, uintptr_t start, const string& pattern) {
-        HMODULE mod = GetModuleHandleW(module.c_str());
-        return scan(start, (get_module_size(mod).value_or(0) - start + (uintptr_t)mod), pattern);
+        HMODULE mod = get_module(module);
+        if (!mod) {
+            return {};
+        }
+
+        const auto base = (uintptr_t)mod;
+        const auto module_size = get_module_size(mod).value_or(0);
+        const auto end = base + module_size;
+        if (module_size == 0 || end < base || start < base || start >= end) {
+            return {};
+        }
+
+        return scan(start, end - start, pattern);
     }
 
     optional<uintptr_t> scan(HMODULE module, const string& pattern) {
@@ -88,12 +110,19 @@ namespace utility {
             return {};
         }
 
+        // Guard against unsigned underflow in the loop bound `start - length`.
+        if (length > start) {
+            return {};
+        }
+
         Pattern p{ pattern };
 
-        for (uintptr_t i = start; i >= start - length; i--) {
+        const auto lo = start - length;
+        for (auto i = start; ; --i) {
             if (p.find(i, p.pattern_len()).has_value()) {
                 return i;
             }
+            if (i == lo) break;
         }
 
         return {};
@@ -172,10 +201,17 @@ namespace utility {
             return {};
         }
 
-        for (auto i = start; i >= start - length; i -= sizeof(uint8_t)) {
+        // Guard against unsigned underflow in the loop bound `start - length`.
+        if (length > start) {
+            return {};
+        }
+
+        const auto lo = start - length;
+        for (auto i = start; ; --i) {
             if (memcmp((void*)i, data, size) == 0) {
                 return i;
             }
+            if (i == lo) break;
         }
 
         return {};
@@ -318,13 +354,16 @@ namespace utility {
         const auto data = (uint8_t*)str.c_str();
         const auto size = str.size() + (zero_terminated ? 1 : 0);
         const auto module_size = get_module_size(module).value_or(0);
-        const auto end = (uintptr_t)module + module_size - (str.length() + 1);
+        if (module_size < size) {
+            return {};
+        }
+        const auto end = (uintptr_t)module + module_size - size;
 
         std::vector<uintptr_t> results{};
 
-        for (auto i = scan_data(module, data, size).value_or(0); 
-            i > 0 && i < end; 
-            i = scan_data(i + 1, end - i, data, size).value_or(0)) 
+        for (auto i = scan_data(module, data, size).value_or(0);
+            i > 0 && i <= end;
+            i = scan_data(i + 1, end - i, data, size).value_or(0))
         {
             results.push_back(i);
         }
@@ -342,13 +381,16 @@ namespace utility {
         const auto data = (uint8_t*)str.c_str();
         const auto size = (str.size() + (zero_terminated ? 1 : 0)) * sizeof(wchar_t);
         const auto module_size = get_module_size(module).value_or(0);
-        const auto end = (uintptr_t)module + module_size - (str.length() + 1) * sizeof(wchar_t);
+        if (module_size < size) {
+            return {};
+        }
+        const auto end = (uintptr_t)module + module_size - size;
 
         std::vector<uintptr_t> results{};
 
-        for (auto i = scan_data(module, data, size).value_or(0); 
-            i > 0 && i < end; 
-            i = scan_data(i + 1, end - i, data, size).value_or(0)) 
+        for (auto i = scan_data(module, data, size).value_or(0);
+            i > 0 && i <= end;
+            i = scan_data(i + 1, end - i, data, size).value_or(0))
         {
             results.push_back(i);
         }
@@ -365,13 +407,16 @@ namespace utility {
 
         const auto data = (uint8_t*)str.c_str();
         const auto size = str.size() + (zero_terminated ? 1 : 0);
-        const auto end = start + length - (str.length() + 1);
+        if (length < size || start > UINTPTR_MAX - length) {
+            return {};
+        }
+        const auto end = start + length - size;
 
         std::vector<uintptr_t> results{};
 
-        for (auto i = scan_data(start, length, data, size).value_or(0); 
-            i > 0 && i < end; 
-            i = scan_data(i + 1, end - i, data, size).value_or(0)) 
+        for (auto i = scan_data(start, length, data, size).value_or(0);
+            i > 0 && i <= end;
+            i = scan_data(i + 1, end - i, data, size).value_or(0))
         {
             results.push_back(i);
         }
@@ -388,13 +433,16 @@ namespace utility {
 
         const auto data = (uint8_t*)str.c_str();
         const auto size = (str.size() + (zero_terminated ? 1 : 0)) * sizeof(wchar_t);
-        const auto end = start + length - (str.length() + 1) * sizeof(wchar_t);
+        if (length < size || start > UINTPTR_MAX - length) {
+            return {};
+        }
+        const auto end = start + length - size;
 
         std::vector<uintptr_t> results{};
 
-        for (auto i = scan_data(start, length, data, size).value_or(0); 
-            i > 0 && i < end; 
-            i = scan_data(i + 1, end - i, data, size).value_or(0)) 
+        for (auto i = scan_data(start, length, data, size).value_or(0);
+            i > 0 && i <= end;
+            i = scan_data(i + 1, end - i, data, size).value_or(0))
         {
             results.push_back(i);
         }

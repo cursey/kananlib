@@ -31,11 +31,11 @@ namespace utility {
     std::shared_mutex g_module_ranges_mutex{};
 
     optional<size_t> get_module_size(const string& module) {
-        return get_module_size(GetModuleHandleA(module.c_str()));
+        return get_module_size(get_module(module));
     }
 
     optional<size_t> get_module_size(const wstring& module) {
-        return get_module_size(GetModuleHandleW(module.c_str()));
+        return get_module_size(get_module(module));
     }
 
     optional<size_t> get_module_size(HMODULE module) {
@@ -319,6 +319,9 @@ namespace utility {
     HMODULE get_module(const std::string& module) {
         return GetModuleHandleA(module.c_str());
     }
+    HMODULE get_module(const std::wstring& module) {
+        return GetModuleHandleW(module.c_str());
+    }
 
     std::mutex g_unlink_mutex{};
 
@@ -387,7 +390,7 @@ namespace utility {
         typedef NTSTATUS (WINAPI* PFN_LdrLockLoaderLock)(ULONG Flags, ULONG *State, ULONG_PTR *Cookie);
         typedef NTSTATUS (WINAPI* PFN_LdrUnlockLoaderLock)(ULONG Flags, ULONG_PTR Cookie);
 
-        const auto ntdll = GetModuleHandleW(L"ntdll.dll");
+        const auto ntdll = get_module(L"ntdll.dll");
         auto lock_loader = ntdll != nullptr ? (PFN_LdrLockLoaderLock)GetProcAddress(ntdll, "LdrLockLoaderLock") : nullptr;
         auto unlock_loader = ntdll != nullptr ? (PFN_LdrUnlockLoaderLock)GetProcAddress(ntdll, "LdrUnlockLoaderLock") : nullptr;
 
@@ -638,7 +641,7 @@ namespace utility {
     }
 
     LoaderLockGuard::LoaderLockGuard() {
-        const auto ntdll = GetModuleHandleW(L"ntdll.dll");
+        const auto ntdll = get_module(L"ntdll.dll");
         auto lock_loader = ntdll != nullptr ? (PFN_LdrLockLoaderLock)GetProcAddress(ntdll, "LdrLockLoaderLock") : nullptr;
         auto unlock_loader = ntdll != nullptr ? (PFN_LdrUnlockLoaderLock)GetProcAddress(ntdll, "LdrUnlockLoaderLock") : nullptr;
 
@@ -648,7 +651,7 @@ namespace utility {
     }
 
     LoaderLockGuard::~LoaderLockGuard() {
-        const auto ntdll = GetModuleHandleW(L"ntdll.dll");
+        const auto ntdll = get_module(L"ntdll.dll");
         auto lock_loader = ntdll != nullptr ? (PFN_LdrLockLoaderLock)GetProcAddress(ntdll, "LdrLockLoaderLock") : nullptr;
         auto unlock_loader = ntdll != nullptr ? (PFN_LdrUnlockLoaderLock)GetProcAddress(ntdll, "LdrUnlockLoaderLock") : nullptr;
 

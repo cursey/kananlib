@@ -56,27 +56,27 @@ public:
         return m_ptr;
     }
 
-    bool operator ==(bool val) {
+    bool operator ==(bool val) const {
         return ((m_ptr && val) || (!m_ptr && !val));
     }
 
-    bool operator !=(bool val) {
+    bool operator !=(bool val) const {
         return !(*this == val);
     }
 
-    bool operator ==(uintptr_t val) {
+    bool operator ==(uintptr_t val) const {
         return ((uintptr_t)m_ptr == val);
     }
 
-    bool operator !=(uintptr_t val) {
+    bool operator !=(uintptr_t val) const {
         return !(*this == val);
     }
 
-    bool operator ==(void* val) {
+    bool operator ==(void* val) const {
         return (m_ptr == val);
     }
 
-    bool operator !=(void* val) {
+    bool operator !=(void* val) const {
         return !(*this == val);
     }
 

@@ -1,3 +1,11 @@
 build/
 test/build
 test/kananlib
+test/build-cov
+
+# clang coverage profile dumps
+*.profraw
+*.profdata
+
+# Windows reserved-name phantom created by stray `> NUL` redirects
+NUL
