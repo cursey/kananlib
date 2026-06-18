@@ -16,8 +16,11 @@
 #include <chrono>
 #include <cstdint>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <thread>
+#include <vector>
 
 #include <Windows.h>
 #include <utility/Module.hpp>
@@ -125,6 +128,77 @@ struct ScanTestPage {
         if (data) VirtualFree(data, 0, MEM_RELEASE);
     }
 };
+
+#pragma pack(push, 1)
+struct TestMachoHeader64 {
+    uint32_t magic;
+    uint32_t cputype;
+    uint32_t cpusubtype;
+    uint32_t filetype;
+    uint32_t ncmds;
+    uint32_t sizeofcmds;
+    uint32_t flags;
+    uint32_t reserved;
+};
+
+struct TestMachoSegment64 {
+    uint32_t cmd;
+    uint32_t cmdsize;
+    char segname[16];
+    uint64_t vmaddr;
+    uint64_t vmsize;
+    uint64_t fileoff;
+    uint64_t filesize;
+    uint32_t maxprot;
+    uint32_t initprot;
+    uint32_t nsects;
+    uint32_t flags;
+};
+#pragma pack(pop)
+
+static std::filesystem::path temp_scan_macho_path(const char* name) {
+    auto dir = std::filesystem::temp_directory_path() / "kananlib_scan_bug_tests";
+    std::filesystem::create_directories(dir);
+    return dir / name;
+}
+
+static void write_scan_macho_tail_file(const std::filesystem::path& path, bool wide) {
+    constexpr size_t fileoff = 0x100;
+    constexpr size_t image_size = 0x1000;
+    std::vector<uint8_t> bytes(fileoff + image_size, 0);
+
+    TestMachoHeader64 header{};
+    header.magic = 0xFEEDFACF;
+    header.cputype = 0x01000007; // x86_64
+    header.cpusubtype = 3;
+    header.filetype = 2;
+    header.ncmds = 1;
+    header.sizeofcmds = sizeof(TestMachoSegment64);
+    std::memcpy(bytes.data(), &header, sizeof(header));
+
+    TestMachoSegment64 seg{};
+    seg.cmd = 0x19; // LC_SEGMENT_64
+    seg.cmdsize = sizeof(TestMachoSegment64);
+    std::memcpy(seg.segname, "__TEXT", 6);
+    seg.vmaddr = 0x1000;
+    seg.vmsize = image_size;
+    seg.fileoff = fileoff;
+    seg.filesize = image_size;
+    seg.maxprot = 1;
+    seg.initprot = 1;
+    std::memcpy(bytes.data() + sizeof(header), &seg, sizeof(seg));
+
+    if (wide) {
+        const std::wstring marker = L"abc";
+        std::memcpy(bytes.data() + fileoff + image_size - marker.size() * sizeof(wchar_t),
+            marker.data(), marker.size() * sizeof(wchar_t));
+    } else {
+        std::memcpy(bytes.data() + fileoff + image_size - 3, "abc", 3);
+    }
+
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    out.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+}
 
 // Verify scan_reverse works on normal (non-overflowing) inputs.
 int test_scan_reverse_basic() {
@@ -321,6 +395,31 @@ int test_scan_strings_wide_nonzero_terminated_exact_length_finds_tail() {
     return 0;
 }
 
+int test_scan_strings_hmodule_nonzero_terminated_exact_tail_finds_match() {
+    const auto path = temp_scan_macho_path("scan_tail_narrow.macho");
+    write_scan_macho_tail_file(path, false);
+    auto module = utility::map_view_of_macho(path.string());
+    TEST_ASSERT(module.has_value());
+
+    const auto results = utility::scan_strings(module->module, std::string{"abc"}, false);
+    TEST_ASSERT(results.size() == 1);
+    TEST_ASSERT(results[0] == (uintptr_t)module->module + 0x1000 - 3);
+    return 0;
+}
+
+int test_scan_strings_hmodule_wide_nonzero_terminated_exact_tail_finds_match() {
+    const auto path = temp_scan_macho_path("scan_tail_wide.macho");
+    write_scan_macho_tail_file(path, true);
+    auto module = utility::map_view_of_macho(path.string());
+    TEST_ASSERT(module.has_value());
+
+    const std::wstring marker = L"abc";
+    const auto results = utility::scan_strings(module->module, marker, false);
+    TEST_ASSERT(results.size() == 1);
+    TEST_ASSERT(results[0] == (uintptr_t)module->module + 0x1000 - marker.size() * sizeof(wchar_t));
+    return 0;
+}
+
 // ============================================================================
 // main
 // ============================================================================
@@ -340,6 +439,8 @@ int main() try {
     RUN_TEST(test_scan_strings_wstring_short_length_no_crash);
     RUN_TEST(test_scan_strings_nonzero_terminated_exact_length_finds_tail);
     RUN_TEST(test_scan_strings_wide_nonzero_terminated_exact_length_finds_tail);
+    RUN_TEST(test_scan_strings_hmodule_nonzero_terminated_exact_tail_finds_match);
+    RUN_TEST(test_scan_strings_hmodule_wide_nonzero_terminated_exact_tail_finds_match);
     RUN_TEST(test_scan_reverse_length_equals_start);
 
     return test_summary();
