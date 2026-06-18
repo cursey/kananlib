@@ -101,10 +101,12 @@ namespace utility {
 
         Pattern p{ pattern };
 
-        for (uintptr_t i = start; i >= start - length; i--) {
+        const auto lo = start - length;
+        for (auto i = start; ; --i) {
             if (p.find(i, p.pattern_len()).has_value()) {
                 return i;
             }
+            if (i == lo) break;
         }
 
         return {};
@@ -188,10 +190,12 @@ namespace utility {
             return {};
         }
 
-        for (auto i = start; i >= start - length; i -= sizeof(uint8_t)) {
+        const auto lo = start - length;
+        for (auto i = start; ; --i) {
             if (memcmp((void*)i, data, size) == 0) {
                 return i;
             }
+            if (i == lo) break;
         }
 
         return {};

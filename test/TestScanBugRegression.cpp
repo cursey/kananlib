@@ -12,9 +12,12 @@
 //         or wraps i past zero into UINTPTR_MAX (length == start). Fix: guard
 //         against length > start before entering the loop.
 
+#include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <iostream>
+#include <thread>
 
 #include <Windows.h>
 
@@ -156,7 +159,76 @@ int test_scan_reverse_not_found() {
     TEST_ASSERT(!result.has_value());
     return 0;
 }
+
 // ============================================================================
+// Bug 4: scan_reverse unsigned wraparound when length == start
+// ============================================================================
+//
+// When length == start, the loop bound `start - length` is 0.
+// The loop `for (uintptr_t i = start; i >= start - length; i--)` becomes
+// `for (uintptr_t i = start; i >= 0; i--)`. Since i is unsigned, `i >= 0`
+// is ALWAYS true. When i reaches 0 and decrements, it wraps to SIZE_MAX,
+// and the loop runs forever.
+//
+// The existing guard `if (length > start)` only catches length > start,
+// not length == start. The fix: use a loop structure that can't wrap.
+//
+// To trigger this without scanning billions of bytes, we VirtualAlloc a page
+// at a LOW preferred address (e.g. 0x10000) so that `length == start` means
+// scanning only ~64KB.
+//
+// We run the scan on a background thread with a timeout. If the scan hangs
+// (bug present), the test fails after the timeout instead of hanging forever.
+
+int test_scan_reverse_length_equals_start() {
+    constexpr uintptr_t LOW_ADDR = 0x10000;
+    auto* page = (uint8_t*)VirtualAlloc((void*)LOW_ADDR, 0x1000,
+        MEM_COMMIT | MEM_RESERVE | MEM_TOP_DOWN, PAGE_READWRITE);
+
+    if (!page) {
+        std::cout << "  SKIP: could not allocate at low address" << std::endl;
+        return 0;
+    }
+
+    // Fill with zeros — no match for "DE AD".
+    memset(page, 0, 0x1000);
+
+    // Run scan_reverse on a background thread with a 5-second timeout.
+    // With the bug, the loop wraps past 0 to SIZE_MAX and hangs.
+    // With the fix, it returns nullopt in ~100ms.
+    std::atomic<bool> done{false};
+    std::optional<uintptr_t> result;
+
+    std::thread worker([&] {
+        result = utility::scan_reverse((uintptr_t)page, (uintptr_t)page, "DE AD");
+        done.store(true, std::memory_order_release);
+    });
+
+    // Wait up to 5 seconds for the scan to complete.
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (!done.load(std::memory_order_acquire)) {
+        if (std::chrono::steady_clock::now() >= deadline) {
+            // Timed out — the scan is hanging (bug present).
+            VirtualFree(page, 0, MEM_RELEASE);
+            worker.detach(); // Leave the hung thread; can't safely cancel.
+            std::cout << "  BUG: scan_reverse(length==start) hung for >5s — "
+                         "unsigned wraparound in loop bound" << std::endl;
+            TEST_ASSERT(false && "scan_reverse hung (unsigned wraparound)");
+            return 1;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+
+    worker.join();
+
+    // Should return nullopt (pattern not found).
+    TEST_ASSERT(!result.has_value());
+
+    VirtualFree(page, 0, MEM_RELEASE);
+    return 0;
+}
+
+
 // Bug 3: scan_strings unsigned wrap in `end` calculation
 // ============================================================================
 
@@ -202,6 +274,7 @@ int main() try {
     RUN_TEST(test_scan_reverse_not_found);
     RUN_TEST(test_scan_strings_short_length_no_crash);
     RUN_TEST(test_scan_strings_wstring_short_length_no_crash);
+    RUN_TEST(test_scan_reverse_length_equals_start);
 
     return test_summary();
 } catch (const std::exception& e) {
