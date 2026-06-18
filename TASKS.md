@@ -2,8 +2,8 @@
 
 ## Repository
 - **Path:** `I:/Programming/projects/kananlib-fresh`
-- **Branch:** `main`
-- **Latest test commit:** `2e21db2` (4 total test commits)
+- **Branch:** `tests`
+- **Latest test commit:** `a346a05` (scan_reverse/scan_data_reverse wraparound fix)
 
 ## Build System
 - **OS:** Windows 10/11, MSVC (Visual Studio 17 2022), x64 only
@@ -26,8 +26,11 @@
   - `test/build/Release/kananlib-scan-test.exe`
   - `test/build/Release/kananlib-pdb-rtti-test.exe`
   - `test/build/Release/kananlib-emulation-test.exe`
+  - `test/build/Release/kananlib-bug-regression-test.exe`
+  - `test/build/Release/kananlib-scan-bug-regression-test.exe`
+  - `test/build/Release/kananlib-behavior-test.exe`
 - **Note:** LSP/clangd will show errors (wrong compiler version). MSVC builds cleanly.
-## What Was Done (8 commits)
+## What Was Done (8 coverage commits + bug fixes)
 
 ### Commit 1: `b6360e9` — Fix structural weaknesses in test suite
 - Created `test/TestHelpers.hpp` — shared test infrastructure:
@@ -121,6 +124,30 @@
 - Pre-existing in cmake.toml — target `kananlib-emulation-test` was already defined, fixed missing function header and return statement in TestEmulation.cpp
 - `ctest -C Release` runs all 11 test executables (11/11 pass)
 
+### Bug Fixes (branch `tests`) — found via API audit, demonstrated with failing tests, then fixed
+
+These follow the workflow in `test/TESTING.md`: write a failing regression test
+against the buggy code, cite the failure, then apply the minimal fix.
+
+- **Address const-correctness** (`include/utility/Address.hpp`): comparison operators
+  were non-const, so `const Address&` silently fell back to `operator uintptr_t()` and
+  changed `a == true` semantics. Fix: add `const` to all comparison operators.
+  Regression: `kananlib-bug-regression-test` (`test_address_const_operators`).
+- **Patch::disable() state corruption** (`src/Patch.cpp`): `disable()` on a
+  never-enabled patch called `patch()` with empty `m_original_bytes`, corrupting
+  `m_enabled`. Fix: early-return `true` when `!m_enabled`. Regression:
+  `kananlib-bug-regression-test` (3 patch tests).
+- **scan_reverse / scan_data_reverse unsigned wraparound** (`src/Scan.cpp`, commit
+  `a346a05`): loop bound `i >= start - length` never terminates when `length == start`
+  (`start - length == 0`, and `i >= 0` is always true for unsigned `i`, which wraps to
+  `SIZE_MAX` past 0). The pre-existing `length > start` guard did not cover the
+  `length == start` boundary. Fix: hoist `lo = start - length` and `break` after
+  processing `i == lo` — cannot wrap. Behavior is identical for all `length < start`
+  inputs (same address set, same descending order, same closest-to-start match).
+  Regression: `kananlib-scan-bug-regression-test` (`test_scan_reverse_length_equals_start`)
+  runs the scan on a worker thread with a 5s timeout so it FAILS (instead of hanging the
+  whole suite) if the wraparound regresses.
+
 ## Current Test Coverage
 
 | Executable | Tests | Modules Covered |
@@ -136,19 +163,23 @@
 | `kananlib-scan-test` | 8 | Scan (reverse, data, ptr, opcode, mnemonic, insn_size, calculate_absolute, decode_one) |
 | `kananlib-pdb-rtti-test` | 11 | PDB (symbol_name, symbol_map, enumerate_symbols, negative), RTTI (is_vtable, get_locator, get_type_info, derives_from, find_vtable_partial, find_vtable_regex, find_all_vtables) |
 | `kananlib-emulation-test` | 7 | Emulation (ShemuContext construction, NOP/mov/multi-instruction emulation, free function, single-step, HMODULE construction) |
-| **Total** | **145** | **20 of 20 modules** |
+| `kananlib-bug-regression-test` | 5 | Address (const operators), Patch (disable/toggle on never-enabled) — regression guards |
+| `kananlib-scan-bug-regression-test` | 8 | Scan (nonexistent-module, scan_reverse/scan_data_reverse basics + not-found, scan_strings short-length, scan_reverse length==start wraparound) |
+| `kananlib-behavior-test` | 13 | Scan (scan_strings HMODULE/uintptr), Thread (ThreadSuspender lifecycle/freeze/balance), RTTI (find_all_vtables) |
+| **Total** | **171** | **20 of 20 modules** |
 
 ## Gap Analysis — Untested and Partially Tested Modules
 
-### Modules with 0 direct test coverage (1 of 20)
+### Modules with 0 direct test coverage (Logging only — config glue, nothing to test)
 
 1. ~~**Emulation**~~ — **NOW TESTED** (7 tests, `kananlib-emulation-test`)
    - ShemuContext construction (VirtualAlloc'd buffer + HMODULE), NOP/mov/multi-instruction emulation, free function wrapper, single-step, bdshemu counting quirk documented
 
-2. **Thread** (`include/utility/Thread.hpp`, `src/Thread.cpp`)
-   - `suspend_threads()` / `resume_threads(ThreadStates)` capture ALL threads, including the calling one = deadlock
-   - `ThreadSuspender` default ctor is safe (doesn't suspend until `.suspend()`), but testing `.suspend()` has the same problem
-   - **Decision: skip unless child process isolation is added**
+2. ~~**Thread**~~ — **NOW TESTED** (6 tests in `kananlib-behavior-test`)
+   - `suspend_threads()` / `resume_threads(ThreadStates)` capture ALL threads except the
+     calling one; ThreadSuspender lifecycle (double-construct, suspend/resume, destruct
+     without double-unlock), actual thread freeze, suspended-flag accuracy, balanced
+     suspend/resume are all exercised against real worker threads.
 
 3. **Logging** (`include/utility/Logging.hpp`)
    - Just `#if __has_include` + `#define` wrappers around spdlog macros — nothing to test
@@ -162,6 +193,7 @@
 5. **Scan** (`include/utility/Scan.hpp`, `src/Scan.cpp`) — TESTED (8 new tests, `kananlib-scan-test`)
    - Tested: `scan`, `scan_string`, `scan_strings`, `scan_displacement_reference`, `scan_relative_reference`, `resolve_instruction`, `collect_basic_blocks`, `exhaustive_decode`
    - Now also tested (Phase 8): `scan_reverse`, `scan_data` (start/length + HMODULE), `scan_data_t`, `scan_ptr` (aligned + noalign), `scan_opcode`, `scan_mnemonic`, `get_insn_size`, `calculate_absolute`, `decode_one`
+   - Edge cases (regression-tested in `kananlib-scan-bug-regression-test`): `scan_reverse`/`scan_data_reverse` no longer hang on `length == start` (unsigned wraparound, fixed in `a346a05`); `scan(nonexistent_module, ...)` and `scan_strings` with short length return empty instead of scanning the address space.
    - Remaining untested:
      - `scan_disasm` — find instruction by pattern
      - `resolve_displacement` — resolve RIP-relative target (used internally, tested indirectly)
@@ -274,4 +306,6 @@ static void* g_hook_target = nullptr;  // must be global/static for VirtualProte
   - Single-step emulation (emulate() no-args, verify RIP advances per step)
   - HMODULE construction (kernel32.dll always loaded, verify Shellcode/Size)
   - Key quirk: bdshemu single-step executes 2 NOPs per step (off-by-one in counting); test verifies monotonic RIP/instruction-count progression instead of exact counts
-- [ ] Phase 11: Thread tests — SKIP (deadlock risk unless child process isolation is added)
+- [x] Phase 11: Thread tests — DONE (6 tests in `kananlib-behavior-test`, real worker threads, no deadlock because the suspender excludes the calling thread)
+- [x] Phase 12: Bug-hunt pass (branch `tests`) — Address const operators, Patch disable/toggle, scan_reverse/scan_data_reverse `length == start` wraparound (commit `a346a05`). Each demonstrated with a failing test before the fix; see `test/TESTING.md`.
+- [ ] Phase 13 (open): remaining Scan surface — `scan_disasm`, and a graceful-failure (not crash) audit of `scan_data_reverse` over unmapped memory (it uses raw `memcmp` with no SEH, unlike `Pattern::find_single`).

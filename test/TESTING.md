@@ -163,7 +163,7 @@ cmake --build build --config Release
 cd build && ctest -C Release --output-on-failure
 ```
 
-All 12 test executables should pass.
+All 14 test executables should pass.
 
 ## Checklist for a Bug Fix Commit
 
@@ -227,9 +227,9 @@ static bool exercise_const_address(const Address& a) {
 
 ### ctest output truncates without -V — tests appear missing
 
-Running `ctest -C Release` on this project produces output that only shows 9 of 12
-tests. The remaining 3 do run and pass, but their output is truncated in the summary.
-This is a display issue, not a test failure.
+Running `ctest -C Release` on this project produces a summary that only shows the
+first ~9 of 14 tests. The rest do run and pass, but their lines are truncated in the
+summary. This is a display issue, not a test failure.
 
 If you see fewer tests than expected, don't assume they failed. Check with:
 ```bash
@@ -298,3 +298,91 @@ When you've already applied a fix and need to demonstrate the bug existed:
 4. Build and run — the test should pass
 
 Don't skip step 2. The failure output is your proof.
+
+### A test for a HANG must time out and FAIL — never let it hang the suite
+
+The scan_reverse `length == start` bug is an infinite loop, not a wrong value. The
+naive test (`auto r = scan_reverse(start, start, pat); TEST_ASSERT(!r);`) does not
+"fail" against the buggy code — it **hangs forever**, taking the entire executable
+(and CI) down with it. That is useless as a regression guard.
+
+Run the suspect call on a worker thread and poll an `std::atomic<bool> done` flag with
+a deadline. If the deadline passes, the scan is hanging: print a clear message, detach
+the thread (you cannot safely cancel a hung native call), and `TEST_ASSERT(false)`.
+The test then FAILS in N seconds instead of hanging. See
+`TestScanBugRegression.cpp::test_scan_reverse_length_equals_start`.
+
+```cpp
+std::atomic<bool> done{false};
+std::optional<uintptr_t> result;
+std::thread worker([&]{ result = scan_reverse(p, p, "DE AD"); done.store(true); });
+auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+while (!done.load()) {
+    if (std::chrono::steady_clock::now() >= deadline) {
+        worker.detach();                         // leak the hung thread on purpose
+        TEST_ASSERT(false && "scan hung — regression");
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+}
+worker.join();
+```
+
+`TestHelpers.hpp` does not pull in `<thread>`, `<chrono>`, or `<atomic>` — add them.
+
+### Demonstrate the ACTUAL bug condition, not a lookalike that passes anyway
+
+The most common wasted effort in this codebase: writing a "boundary" test that looks
+like it exercises the bug but doesn't. For the reverse-scan wraparound, three separate
+attempts placed the pattern at a small offset inside a buffer and passed a small
+`length` — those passed against the buggy code because the wraparound only happens when
+`start - length == 0`, i.e. when `length` equals the **absolute address** `start`, not
+some offset. A test that passes against the unfixed code proves nothing.
+
+Before claiming a demonstration: revert the fix, run the test, and confirm it FAILS
+(or hangs, then times out and fails). If it passes without the fix, you are testing the
+wrong condition. This is step 2 in "Scoping test execution" — it is not optional.
+
+### `VirtualAlloc(addr, ..., MEM_TOP_DOWN, ...)` does not allocate AT `addr`
+
+To make `length == start` cheap (scan ~64KB instead of the whole 64-bit space) the
+reverse-scan test needs the buffer at a known LOW address. `MEM_TOP_DOWN` treats the
+address argument as a hint/maximum and normally hands back a high address. On this
+machine `VirtualAlloc((void*)0x10000, 0x1000, MEM_COMMIT|MEM_RESERVE|MEM_TOP_DOWN, ...)`
+does land at `0x10000`, but it is not guaranteed — the test `SKIP`s (returns 0) if the
+low allocation fails rather than scanning billions of bytes. Don't assume a specific
+address; check the returned pointer.
+
+### `scan_data_reverse` has no SEH — keep its tests inside mapped memory
+
+`Pattern::find_single` wraps its inner scan in `try { ... } catch(...)` to swallow
+access violations and skip to the next page, so `scan_reverse` survives scanning across
+unmapped memory (slowly). `scan_data_reverse` does NOT — it calls raw `memcmp((void*)i,
+...)` with no guard. A reverse-data scan that walks into an unmapped page throws an
+uncaught SEH/`Unknown exception` and aborts the test. Keep `scan_data_reverse` tests
+within a single committed page; do not reuse the `length == start` low-address trick for
+it. (This asymmetry is itself a candidate bug — see TASKS.md Phase 13.)
+
+### Auditing a load-bearing change: diff the original, then check every caller
+
+kananlib is consumed by other projects, so a "fix" to a public function in `Scan.cpp` /
+`Module.cpp` / `RTTI.cpp` can break downstream silently. Before trusting a change:
+1. `git show HEAD:src/Scan.cpp` (or `git diff`) and read the ORIGINAL loop/guards — do
+   not assume what was there. The reverse-scan guards (`start==0||length==0`,
+   `length>start`) were already present; only the loop body changed.
+2. Prove behavioral equivalence for the non-buggy domain: same address set, same
+   iteration order, same early-return point. The fix must be a strict superset
+   (identical where it worked, correct where it hung).
+3. `search` for every caller in `src/`, `include/`, `src/cli/`, `test/`. These scan
+   functions have no internal callers — they are public API, so existing behavioral
+   tests (`test_scan_reverse`, `*_basic`, `*_not_found`) are the contract you must not
+   break. Run them.
+
+### `git commit -m` with backticks or `$()` in the message spawns junk files
+
+Writing a rich multi-line commit message inline that contains backticks (`` `code` ``)
+or `$(...)` makes the shell try to execute them. The commit still lands (git already
+has the message), but you get `command not found` noise AND stray files named after the
+mangled fragments (e.g. files literally called `=` and `start`) appear untracked. After
+such a commit, check `git status` and delete the junk: `rm -f -- "=" "start"`. To avoid
+it entirely, keep inline commit messages free of backticks/`$()`, or write the message
+to a file and use `git commit -F`.
