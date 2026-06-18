@@ -40,3 +40,27 @@ jobs:
       - name: Run all tests
         run: ctest --test-dir ${{github.workspace}}/test/build -C ${{env.BUILD_TYPE}} --output-on-failure
 
+  # Non-blocking: clang-cl is a supported compiler but the clang/MSVC-STL pairing
+  # on the GitHub runner can drift independently of our code. Keep this lane
+  # informational (continue-on-error) until it proves stable, then promote it to
+  # a required check. Uses the VS-bundled clang-cl toolset (-T ClangCL) so the
+  # STL version matches the toolchain.
+  test-clang:
+    runs-on: windows-latest
+    needs: build
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Configure CMake (clang-cl)
+        run: cmake -S ${{github.workspace}}/test -B ${{github.workspace}}/test/build-clang -G "Visual Studio 18 2026" -A x64 -T ClangCL -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
+
+      - name: Build all tests (clang-cl)
+        run: cmake --build ${{github.workspace}}/test/build-clang --config ${{env.BUILD_TYPE}}
+
+      - name: Run all tests (clang-cl)
+        run: ctest --test-dir ${{github.workspace}}/test/build-clang -C ${{env.BUILD_TYPE}} --output-on-failure
