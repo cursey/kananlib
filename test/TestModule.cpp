@@ -397,11 +397,13 @@ int test_map_view_of_file_pe() {
 // ============================================================================
 
 int test_get_module_path_nullptr() {
-    // Requesting path of a null module should return nullopt.
+    // Windows treats NULL HMODULE as "current executable" for GetModuleFileName.
+    // Document that behavior explicitly so this test can fail if the wrapper changes.
     auto path = utility::get_module_path((HMODULE)nullptr);
-    // GetModuleFileNameW with null returns the exe path, so this
-    // actually returns the executable path. Verify it returns something.
-    // (This documents the Windows behavior, not a bug.)
+    auto exe_path = utility::get_module_path(utility::get_executable());
+    TEST_ASSERT(path.has_value());
+    TEST_ASSERT(exe_path.has_value());
+    TEST_ASSERT(*path == *exe_path);
     return 0;
 }
 

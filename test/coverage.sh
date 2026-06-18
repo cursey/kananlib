@@ -21,15 +21,55 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$HERE"
 
-# --- Locate the VS18 bundled LLVM toolchain (clang 20, matches VS18 STL) ---
-VS_LLVM="C:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/Llvm/x64/bin"
+# --- Locate the VS-bundled LLVM toolchain (clang 20+ matches newer MSVC STL) ---
+# Override when needed:
+#   VS_LLVM="D:/VS/BuildTools/VC/Tools/Llvm/x64/bin" ./coverage.sh
+find_vs_llvm() {
+    if [ -n "${VS_LLVM:-}" ]; then
+        echo "$VS_LLVM"
+        return
+    fi
+
+    # Prefer vswhere when present: handles Community/Enterprise/BuildTools and
+    # non-default install locations. Fall back to common default paths below.
+    local vswhere="C:/Program Files (x86)/Microsoft Visual Studio/Installer/vswhere.exe"
+    if [ -f "$vswhere" ]; then
+        local install
+        install="$("$vswhere" -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Llvm.Clang -property installationPath 2>/dev/null || true)"
+        if [ -n "$install" ]; then
+            install="${install//\\//}"
+            echo "$install/VC/Tools/Llvm/x64/bin"
+            return
+        fi
+    fi
+
+    local candidates=(
+        "C:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/Llvm/x64/bin"
+        "C:/Program Files/Microsoft Visual Studio/18/Enterprise/VC/Tools/Llvm/x64/bin"
+        "C:/Program Files/Microsoft Visual Studio/18/Professional/VC/Tools/Llvm/x64/bin"
+        "C:/Program Files/Microsoft Visual Studio/18/BuildTools/VC/Tools/Llvm/x64/bin"
+        "C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/Llvm/x64/bin"
+        "C:/Program Files/Microsoft Visual Studio/2022/Enterprise/VC/Tools/Llvm/x64/bin"
+        "C:/Program Files/Microsoft Visual Studio/2022/Professional/VC/Tools/Llvm/x64/bin"
+        "C:/Program Files/Microsoft Visual Studio/2022/BuildTools/VC/Tools/Llvm/x64/bin"
+    )
+    local dir
+    for dir in "${candidates[@]}"; do
+        if [ -f "$dir/clang-cl.exe" ] && [ -f "$dir/llvm-cov.exe" ]; then
+            echo "$dir"
+            return
+        fi
+    done
+}
+
+VS_LLVM="$(find_vs_llvm)"
 CLANG_CL="$VS_LLVM/clang-cl.exe"
 LLVM_RC="$VS_LLVM/llvm-rc.exe"
 PROFDATA="$VS_LLVM/llvm-profdata.exe"
 COV="$VS_LLVM/llvm-cov.exe"
 
 for tool in "$CLANG_CL" "$LLVM_RC" "$PROFDATA" "$COV"; do
-    [ -f "$tool" ] || { echo "ERROR: missing toolchain component: $tool" >&2; exit 1; }
+    [ -f "$tool" ] || { echo "ERROR: missing toolchain component: $tool (set VS_LLVM to the VS LLVM bin directory)" >&2; exit 1; }
 done
 
 BUILD="build-cov"

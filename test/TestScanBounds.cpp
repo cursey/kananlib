@@ -369,7 +369,8 @@ int test_find_virtual_function_start() {
     auto middle = base + 4;
     auto result = utility::find_virtual_function_start(middle);
     if (result.has_value()) {
-        TEST_ASSERT(*result <= middle || is_in_exe(*result));
+        TEST_ASSERT(*result <= middle);
+        TEST_ASSERT(is_in_exe(*result));
         std::printf("  find_virtual_function_start(%p): -> %p\n",
                (void*)middle, (void*)*result);
     } else {

@@ -136,22 +136,23 @@ int test_scan_ptr() {
 
     memset(page.data, 0, page.size);
 
-    // Store a pointer value at a known location (8-byte aligned)
+    // Store a pointer value at a known location (8-byte aligned). Use memcpy:
+    // the backing storage is uint8_t[], so writing through uintptr_t* would be
+    // type-punning UB (and alignment-sensitive if the offset changes).
     const uintptr_t test_ptr = 0xDEADBEEFCAFEBABE;
     constexpr size_t PTR_OFFSET = 0x100;
-    *(uintptr_t*)&page.data[PTR_OFFSET] = test_ptr;
-
+    memcpy(page.data + PTR_OFFSET, &test_ptr, sizeof(test_ptr));
     // scan_ptr (start/length overload) — scans for aligned pointer
     const auto result = utility::scan_ptr((uintptr_t)page.data, page.size, test_ptr);
     TEST_ASSERT(result.has_value());
     TEST_ASSERT(*result == (uintptr_t)&page.data[PTR_OFFSET]);
     std::cout << "  scan_ptr found at offset 0x" << std::hex << (*result - (uintptr_t)page.data) << std::dec << std::endl;
 
-    // scan_ptr_noalign — can find unaligned pointers
-    // Place pointer at unaligned offset
+    // scan_ptr_noalign — can find unaligned pointers.
+    // Place pointer bytes at an intentionally unaligned offset; memcpy avoids
+    // unaligned uintptr_t stores and strict-aliasing UB.
     constexpr size_t UNALIGNED_OFFSET = 0x83;
-    *(uintptr_t*)&page.data[UNALIGNED_OFFSET] = test_ptr;
-
+    memcpy(page.data + UNALIGNED_OFFSET, &test_ptr, sizeof(test_ptr));
     const auto noalign_result = utility::scan_ptr_noalign((uintptr_t)page.data, page.size, test_ptr);
     TEST_ASSERT(noalign_result.has_value());
     // Should find the first occurrence (either aligned or unaligned)

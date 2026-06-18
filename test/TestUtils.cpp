@@ -99,7 +99,6 @@ int test_pattern_find_multi_segment() {
 int test_pattern_find_no_match() {
     uint8_t data[] = {0x00, 0x11, 0x22, 0x33};
 
-    utility::Pattern("FF FF FF");
     utility::Pattern pat("FF FF FF");
     auto result = pat.find((uintptr_t)data, sizeof(data));
     TEST_ASSERT(!result.has_value());
