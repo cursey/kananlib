@@ -138,8 +138,15 @@ int test_scan_ptr_hmodule() {
         std::cout << "  scan_ptr(HMODULE): no absolute pointer found (may be RIP-relative)" << std::endl;
     }
 
-    // Negative: search for a pointer that should not exist
-    const auto no_result = utility::scan_ptr(exe, (uintptr_t)0xDEADBEEFCAFEBABE);
+    // Negative: search for a pointer that cannot be embedded as an 8-byte
+    // immediate in the image. A fixed sentinel like 0xDEADBEEFCAFEBABE is not
+    // safe — some compilers (clang-cl) emit that exact byte run somewhere in
+    // .rdata/.text. Derive a high-entropy value at runtime instead.
+    LARGE_INTEGER qpc{};
+    QueryPerformanceCounter(&qpc);
+    const uintptr_t runtime_unique =
+        (static_cast<uintptr_t>(qpc.QuadPart) * 0x9E3779B97F4A7C15ULL) ^ 0xA5A5A5A5A5A5A5A5ULL;
+    const auto no_result = utility::scan_ptr(exe, runtime_unique);
     TEST_ASSERT(!no_result.has_value());
 
     return 0;
@@ -198,9 +205,16 @@ int test_find_function_from_string_ref_not_found() {
     HMODULE exe = utility::get_executable();
     TEST_ASSERT(exe != nullptr);
 
-    // Build a string at runtime so it won't exist in the binary's .rdata
+    // Build a high-entropy string at runtime so the byte run cannot exist in the
+    // binary's .rdata (a predictable run like 128+i can collide with compiler tables).
+    LARGE_INTEGER qpc{};
+    QueryPerformanceCounter(&qpc);
+    uint64_t state = static_cast<uint64_t>(qpc.QuadPart) ^ 0xC0FFEE1234567ULL;
     std::string fake_str(64, '\0');
-    for (int i = 0; i < 64; ++i) fake_str[i] = static_cast<char>(128 + i);
+    for (int i = 0; i < 64; ++i) {
+        state = state * 6364136223846793005ULL + 1442695040888963407ULL; // LCG
+        fake_str[i] = static_cast<char>(0x80 | ((state >> 48) & 0x7F));
+    }
 
     const auto fn = utility::find_function_from_string_ref(
         exe, std::string_view{fake_str});
@@ -217,9 +231,18 @@ int test_find_function_from_string_ref_wide_not_found() {
     HMODULE exe = utility::get_executable();
     TEST_ASSERT(exe != nullptr);
 
-    // Build a wide string at runtime so it won't exist in the binary's .rdata
+    // Build a wide string from a high-entropy runtime value so the byte run
+    // cannot appear in the image. A predictable monotonic run (0x8000+i) is not
+    // safe — clang-cl emits a matching incrementing 16-bit table in .rdata.
+    LARGE_INTEGER qpc{};
+    QueryPerformanceCounter(&qpc);
+    uint64_t state = static_cast<uint64_t>(qpc.QuadPart) ^ 0x123456789ABCDEFULL;
     std::wstring fake_wstr(32, L'\0');
-    for (int i = 0; i < 32; ++i) fake_wstr[i] = static_cast<wchar_t>(0x8000 + i);
+    for (int i = 0; i < 32; ++i) {
+        state = state * 6364136223846793005ULL + 1442695040888963407ULL; // LCG
+        // Keep chars in the BMP private-use area, away from any real .rdata text.
+        fake_wstr[i] = static_cast<wchar_t>(0xE000 + (state >> 48) % 0x1800);
+    }
 
     const auto fn = utility::find_function_from_string_ref(
         exe, std::wstring_view{fake_wstr});
