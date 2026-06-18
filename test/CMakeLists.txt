@@ -677,3 +677,155 @@ if(NOT CMKR_VS_STARTUP_PROJECT)
 endif()
 
 add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
+
+# Target: kananlib-scan-coverage-test
+set(CMKR_TARGET kananlib-scan-coverage-test)
+if(NOT TARGET kananlib)
+    add_subdirectory(kananlib)
+endif()
+
+set(kananlib-scan-coverage-test_SOURCES
+	TestScanCoverage.cpp
+	cmake.toml
+)
+
+add_executable(kananlib-scan-coverage-test)
+
+target_sources(kananlib-scan-coverage-test PRIVATE ${kananlib-scan-coverage-test_SOURCES})
+source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${kananlib-scan-coverage-test_SOURCES})
+
+target_compile_features(kananlib-scan-coverage-test PRIVATE
+	cxx_std_20
+)
+
+target_compile_options(kananlib-scan-coverage-test PRIVATE
+	"/EHa"
+)
+
+target_include_directories(kananlib-scan-coverage-test PRIVATE
+	include
+)
+
+target_link_libraries(kananlib-scan-coverage-test PRIVATE
+	bddisasm::bddisasm
+	bddisasm::bdshemu
+	spdlog::spdlog
+	shlwapi
+	kananlib
+)
+
+add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
+
+# Target: kananlib-module-coverage-test
+set(CMKR_TARGET kananlib-module-coverage-test)
+if(NOT TARGET kananlib)
+    add_subdirectory(kananlib)
+endif()
+
+set(kananlib-module-coverage-test_SOURCES
+	TestModuleCoverage.cpp
+	cmake.toml
+)
+
+add_executable(kananlib-module-coverage-test)
+
+target_sources(kananlib-module-coverage-test PRIVATE ${kananlib-module-coverage-test_SOURCES})
+source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${kananlib-module-coverage-test_SOURCES})
+
+target_compile_features(kananlib-module-coverage-test PRIVATE
+	cxx_std_20
+)
+
+target_compile_options(kananlib-module-coverage-test PRIVATE
+	"/EHa"
+)
+
+target_include_directories(kananlib-module-coverage-test PRIVATE
+	include
+)
+
+target_link_libraries(kananlib-module-coverage-test PRIVATE
+	bddisasm::bddisasm
+	bddisasm::bdshemu
+	spdlog::spdlog
+	shlwapi
+	kananlib
+)
+
+add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
+
+# Target: kananlib-rtti-coverage-test
+set(CMKR_TARGET kananlib-rtti-coverage-test)
+if(NOT TARGET kananlib)
+    add_subdirectory(kananlib)
+endif()
+
+set(kananlib-rtti-coverage-test_SOURCES
+	TestRTTICoverage.cpp
+	cmake.toml
+)
+
+add_executable(kananlib-rtti-coverage-test)
+
+target_sources(kananlib-rtti-coverage-test PRIVATE ${kananlib-rtti-coverage-test_SOURCES})
+source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${kananlib-rtti-coverage-test_SOURCES})
+
+target_compile_features(kananlib-rtti-coverage-test PRIVATE
+	cxx_std_20
+)
+
+target_compile_options(kananlib-rtti-coverage-test PRIVATE
+	"/EHa"
+)
+
+target_include_directories(kananlib-rtti-coverage-test PRIVATE
+	include
+)
+
+target_link_libraries(kananlib-rtti-coverage-test PRIVATE
+	bddisasm::bddisasm
+	bddisasm::bdshemu
+	spdlog::spdlog
+	shlwapi
+	kananlib
+)
+
+add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
+
+# Target: kananlib-misc-coverage-test
+set(CMKR_TARGET kananlib-misc-coverage-test)
+if(NOT TARGET kananlib)
+    add_subdirectory(kananlib)
+endif()
+
+set(kananlib-misc-coverage-test_SOURCES
+	TestMiscCoverage.cpp
+	cmake.toml
+)
+
+add_executable(kananlib-misc-coverage-test)
+
+target_sources(kananlib-misc-coverage-test PRIVATE ${kananlib-misc-coverage-test_SOURCES})
+source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${kananlib-misc-coverage-test_SOURCES})
+
+target_compile_features(kananlib-misc-coverage-test PRIVATE
+	cxx_std_20
+)
+
+target_compile_options(kananlib-misc-coverage-test PRIVATE
+	"/EHa"
+)
+
+target_include_directories(kananlib-misc-coverage-test PRIVATE
+	include
+)
+
+target_link_libraries(kananlib-misc-coverage-test PRIVATE
+	bddisasm::bddisasm
+	bddisasm::bdshemu
+	spdlog::spdlog
+	shlwapi
+	kananlib
+)
+
+add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})

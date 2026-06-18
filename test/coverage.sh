@@ -47,6 +47,8 @@ EXES=(
     kananlib-module-test kananlib-scan-test kananlib-pdb-rtti-test
     kananlib-emulation-test kananlib-bug-regression-test
     kananlib-scan-bug-regression-test kananlib-behavior-test
+    kananlib-scan-coverage-test kananlib-module-coverage-test
+    kananlib-rtti-coverage-test kananlib-misc-coverage-test
 )
 
 # --- Configure (instrumented) ---

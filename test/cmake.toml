@@ -121,3 +121,23 @@ sources = ["TestScanBugRegression.cpp"]
 [target.kananlib-behavior-test]
 type = "kananlib-test-template"
 sources = ["TestBehavior.cpp"]
+
+# Coverage: additional Scan.cpp public API (scan_string, scan_ptr_noalign, references, displacement, disasm, exhaustive_decode)
+[target.kananlib-scan-coverage-test]
+type = "kananlib-test-template"
+sources = ["TestScanCoverage.cpp"]
+
+# Coverage: additional Module.cpp public API (ptr_from_rva, imagebase, partial module, mapping edges)
+[target.kananlib-module-coverage-test]
+type = "kananlib-test-template"
+sources = ["TestModuleCoverage.cpp"]
+
+# Coverage: additional RTTI.cpp public API (get_vtable, derives_from, find_vtables, demangling)
+[target.kananlib-rtti-coverage-test]
+type = "kananlib-test-template"
+sources = ["TestRTTICoverage.cpp"]
+
+# Coverage: additional Emulation.cpp public API and String.cpp format_string
+[target.kananlib-misc-coverage-test]
+type = "kananlib-test-template"
+sources = ["TestMiscCoverage.cpp"]
