@@ -20,7 +20,7 @@
 #include <thread>
 
 #include <Windows.h>
-
+#include <utility/Module.hpp>
 #include <utility/Scan.hpp>
 
 #include "TestHelpers.hpp"
@@ -71,6 +71,36 @@ int test_scan_nonexistent_module_wstring_does_not_crash() {
     if (rc == 1) {
         std::cout << "  BUG: scan(L\"nonexistent_module\", ...) crashed (SEH) — "
                      "unsigned length wrap on NULL module" << std::endl;
+    }
+    TEST_ASSERT(rc == 0);
+    return 0;
+}
+
+// Existing null-module guards are not enough: if the module exists but `start`
+// is outside [base, base+size), scan(module,start,...) must return nullopt
+// before computing `module_size - (start - base)`. The old code underflowed
+// when start < base and could scan into the module anyway.
+int test_scan_module_start_before_base_returns_nullopt() {
+    auto* mod = utility::get_module("kernel32.dll");
+    TEST_ASSERT(mod != nullptr);
+    const auto base = (uintptr_t)mod;
+
+    const int rc = try_scan_string("kernel32.dll", base - 1, "4D 5A"); // MZ at module base
+    if (rc == 2) {
+        std::cout << "  BUG: scan(module, base-1, \"MZ\") scanned into the module" << std::endl;
+    }
+    TEST_ASSERT(rc == 0);
+    return 0;
+}
+
+int test_scan_module_start_before_base_wstring_returns_nullopt() {
+    auto* mod = utility::get_module(L"kernel32.dll");
+    TEST_ASSERT(mod != nullptr);
+    const auto base = (uintptr_t)mod;
+
+    const int rc = try_scan_wstring(L"kernel32.dll", base - 1, "4D 5A");
+    if (rc == 2) {
+        std::cout << "  BUG: scan(wmodule, base-1, \"MZ\") scanned into the module" << std::endl;
     }
     TEST_ASSERT(rc == 0);
     return 0;
@@ -170,23 +200,23 @@ int test_scan_reverse_not_found() {
 // is ALWAYS true. When i reaches 0 and decrements, it wraps to SIZE_MAX,
 // and the loop runs forever.
 //
-// The existing guard `if (length > start)` only catches length > start,
-// not length == start. The fix: use a loop structure that can't wrap.
-//
 // To trigger this without scanning billions of bytes, we VirtualAlloc a page
 // at a LOW preferred address (e.g. 0x10000) so that `length == start` means
-// scanning only ~64KB.
+// scanning only ~64KB. The requested low address is a hint, not a guarantee,
+// so the test SKIPs unless VirtualAlloc returns the exact address.
 //
 // We run the scan on a background thread with a timeout. If the scan hangs
 // (bug present), the test fails after the timeout instead of hanging forever.
-
 int test_scan_reverse_length_equals_start() {
     constexpr uintptr_t LOW_ADDR = 0x10000;
     auto* page = (uint8_t*)VirtualAlloc((void*)LOW_ADDR, 0x1000,
         MEM_COMMIT | MEM_RESERVE | MEM_TOP_DOWN, PAGE_READWRITE);
 
-    if (!page) {
-        std::cout << "  SKIP: could not allocate at low address" << std::endl;
+    if (!page || (uintptr_t)page != LOW_ADDR) {
+        if (page) {
+            VirtualFree(page, 0, MEM_RELEASE);
+        }
+        std::cout << "  SKIP: could not allocate at requested low address" << std::endl;
         return 0;
     }
 
@@ -208,9 +238,11 @@ int test_scan_reverse_length_equals_start() {
     auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
     while (!done.load(std::memory_order_acquire)) {
         if (std::chrono::steady_clock::now() >= deadline) {
-            // Timed out — the scan is hanging (bug present).
-            VirtualFree(page, 0, MEM_RELEASE);
-            worker.detach(); // Leave the hung thread; can't safely cancel.
+            // Timed out — the scan is hanging (bug present). The worker may
+            // still be reading from `page`, so do NOT free it after detaching;
+            // leaking one page on failure is safer than a use-after-free in a
+            // runaway thread.
+            worker.detach();
             std::cout << "  BUG: scan_reverse(length==start) hung for >5s — "
                          "unsigned wraparound in loop bound" << std::endl;
             TEST_ASSERT(false && "scan_reverse hung (unsigned wraparound)");
@@ -259,6 +291,36 @@ int test_scan_strings_wstring_short_length_no_crash() {
     return 0;
 }
 
+// zero_terminated=false searches must use exactly str.size() bytes. The old
+// code still used str.length()+1 for the guard/end, causing false negatives
+// when the non-null-terminated string exactly fills the scan window.
+int test_scan_strings_nonzero_terminated_exact_length_finds_tail() {
+    ScanTestPage page;
+    TEST_ASSERT(page.data != nullptr);
+    std::memcpy(page.data + 0x80, "abc", 3);
+
+    const auto results = utility::scan_strings((uintptr_t)(page.data + 0x80), 3, std::string{"abc"}, false);
+    TEST_ASSERT(results.size() == 1);
+    TEST_ASSERT(results[0] == (uintptr_t)(page.data + 0x80));
+    return 0;
+}
+
+int test_scan_strings_wide_nonzero_terminated_exact_length_finds_tail() {
+    ScanTestPage page;
+    TEST_ASSERT(page.data != nullptr);
+    const std::wstring marker = L"abc";
+    std::memcpy(page.data + 0x80, marker.data(), marker.size() * sizeof(wchar_t));
+
+    const auto results = utility::scan_strings(
+        (uintptr_t)(page.data + 0x80),
+        marker.size() * sizeof(wchar_t),
+        marker,
+        false);
+    TEST_ASSERT(results.size() == 1);
+    TEST_ASSERT(results[0] == (uintptr_t)(page.data + 0x80));
+    return 0;
+}
+
 // ============================================================================
 // main
 // ============================================================================
@@ -269,11 +331,15 @@ int main() try {
 
     RUN_TEST(test_scan_nonexistent_module_does_not_crash);
     RUN_TEST(test_scan_nonexistent_module_wstring_does_not_crash);
+    RUN_TEST(test_scan_module_start_before_base_returns_nullopt);
+    RUN_TEST(test_scan_module_start_before_base_wstring_returns_nullopt);
     RUN_TEST(test_scan_reverse_basic);
     RUN_TEST(test_scan_data_reverse_basic);
     RUN_TEST(test_scan_reverse_not_found);
     RUN_TEST(test_scan_strings_short_length_no_crash);
     RUN_TEST(test_scan_strings_wstring_short_length_no_crash);
+    RUN_TEST(test_scan_strings_nonzero_terminated_exact_length_finds_tail);
+    RUN_TEST(test_scan_strings_wide_nonzero_terminated_exact_length_finds_tail);
     RUN_TEST(test_scan_reverse_length_equals_start);
 
     return test_summary();

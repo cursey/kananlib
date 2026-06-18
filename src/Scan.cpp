@@ -60,7 +60,15 @@ namespace utility {
         if (!mod) {
             return {};
         }
-        return scan(start, get_module_size(mod).value_or(0) - (start - (uintptr_t)mod), pattern);
+
+        const auto base = (uintptr_t)mod;
+        const auto module_size = get_module_size(mod).value_or(0);
+        const auto end = base + module_size;
+        if (module_size == 0 || end < base || start < base || start >= end) {
+            return {};
+        }
+
+        return scan(start, end - start, pattern);
     }
 
     optional<uintptr_t> scan(const wstring& module, uintptr_t start, const string& pattern) {
@@ -68,7 +76,15 @@ namespace utility {
         if (!mod) {
             return {};
         }
-        return scan(start, get_module_size(mod).value_or(0) - (start - (uintptr_t)mod), pattern);
+
+        const auto base = (uintptr_t)mod;
+        const auto module_size = get_module_size(mod).value_or(0);
+        const auto end = base + module_size;
+        if (module_size == 0 || end < base || start < base || start >= end) {
+            return {};
+        }
+
+        return scan(start, end - start, pattern);
     }
 
     optional<uintptr_t> scan(HMODULE module, const string& pattern) {
@@ -338,16 +354,16 @@ namespace utility {
         const auto data = (uint8_t*)str.c_str();
         const auto size = str.size() + (zero_terminated ? 1 : 0);
         const auto module_size = get_module_size(module).value_or(0);
-        if (module_size < str.length() + 1) {
+        if (module_size < size) {
             return {};
         }
-        const auto end = (uintptr_t)module + module_size - (str.length() + 1);
+        const auto end = (uintptr_t)module + module_size - size;
 
         std::vector<uintptr_t> results{};
 
-        for (auto i = scan_data(module, data, size).value_or(0); 
-            i > 0 && i < end; 
-            i = scan_data(i + 1, end - i, data, size).value_or(0)) 
+        for (auto i = scan_data(module, data, size).value_or(0);
+            i > 0 && i <= end;
+            i = scan_data(i + 1, end - i, data, size).value_or(0))
         {
             results.push_back(i);
         }
@@ -365,17 +381,16 @@ namespace utility {
         const auto data = (uint8_t*)str.c_str();
         const auto size = (str.size() + (zero_terminated ? 1 : 0)) * sizeof(wchar_t);
         const auto module_size = get_module_size(module).value_or(0);
-        const auto wsearch_len = (str.length() + 1) * sizeof(wchar_t);
-        if (module_size < wsearch_len) {
+        if (module_size < size) {
             return {};
         }
-        const auto end = (uintptr_t)module + module_size - wsearch_len;
+        const auto end = (uintptr_t)module + module_size - size;
 
         std::vector<uintptr_t> results{};
 
-        for (auto i = scan_data(module, data, size).value_or(0); 
-            i > 0 && i < end; 
-            i = scan_data(i + 1, end - i, data, size).value_or(0)) 
+        for (auto i = scan_data(module, data, size).value_or(0);
+            i > 0 && i <= end;
+            i = scan_data(i + 1, end - i, data, size).value_or(0))
         {
             results.push_back(i);
         }
@@ -392,16 +407,16 @@ namespace utility {
 
         const auto data = (uint8_t*)str.c_str();
         const auto size = str.size() + (zero_terminated ? 1 : 0);
-        if (length < str.length() + 1) {
+        if (length < size || start > UINTPTR_MAX - length) {
             return {};
         }
-        const auto end = start + length - (str.length() + 1);
+        const auto end = start + length - size;
 
         std::vector<uintptr_t> results{};
 
-        for (auto i = scan_data(start, length, data, size).value_or(0); 
-            i > 0 && i < end; 
-            i = scan_data(i + 1, end - i, data, size).value_or(0)) 
+        for (auto i = scan_data(start, length, data, size).value_or(0);
+            i > 0 && i <= end;
+            i = scan_data(i + 1, end - i, data, size).value_or(0))
         {
             results.push_back(i);
         }
@@ -418,17 +433,16 @@ namespace utility {
 
         const auto data = (uint8_t*)str.c_str();
         const auto size = (str.size() + (zero_terminated ? 1 : 0)) * sizeof(wchar_t);
-        const auto wsearch_len = (str.length() + 1) * sizeof(wchar_t);
-        if (length < wsearch_len) {
+        if (length < size || start > UINTPTR_MAX - length) {
             return {};
         }
-        const auto end = start + length - wsearch_len;
+        const auto end = start + length - size;
 
         std::vector<uintptr_t> results{};
 
-        for (auto i = scan_data(start, length, data, size).value_or(0); 
-            i > 0 && i < end; 
-            i = scan_data(i + 1, end - i, data, size).value_or(0)) 
+        for (auto i = scan_data(start, length, data, size).value_or(0);
+            i > 0 && i <= end;
+            i = scan_data(i + 1, end - i, data, size).value_or(0))
         {
             results.push_back(i);
         }
