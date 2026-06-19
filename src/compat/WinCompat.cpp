@@ -14,6 +14,8 @@
 #include <compat/shlwapi.h>
 #include <compat/tlhelp32.h>
 
+#include <utility/Logging.hpp>
+
 #include <atomic>
 #include <cstdio>
 #include <cstring>
@@ -138,7 +140,11 @@ int win_to_posix_prot(DWORD protect) {
         case PAGE_EXECUTE_READ:      return PROT_READ | PROT_EXEC;
         case PAGE_EXECUTE_READWRITE: return PROT_READ | PROT_WRITE | PROT_EXEC;
         case PAGE_EXECUTE_WRITECOPY: return PROT_READ | PROT_WRITE | PROT_EXEC;
-        default:                     return PROT_READ;
+        default:
+            // A page protection we do not model. Be loud and deny rather than
+            // silently guessing a permissive mapping.
+            SPDLOG_WARN("[compat] unsupported Win32 page protection 0x{:x}; treating as PAGE_NOACCESS", protect);
+            return PROT_NONE;
     }
 }
 
@@ -168,8 +174,11 @@ std::unordered_map<void*, size_t>& alloc_table() {
 extern "C" LPVOID VirtualAlloc(LPVOID address, SIZE_T size, DWORD /*allocation_type*/, DWORD protect) {
     if (size == 0) return nullptr;
 
-    int prot = win_to_posix_prot(protect);
-    if (prot == PROT_NONE) prot = PROT_READ | PROT_WRITE; // reservations need to be touchable later
+    // Honor the requested protection faithfully. PAGE_NOACCESS -> PROT_NONE
+    // reserves the range (a caller commits it later via VirtualProtect); we do
+    // NOT silently upgrade it to RW, which would make VirtualQuery / IsBadReadPtr
+    // report a reservation as accessible when Windows would not.
+    const int prot = win_to_posix_prot(protect);
 
     void* p = mmap(address, size, prot, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (p == MAP_FAILED) {

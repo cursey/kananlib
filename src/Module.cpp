@@ -834,6 +834,8 @@ namespace utility {
         if (delta != 0 && reloc_dir.VirtualAddress != 0 && reloc_dir.Size != 0) {
             size_t reloc_rva = reloc_dir.VirtualAddress;
             const size_t reloc_end = std::min(reloc_rva + (size_t)reloc_dir.Size, image_size);
+            uint32_t unsupported_relocs = 0;
+            uint32_t unsupported_reloc_type = 0;
 
             while (reloc_rva + sizeof(IMAGE_BASE_RELOCATION) <= reloc_end && reloc_rva + sizeof(IMAGE_BASE_RELOCATION) <= image_size) {
                 auto* block = (IMAGE_BASE_RELOCATION*)(mapped_base + reloc_rva);
@@ -855,10 +857,19 @@ namespace utility {
                             *(uint32_t*)(mapped_base + target) += (uint32_t)delta;
                         }
                     }
-                    // IMAGE_REL_BASED_ABSOLUTE (padding) and unsupported types: skip.
+                    else if (type != IMAGE_REL_BASED_ABSOLUTE) {
+                        // ABSOLUTE (0) is padding and intentionally skipped; any
+                        // other type is one this loader does not apply.
+                        ++unsupported_relocs;
+                        unsupported_reloc_type = type;
+                    }
                 }
 
                 reloc_rva += block->SizeOfBlock;
+            }
+
+            if (unsupported_relocs > 0) {
+                SPDLOG_WARN("[PE] Skipped {} base relocation(s) of unsupported type {}; the mapped image may be incompletely relocated", unsupported_relocs, unsupported_reloc_type);
             }
         }
 

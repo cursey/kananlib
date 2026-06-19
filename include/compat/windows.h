@@ -3,6 +3,13 @@
 // Declares the Win32 entry points kananlib actually calls; implementations live
 // in src/compat/WinCompat.cpp. Everything is C++-linkage (the library is C++).
 //
+// SCOPE POLICY: this shim implements ONLY the Win32 surface needed for
+// file-mapped binary analysis. Do not grow it casually. Live-process / OS
+// features (loader walk, real thread suspension, registry, input, PDB/DIA) stay
+// deliberately unsupported -- they return failure or warn, never fake success.
+// Anything that cannot be emulated faithfully should be made loud (SPDLOG_WARN
+// or an honest failure), not papered over with a permissive guess.
+//
 // Note: kananlib sources include this as lowercase <windows.h>. On a
 // case-sensitive filesystem there is intentionally no <Windows.h>; the few
 // sources that used the capital spelling were normalized to lowercase so a
