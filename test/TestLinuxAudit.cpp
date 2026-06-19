@@ -87,6 +87,26 @@ int test_virtual_protect_size_zero_unaligned() {
     return 0;
 }
 
+// VirtualProtect must reject address+size overflow instead of wrapping the span
+// math and mprotect-ing an unintended region. (The page must stay untouched.)
+int test_virtual_protect_overflow_size_refused() {
+    void* p = VirtualAlloc(nullptr, 4096, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    TEST_ASSERT(p != nullptr);
+    *(volatile uint8_t*)p = 0x5A;
+
+    // Choose size so (uintptr_t)p + size overflows past UINTPTR_MAX.
+    const SIZE_T overflow_size = (SIZE_T)(0ULL - (uintptr_t)p + 4096);
+    DWORD old_prot = 0;
+    TEST_ASSERT(VirtualProtect(p, overflow_size, PAGE_NOACCESS, &old_prot) == FALSE);
+
+    // The page must remain writable -- no unintended mprotect occurred.
+    *(volatile uint8_t*)p = 0xA5;
+    TEST_ASSERT(*(volatile uint8_t*)p == 0xA5);
+
+    VirtualFree(p, 0, MEM_RELEASE);
+    return 0;
+}
+
 // ---------------------------------------------------------------------------
 // Bug 4: VirtualQuery on MEM_FREE region should report Protect=0, not
 // PAGE_NOACCESS (0x01).
@@ -523,6 +543,7 @@ int main() try {
     // Bug 1: VirtualProtect size=0
     RUN_TEST(test_virtual_protect_size_zero);
     RUN_TEST(test_virtual_protect_size_zero_unaligned);
+    RUN_TEST(test_virtual_protect_overflow_size_refused);
 
     // Bug 4: VirtualQuery MEM_FREE Protect
     RUN_TEST(test_virtual_query_free_protect);

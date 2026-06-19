@@ -253,8 +253,18 @@ extern "C" BOOL VirtualProtect(LPVOID address, SIZE_T size, DWORD new_protect, P
     }
     const uintptr_t addr = (uintptr_t)address;
     const int ps = page_size();
+
+    // Guard the address arithmetic: if addr + size overflows, the span/rounding
+    // math below would wrap and mprotect an unintended region. Reject it.
+    if (size > UINTPTR_MAX - addr) {
+        SPDLOG_WARN("[compat] VirtualProtect: address 0x{:x} + size 0x{:x} overflows", addr, (size_t)size);
+        return FALSE;
+    }
+
     const uintptr_t aligned = addr & ~((uintptr_t)ps - 1);
     const size_t span = (addr + size) - aligned;
+    // span <= size + (ps - 1) after the overflow guard above, so the rounding
+    // add cannot overflow for any size that passed the guard.
     const size_t rounded = (span + ps - 1) & ~((size_t)ps - 1);
 
     if (old_protect != nullptr) {

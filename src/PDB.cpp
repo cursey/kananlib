@@ -1,7 +1,9 @@
 // PDB symbol resolution depends on the Windows DIA SDK, urlmon symbol-server
 // downloads and Win32 path/file APIs, none of which are available off Windows.
-// The whole translation unit is therefore Windows-only; on other platforms it
-// compiles to nothing and the pdb:: API is simply unavailable.
+// The full implementation below is therefore Windows-only; on other platforms
+// the TU instead provides no-op stubs (see the #else branch) so the utility::pdb
+// API still links and returns empty/nullopt + warns, rather than leaving
+// undefined references for non-Windows consumers.
 #if defined(_WIN32)
 #include <unordered_map>
 #include <filesystem>
