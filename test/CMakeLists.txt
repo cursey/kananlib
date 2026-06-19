@@ -812,6 +812,61 @@ if (CMKR_TARGET STREQUAL "kananlib-linux-pe-test" OR CMKR_TARGET STREQUAL "kanan
 endif()
 add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
 
+# Target: kananlib-scan-stress-test
+set(CMKR_TARGET kananlib-scan-stress-test)
+if(NOT TARGET kananlib)
+    add_subdirectory(kananlib)
+endif()
+
+target_compile_definitions(kananlib PRIVATE KANANLIB_TESTING)
+target_compile_definitions(kananlib-nolog PRIVATE KANANLIB_TESTING)
+
+set(kananlib-scan-stress-test_SOURCES
+	TestScanStress.cpp
+	cmake.toml
+)
+
+add_executable(kananlib-scan-stress-test)
+
+target_sources(kananlib-scan-stress-test PRIVATE ${kananlib-scan-stress-test_SOURCES})
+source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${kananlib-scan-stress-test_SOURCES})
+
+target_compile_features(kananlib-scan-stress-test PRIVATE
+	cxx_std_20
+)
+
+target_include_directories(kananlib-scan-stress-test PRIVATE
+	include
+)
+
+target_link_libraries(kananlib-scan-stress-test PRIVATE
+	bddisasm::bddisasm
+	bddisasm::bdshemu
+	spdlog::spdlog
+	kananlib
+)
+
+target_compile_definitions(kananlib-scan-stress-test PRIVATE
+	KANANLIB_TESTING
+)
+
+get_directory_property(CMKR_VS_STARTUP_PROJECT DIRECTORY ${PROJECT_SOURCE_DIR} DEFINITION VS_STARTUP_PROJECT)
+if(NOT CMKR_VS_STARTUP_PROJECT)
+	set_property(DIRECTORY ${PROJECT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT kananlib-scan-stress-test)
+endif()
+
+if (CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+    target_compile_options(${CMKR_TARGET} PRIVATE /EHa)
+endif()
+if (WIN32)
+    target_link_libraries(${CMKR_TARGET} PRIVATE shlwapi)
+endif()
+# The PE-mapping tests load committed samples from the source tree.
+if (CMKR_TARGET STREQUAL "kananlib-linux-pe-test" OR CMKR_TARGET STREQUAL "kananlib-linux-audit-test")
+    target_compile_definitions(${CMKR_TARGET} PRIVATE KANANLIB_SAMPLE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/samples)
+endif()
+add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
+
 # Target: kananlib-module-coverage-test
 if(WIN32) # windows-only
 	set(CMKR_TARGET kananlib-module-coverage-test)

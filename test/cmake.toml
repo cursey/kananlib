@@ -155,6 +155,18 @@ sources = ["TestBehavior.cpp"]
 type = "kananlib-test-template"
 sources = ["TestScanCoverage.cpp"]
 
+# Stress: scan_relative_reference dispatcher over a 1GB buffer plus scalar and
+# byte-by-byte agreement checks. Cross-platform; this used to be hidden inside
+# the Windows-only kananlib-test target.
+[target.kananlib-scan-stress-test]
+type = "kananlib-test-template"
+sources = ["TestScanStress.cpp"]
+compile-definitions = ["KANANLIB_TESTING"]
+cmake-before="""
+target_compile_definitions(kananlib PRIVATE KANANLIB_TESTING)
+target_compile_definitions(kananlib-nolog PRIVATE KANANLIB_TESTING)
+"""
+
 # Coverage: additional Module.cpp public API (ptr_from_rva, imagebase, partial module, mapping edges)
 [target.kananlib-module-coverage-test]
 type = "kananlib-test-template"

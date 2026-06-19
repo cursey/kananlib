@@ -16,6 +16,22 @@
 #include <utility/Logging.hpp>
 #include <utility/Benchmark.hpp>
 
+
+#if defined(KANANLIB_TESTING)
+namespace utility::testing {
+    enum class RelativeReferenceScanImplementation {
+        None,
+        ScalarByteByByte,
+        Scalar,
+        Avx2,
+    };
+
+    void reset_relative_reference_scan_implementation();
+    RelativeReferenceScanImplementation last_relative_reference_scan_implementation();
+    bool relative_reference_avx2_available_for_dispatch();
+}
+#endif
+
 namespace utility {
     std::optional<uintptr_t> scan(const std::string& module, const std::string& pattern);
     std::optional<uintptr_t> scan(const std::wstring& module, const std::string& pattern);

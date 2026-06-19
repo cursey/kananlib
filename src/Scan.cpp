@@ -48,6 +48,29 @@ namespace undocumented {
 }
 
 namespace utility {
+#if defined(KANANLIB_TESTING)
+    namespace testing {
+        static RelativeReferenceScanImplementation g_last_relative_reference_scan_impl =
+            RelativeReferenceScanImplementation::None;
+
+        void reset_relative_reference_scan_implementation() {
+            g_last_relative_reference_scan_impl = RelativeReferenceScanImplementation::None;
+        }
+
+        RelativeReferenceScanImplementation last_relative_reference_scan_implementation() {
+            return g_last_relative_reference_scan_impl;
+        }
+
+        bool relative_reference_avx2_available_for_dispatch() {
+            return kananlib::utility::thirdparty::InstructionSet::AVX2();
+        }
+
+        static void record_relative_reference_scan_implementation(RelativeReferenceScanImplementation impl) {
+            g_last_relative_reference_scan_impl = impl;
+        }
+    }
+#endif
+
     optional<uintptr_t> scan(const string& module, const string& pattern) {
         return scan(get_module(module), pattern);
     }
@@ -536,6 +559,9 @@ namespace utility {
     // original, really stinky implementation
     std::optional<uintptr_t> scan_relative_reference_scalar_byte_by_byte(uintptr_t start, size_t length, uintptr_t ptr, std::function<bool(uintptr_t)> filter) {
         KANANLIB_BENCH();
+#if defined(KANANLIB_TESTING)
+        testing::record_relative_reference_scan_implementation(testing::RelativeReferenceScanImplementation::ScalarByteByByte);
+#endif
 
         const auto end = start + length;
 
@@ -628,6 +654,9 @@ namespace utility {
 
     std::optional<uintptr_t> scan_relative_reference_scalar(uintptr_t start, size_t length, uintptr_t ptr, std::function<bool(uintptr_t)> filter) {
         KANANLIB_BENCH();
+#if defined(KANANLIB_TESTING)
+        testing::record_relative_reference_scan_implementation(testing::RelativeReferenceScanImplementation::Scalar);
+#endif
         
         const auto result = scan_relative_reference_scalar_impl(start, length, ptr, filter);
 
@@ -713,6 +742,9 @@ namespace utility {
     __attribute__((target("avx,avx2,bmi")))
     #endif
     std::optional<uintptr_t> scan_relative_reference_avx2(uintptr_t start, size_t length, uintptr_t ptr, std::function<bool(uintptr_t)>& filter) {
+#if defined(KANANLIB_TESTING)
+        testing::record_relative_reference_scan_implementation(testing::RelativeReferenceScanImplementation::Avx2);
+#endif
         // if ptr - start > 2GB, fallback to scalar
         const int64_t dist = (int64_t)((intptr_t)ptr - (intptr_t)start);
         if (dist > INT32_MAX || dist < INT32_MIN) {
@@ -914,6 +946,9 @@ namespace utility {
         KANANLIB_BENCH();
 
         if (!kananlib::utility::thirdparty::InstructionSet::AVX2() || length <= sizeof(__m256i) * 4) {
+#if defined(KANANLIB_TESTING)
+            testing::record_relative_reference_scan_implementation(testing::RelativeReferenceScanImplementation::Scalar);
+#endif
             return scan_relative_reference_scalar(start, length, ptr, filter);
         }
 
