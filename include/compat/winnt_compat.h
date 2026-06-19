@@ -5,9 +5,10 @@
 // clang. Only pulled in when the platform's real headers are absent; on Windows
 // the compat include directory is not on the search path.
 //
-// Layouts here mirror the x86-64 Windows ABI exactly because the library reads
-// real PE images byte-for-byte. Integer widths use fixed-size types so the
-// structures are correct under LP64 (where `long` is 64-bit, unlike Windows).
+// Layouts here mirror Windows PE/COFF structures byte-for-byte because the
+// library reads real images directly. Integer widths use fixed-size types so
+// the structures are correct under LP64 (where `long` is 64-bit, unlike
+// Windows).
 #pragma once
 
 #if defined(_WIN32)
@@ -83,7 +84,7 @@ typedef HKEY*      PHKEY;
 typedef void (*FARPROC)(void);
 typedef void (*PROC)(void);
 
-// Calling-convention / annotation macros are no-ops on the SysV x86-64 ABI.
+// Calling-convention / annotation macros are no-ops for the supported non-Windows build.
 #ifndef WINAPI
 #define WINAPI
 #endif
@@ -123,7 +124,7 @@ typedef void (*PROC)(void);
 #endif
 
 // ---------------------------------------------------------------------------
-// PE / COFF structures (x86-64). Field order and widths match winnt.h.
+// PE / COFF structures. Field order and widths match winnt.h.
 // ---------------------------------------------------------------------------
 #pragma pack(push, 1)
 typedef struct _IMAGE_DOS_HEADER {
@@ -166,6 +167,40 @@ typedef struct _IMAGE_DATA_DIRECTORY {
 
 #define IMAGE_NUMBEROF_DIRECTORY_ENTRIES 16
 
+typedef struct _IMAGE_OPTIONAL_HEADER32 {
+    WORD      Magic;
+    BYTE      MajorLinkerVersion;
+    BYTE      MinorLinkerVersion;
+    DWORD     SizeOfCode;
+    DWORD     SizeOfInitializedData;
+    DWORD     SizeOfUninitializedData;
+    DWORD     AddressOfEntryPoint;
+    DWORD     BaseOfCode;
+    DWORD     BaseOfData;
+    DWORD     ImageBase;
+    DWORD     SectionAlignment;
+    DWORD     FileAlignment;
+    WORD      MajorOperatingSystemVersion;
+    WORD      MinorOperatingSystemVersion;
+    WORD      MajorImageVersion;
+    WORD      MinorImageVersion;
+    WORD      MajorSubsystemVersion;
+    WORD      MinorSubsystemVersion;
+    DWORD     Win32VersionValue;
+    DWORD     SizeOfImage;
+    DWORD     SizeOfHeaders;
+    DWORD     CheckSum;
+    WORD      Subsystem;
+    WORD      DllCharacteristics;
+    DWORD     SizeOfStackReserve;
+    DWORD     SizeOfStackCommit;
+    DWORD     SizeOfHeapReserve;
+    DWORD     SizeOfHeapCommit;
+    DWORD     LoaderFlags;
+    DWORD     NumberOfRvaAndSizes;
+    IMAGE_DATA_DIRECTORY DataDirectory[IMAGE_NUMBEROF_DIRECTORY_ENTRIES];
+} IMAGE_OPTIONAL_HEADER32, *PIMAGE_OPTIONAL_HEADER32;
+
 typedef struct _IMAGE_OPTIONAL_HEADER64 {
     WORD      Magic;
     BYTE      MajorLinkerVersion;
@@ -205,7 +240,14 @@ typedef struct _IMAGE_NT_HEADERS64 {
     IMAGE_OPTIONAL_HEADER64 OptionalHeader;
 } IMAGE_NT_HEADERS64, *PIMAGE_NT_HEADERS64;
 
-// kananlib is x86-64 only, so the unsuffixed names map to the 64-bit variants.
+typedef struct _IMAGE_NT_HEADERS32 {
+    DWORD Signature;
+    IMAGE_FILE_HEADER FileHeader;
+    IMAGE_OPTIONAL_HEADER32 OptionalHeader;
+} IMAGE_NT_HEADERS32, *PIMAGE_NT_HEADERS32;
+
+// The existing kananlib API expects unsuffixed PE headers to match the dominant
+// Windows analysis path, which is PE32+ here. Use the 32-suffixed types for PE32.
 typedef IMAGE_OPTIONAL_HEADER64 IMAGE_OPTIONAL_HEADER;
 typedef PIMAGE_OPTIONAL_HEADER64 PIMAGE_OPTIONAL_HEADER;
 typedef IMAGE_NT_HEADERS64 IMAGE_NT_HEADERS;
@@ -284,6 +326,9 @@ typedef PIMAGE_RUNTIME_FUNCTION_ENTRY PRUNTIME_FUNCTION;
 // PE signatures / magics.
 #define IMAGE_DOS_SIGNATURE              0x5A4D      // MZ
 #define IMAGE_NT_SIGNATURE               0x00004550  // PE00
+#define IMAGE_FILE_MACHINE_I386         0x014c
+#define IMAGE_FILE_MACHINE_AMD64        0x8664
+
 #define IMAGE_NT_OPTIONAL_HDR32_MAGIC    0x10b
 #define IMAGE_NT_OPTIONAL_HDR64_MAGIC    0x20b
 
@@ -307,7 +352,7 @@ typedef PIMAGE_RUNTIME_FUNCTION_ENTRY PRUNTIME_FUNCTION;
 #define IMAGE_SCN_MEM_READ               0x40000000
 #define IMAGE_SCN_MEM_WRITE              0x80000000
 
-// Ordinal helpers (x86-64).
+// 64-bit ordinal helpers.
 #define IMAGE_ORDINAL_FLAG64             0x8000000000000000ULL
 #define IMAGE_ORDINAL_FLAG               IMAGE_ORDINAL_FLAG64
 #define IMAGE_SNAP_BY_ORDINAL64(o)       (((o) & IMAGE_ORDINAL_FLAG64) != 0)

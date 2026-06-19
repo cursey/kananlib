@@ -195,6 +195,15 @@ int test_narrow_widen_empty() {
     return 0;
 }
 
+int test_widen_rejects_malformed_utf8() {
+    TEST_ASSERT(utility::widen(std::string_view{"\xE2\x82", 2}) == L"\uFFFD");
+    TEST_ASSERT(utility::widen(std::string_view{"\xE2\x28\xA1", 3}) == L"\uFFFD(\uFFFD");
+    TEST_ASSERT(utility::widen(std::string_view{"\xC0\xAF", 2}) == L"\uFFFD\uFFFD");
+    TEST_ASSERT(utility::widen(std::string_view{"\xED\xA0\x80", 3}) == L"\uFFFD");
+    TEST_ASSERT(utility::widen(std::string_view{"\xF4\x90\x80\x80", 4}) == L"\uFFFD");
+    return 0;
+}
+
 int test_hash_determinism() {
     constexpr auto h1 = utility::hash("test_string");
     constexpr auto h2 = utility::hash("test_string");
@@ -507,6 +516,7 @@ int main() try {
     RUN_TEST(test_narrow_widen_roundtrip);
     RUN_TEST(test_narrow_widen_unicode);
     RUN_TEST(test_narrow_widen_empty);
+    RUN_TEST(test_widen_rejects_malformed_utf8);
     RUN_TEST(test_hash_determinism);
     RUN_TEST(test_hash_uniqueness);
     RUN_TEST(test_hash_wide);

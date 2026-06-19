@@ -55,7 +55,7 @@ struct BehaviorTestPage {
 
 int test_scan_strings_hmodule_string_finds_marker() {
     auto* mod = GetModuleHandleA(nullptr);
-    if (mod == nullptr) { TEST_SKIP("kernel32.dll not loaded (no Win32 PE host)"); }
+    if (mod == nullptr) { TEST_SKIP("current executable module unavailable (no Win32 PE host)"); }
 
     const auto results = utility::scan_strings(mod, std::string{MARKER_STRING});
     TEST_ASSERT(!results.empty());
@@ -72,7 +72,7 @@ int test_scan_strings_hmodule_string_finds_marker() {
 
 int test_scan_strings_hmodule_wstring_finds_marker() {
     auto* mod = GetModuleHandleA(nullptr);
-    if (mod == nullptr) { TEST_SKIP("kernel32.dll not loaded (no Win32 PE host)"); }
+    if (mod == nullptr) { TEST_SKIP("current executable module unavailable (no Win32 PE host)"); }
 
     const auto results = utility::scan_strings(mod, std::wstring{MARKER_WSTRING});
     TEST_ASSERT(!results.empty());

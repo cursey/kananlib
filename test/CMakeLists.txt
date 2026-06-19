@@ -121,8 +121,8 @@ if(WIN32) # windows-only
 	if (WIN32)
 	    target_link_libraries(${CMKR_TARGET} PRIVATE shlwapi)
 	endif()
-	# The PE-mapping test loads samples/kananlib_sample.dll from the source tree.
-	if (CMKR_TARGET STREQUAL "kananlib-linux-pe-test")
+	# The PE-mapping tests load committed samples from the source tree.
+	if (CMKR_TARGET STREQUAL "kananlib-linux-pe-test" OR CMKR_TARGET STREQUAL "kananlib-linux-audit-test")
 	    target_compile_definitions(${CMKR_TARGET} PRIVATE KANANLIB_SAMPLE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/samples)
 	endif()
 	add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
@@ -171,8 +171,8 @@ if(WIN32) # windows-only
 	if (WIN32)
 	    target_link_libraries(${CMKR_TARGET} PRIVATE shlwapi)
 	endif()
-	# The PE-mapping test loads samples/kananlib_sample.dll from the source tree.
-	if (CMKR_TARGET STREQUAL "kananlib-linux-pe-test")
+	# The PE-mapping tests load committed samples from the source tree.
+	if (CMKR_TARGET STREQUAL "kananlib-linux-pe-test" OR CMKR_TARGET STREQUAL "kananlib-linux-audit-test")
 	    target_compile_definitions(${CMKR_TARGET} PRIVATE KANANLIB_SAMPLE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/samples)
 	endif()
 	add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
@@ -220,8 +220,8 @@ endif()
 if (WIN32)
     target_link_libraries(${CMKR_TARGET} PRIVATE shlwapi)
 endif()
-# The PE-mapping test loads samples/kananlib_sample.dll from the source tree.
-if (CMKR_TARGET STREQUAL "kananlib-linux-pe-test")
+# The PE-mapping tests load committed samples from the source tree.
+if (CMKR_TARGET STREQUAL "kananlib-linux-pe-test" OR CMKR_TARGET STREQUAL "kananlib-linux-audit-test")
     target_compile_definitions(${CMKR_TARGET} PRIVATE KANANLIB_SAMPLE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/samples)
 endif()
 add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
@@ -268,8 +268,8 @@ endif()
 if (WIN32)
     target_link_libraries(${CMKR_TARGET} PRIVATE shlwapi)
 endif()
-# The PE-mapping test loads samples/kananlib_sample.dll from the source tree.
-if (CMKR_TARGET STREQUAL "kananlib-linux-pe-test")
+# The PE-mapping tests load committed samples from the source tree.
+if (CMKR_TARGET STREQUAL "kananlib-linux-pe-test" OR CMKR_TARGET STREQUAL "kananlib-linux-audit-test")
     target_compile_definitions(${CMKR_TARGET} PRIVATE KANANLIB_SAMPLE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/samples)
 endif()
 add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
@@ -316,8 +316,8 @@ endif()
 if (WIN32)
     target_link_libraries(${CMKR_TARGET} PRIVATE shlwapi)
 endif()
-# The PE-mapping test loads samples/kananlib_sample.dll from the source tree.
-if (CMKR_TARGET STREQUAL "kananlib-linux-pe-test")
+# The PE-mapping tests load committed samples from the source tree.
+if (CMKR_TARGET STREQUAL "kananlib-linux-pe-test" OR CMKR_TARGET STREQUAL "kananlib-linux-audit-test")
     target_compile_definitions(${CMKR_TARGET} PRIVATE KANANLIB_SAMPLE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/samples)
 endif()
 add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
@@ -365,8 +365,8 @@ if(WIN32) # windows-only
 	if (WIN32)
 	    target_link_libraries(${CMKR_TARGET} PRIVATE shlwapi)
 	endif()
-	# The PE-mapping test loads samples/kananlib_sample.dll from the source tree.
-	if (CMKR_TARGET STREQUAL "kananlib-linux-pe-test")
+	# The PE-mapping tests load committed samples from the source tree.
+	if (CMKR_TARGET STREQUAL "kananlib-linux-pe-test" OR CMKR_TARGET STREQUAL "kananlib-linux-audit-test")
 	    target_compile_definitions(${CMKR_TARGET} PRIVATE KANANLIB_SAMPLE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/samples)
 	endif()
 	add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
@@ -414,8 +414,8 @@ endif()
 if (WIN32)
     target_link_libraries(${CMKR_TARGET} PRIVATE shlwapi)
 endif()
-# The PE-mapping test loads samples/kananlib_sample.dll from the source tree.
-if (CMKR_TARGET STREQUAL "kananlib-linux-pe-test")
+# The PE-mapping tests load committed samples from the source tree.
+if (CMKR_TARGET STREQUAL "kananlib-linux-pe-test" OR CMKR_TARGET STREQUAL "kananlib-linux-audit-test")
     target_compile_definitions(${CMKR_TARGET} PRIVATE KANANLIB_SAMPLE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/samples)
 endif()
 add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
@@ -463,8 +463,8 @@ if(WIN32) # windows-only
 	if (WIN32)
 	    target_link_libraries(${CMKR_TARGET} PRIVATE shlwapi)
 	endif()
-	# The PE-mapping test loads samples/kananlib_sample.dll from the source tree.
-	if (CMKR_TARGET STREQUAL "kananlib-linux-pe-test")
+	# The PE-mapping tests load committed samples from the source tree.
+	if (CMKR_TARGET STREQUAL "kananlib-linux-pe-test" OR CMKR_TARGET STREQUAL "kananlib-linux-audit-test")
 	    target_compile_definitions(${CMKR_TARGET} PRIVATE KANANLIB_SAMPLE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/samples)
 	endif()
 	add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
@@ -512,8 +512,8 @@ endif()
 if (WIN32)
     target_link_libraries(${CMKR_TARGET} PRIVATE shlwapi)
 endif()
-# The PE-mapping test loads samples/kananlib_sample.dll from the source tree.
-if (CMKR_TARGET STREQUAL "kananlib-linux-pe-test")
+# The PE-mapping tests load committed samples from the source tree.
+if (CMKR_TARGET STREQUAL "kananlib-linux-pe-test" OR CMKR_TARGET STREQUAL "kananlib-linux-audit-test")
     target_compile_definitions(${CMKR_TARGET} PRIVATE KANANLIB_SAMPLE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/samples)
 endif()
 add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
@@ -565,8 +565,8 @@ if(WIN32) # windows-only
 	if (WIN32)
 	    target_link_libraries(${CMKR_TARGET} PRIVATE shlwapi)
 	endif()
-	# The PE-mapping test loads samples/kananlib_sample.dll from the source tree.
-	if (CMKR_TARGET STREQUAL "kananlib-linux-pe-test")
+	# The PE-mapping tests load committed samples from the source tree.
+	if (CMKR_TARGET STREQUAL "kananlib-linux-pe-test" OR CMKR_TARGET STREQUAL "kananlib-linux-audit-test")
 	    target_compile_definitions(${CMKR_TARGET} PRIVATE KANANLIB_SAMPLE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/samples)
 	endif()
 	add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
@@ -614,8 +614,8 @@ endif()
 if (WIN32)
     target_link_libraries(${CMKR_TARGET} PRIVATE shlwapi)
 endif()
-# The PE-mapping test loads samples/kananlib_sample.dll from the source tree.
-if (CMKR_TARGET STREQUAL "kananlib-linux-pe-test")
+# The PE-mapping tests load committed samples from the source tree.
+if (CMKR_TARGET STREQUAL "kananlib-linux-pe-test" OR CMKR_TARGET STREQUAL "kananlib-linux-audit-test")
     target_compile_definitions(${CMKR_TARGET} PRIVATE KANANLIB_SAMPLE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/samples)
 endif()
 add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
@@ -662,8 +662,8 @@ endif()
 if (WIN32)
     target_link_libraries(${CMKR_TARGET} PRIVATE shlwapi)
 endif()
-# The PE-mapping test loads samples/kananlib_sample.dll from the source tree.
-if (CMKR_TARGET STREQUAL "kananlib-linux-pe-test")
+# The PE-mapping tests load committed samples from the source tree.
+if (CMKR_TARGET STREQUAL "kananlib-linux-pe-test" OR CMKR_TARGET STREQUAL "kananlib-linux-audit-test")
     target_compile_definitions(${CMKR_TARGET} PRIVATE KANANLIB_SAMPLE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/samples)
 endif()
 add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
@@ -710,8 +710,8 @@ endif()
 if (WIN32)
     target_link_libraries(${CMKR_TARGET} PRIVATE shlwapi)
 endif()
-# The PE-mapping test loads samples/kananlib_sample.dll from the source tree.
-if (CMKR_TARGET STREQUAL "kananlib-linux-pe-test")
+# The PE-mapping tests load committed samples from the source tree.
+if (CMKR_TARGET STREQUAL "kananlib-linux-pe-test" OR CMKR_TARGET STREQUAL "kananlib-linux-audit-test")
     target_compile_definitions(${CMKR_TARGET} PRIVATE KANANLIB_SAMPLE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/samples)
 endif()
 add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
@@ -758,8 +758,8 @@ endif()
 if (WIN32)
     target_link_libraries(${CMKR_TARGET} PRIVATE shlwapi)
 endif()
-# The PE-mapping test loads samples/kananlib_sample.dll from the source tree.
-if (CMKR_TARGET STREQUAL "kananlib-linux-pe-test")
+# The PE-mapping tests load committed samples from the source tree.
+if (CMKR_TARGET STREQUAL "kananlib-linux-pe-test" OR CMKR_TARGET STREQUAL "kananlib-linux-audit-test")
     target_compile_definitions(${CMKR_TARGET} PRIVATE KANANLIB_SAMPLE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/samples)
 endif()
 add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
@@ -806,8 +806,8 @@ endif()
 if (WIN32)
     target_link_libraries(${CMKR_TARGET} PRIVATE shlwapi)
 endif()
-# The PE-mapping test loads samples/kananlib_sample.dll from the source tree.
-if (CMKR_TARGET STREQUAL "kananlib-linux-pe-test")
+# The PE-mapping tests load committed samples from the source tree.
+if (CMKR_TARGET STREQUAL "kananlib-linux-pe-test" OR CMKR_TARGET STREQUAL "kananlib-linux-audit-test")
     target_compile_definitions(${CMKR_TARGET} PRIVATE KANANLIB_SAMPLE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/samples)
 endif()
 add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
@@ -855,8 +855,8 @@ if(WIN32) # windows-only
 	if (WIN32)
 	    target_link_libraries(${CMKR_TARGET} PRIVATE shlwapi)
 	endif()
-	# The PE-mapping test loads samples/kananlib_sample.dll from the source tree.
-	if (CMKR_TARGET STREQUAL "kananlib-linux-pe-test")
+	# The PE-mapping tests load committed samples from the source tree.
+	if (CMKR_TARGET STREQUAL "kananlib-linux-pe-test" OR CMKR_TARGET STREQUAL "kananlib-linux-audit-test")
 	    target_compile_definitions(${CMKR_TARGET} PRIVATE KANANLIB_SAMPLE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/samples)
 	endif()
 	add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
@@ -905,8 +905,8 @@ if(WIN32) # windows-only
 	if (WIN32)
 	    target_link_libraries(${CMKR_TARGET} PRIVATE shlwapi)
 	endif()
-	# The PE-mapping test loads samples/kananlib_sample.dll from the source tree.
-	if (CMKR_TARGET STREQUAL "kananlib-linux-pe-test")
+	# The PE-mapping tests load committed samples from the source tree.
+	if (CMKR_TARGET STREQUAL "kananlib-linux-pe-test" OR CMKR_TARGET STREQUAL "kananlib-linux-audit-test")
 	    target_compile_definitions(${CMKR_TARGET} PRIVATE KANANLIB_SAMPLE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/samples)
 	endif()
 	add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
@@ -954,8 +954,8 @@ endif()
 if (WIN32)
     target_link_libraries(${CMKR_TARGET} PRIVATE shlwapi)
 endif()
-# The PE-mapping test loads samples/kananlib_sample.dll from the source tree.
-if (CMKR_TARGET STREQUAL "kananlib-linux-pe-test")
+# The PE-mapping tests load committed samples from the source tree.
+if (CMKR_TARGET STREQUAL "kananlib-linux-pe-test" OR CMKR_TARGET STREQUAL "kananlib-linux-audit-test")
     target_compile_definitions(${CMKR_TARGET} PRIVATE KANANLIB_SAMPLE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/samples)
 endif()
 add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
@@ -1003,8 +1003,8 @@ if(WIN32) # windows-only
 	if (WIN32)
 	    target_link_libraries(${CMKR_TARGET} PRIVATE shlwapi)
 	endif()
-	# The PE-mapping test loads samples/kananlib_sample.dll from the source tree.
-	if (CMKR_TARGET STREQUAL "kananlib-linux-pe-test")
+	# The PE-mapping tests load committed samples from the source tree.
+	if (CMKR_TARGET STREQUAL "kananlib-linux-pe-test" OR CMKR_TARGET STREQUAL "kananlib-linux-audit-test")
 	    target_compile_definitions(${CMKR_TARGET} PRIVATE KANANLIB_SAMPLE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/samples)
 	endif()
 	add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
@@ -1053,8 +1053,8 @@ if(WIN32) # windows-only
 	if (WIN32)
 	    target_link_libraries(${CMKR_TARGET} PRIVATE shlwapi)
 	endif()
-	# The PE-mapping test loads samples/kananlib_sample.dll from the source tree.
-	if (CMKR_TARGET STREQUAL "kananlib-linux-pe-test")
+	# The PE-mapping tests load committed samples from the source tree.
+	if (CMKR_TARGET STREQUAL "kananlib-linux-pe-test" OR CMKR_TARGET STREQUAL "kananlib-linux-audit-test")
 	    target_compile_definitions(${CMKR_TARGET} PRIVATE KANANLIB_SAMPLE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/samples)
 	endif()
 	add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
@@ -1103,8 +1103,8 @@ if(WIN32) # windows-only
 	if (WIN32)
 	    target_link_libraries(${CMKR_TARGET} PRIVATE shlwapi)
 	endif()
-	# The PE-mapping test loads samples/kananlib_sample.dll from the source tree.
-	if (CMKR_TARGET STREQUAL "kananlib-linux-pe-test")
+	# The PE-mapping tests load committed samples from the source tree.
+	if (CMKR_TARGET STREQUAL "kananlib-linux-pe-test" OR CMKR_TARGET STREQUAL "kananlib-linux-audit-test")
 	    target_compile_definitions(${CMKR_TARGET} PRIVATE KANANLIB_SAMPLE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/samples)
 	endif()
 	add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
@@ -1152,8 +1152,8 @@ endif()
 if (WIN32)
     target_link_libraries(${CMKR_TARGET} PRIVATE shlwapi)
 endif()
-# The PE-mapping test loads samples/kananlib_sample.dll from the source tree.
-if (CMKR_TARGET STREQUAL "kananlib-linux-pe-test")
+# The PE-mapping tests load committed samples from the source tree.
+if (CMKR_TARGET STREQUAL "kananlib-linux-pe-test" OR CMKR_TARGET STREQUAL "kananlib-linux-audit-test")
     target_compile_definitions(${CMKR_TARGET} PRIVATE KANANLIB_SAMPLE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/samples)
 endif()
 add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
@@ -1205,8 +1205,8 @@ if(WIN32) # windows-only
 	if (WIN32)
 	    target_link_libraries(${CMKR_TARGET} PRIVATE shlwapi)
 	endif()
-	# The PE-mapping test loads samples/kananlib_sample.dll from the source tree.
-	if (CMKR_TARGET STREQUAL "kananlib-linux-pe-test")
+	# The PE-mapping tests load committed samples from the source tree.
+	if (CMKR_TARGET STREQUAL "kananlib-linux-pe-test" OR CMKR_TARGET STREQUAL "kananlib-linux-audit-test")
 	    target_compile_definitions(${CMKR_TARGET} PRIVATE KANANLIB_SAMPLE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/samples)
 	endif()
 	add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
@@ -1255,8 +1255,8 @@ if(NOT WIN32) # non-windows
 	if (WIN32)
 	    target_link_libraries(${CMKR_TARGET} PRIVATE shlwapi)
 	endif()
-	# The PE-mapping test loads samples/kananlib_sample.dll from the source tree.
-	if (CMKR_TARGET STREQUAL "kananlib-linux-pe-test")
+	# The PE-mapping tests load committed samples from the source tree.
+	if (CMKR_TARGET STREQUAL "kananlib-linux-pe-test" OR CMKR_TARGET STREQUAL "kananlib-linux-audit-test")
 	    target_compile_definitions(${CMKR_TARGET} PRIVATE KANANLIB_SAMPLE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/samples)
 	endif()
 	add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
@@ -1305,8 +1305,8 @@ if(NOT WIN32) # non-windows
 	if (WIN32)
 	    target_link_libraries(${CMKR_TARGET} PRIVATE shlwapi)
 	endif()
-	# The PE-mapping test loads samples/kananlib_sample.dll from the source tree.
-	if (CMKR_TARGET STREQUAL "kananlib-linux-pe-test")
+	# The PE-mapping tests load committed samples from the source tree.
+	if (CMKR_TARGET STREQUAL "kananlib-linux-pe-test" OR CMKR_TARGET STREQUAL "kananlib-linux-audit-test")
 	    target_compile_definitions(${CMKR_TARGET} PRIVATE KANANLIB_SAMPLE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/samples)
 	endif()
 	add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})

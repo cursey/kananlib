@@ -7,13 +7,31 @@
 #include <cstdint>
 #include <cstring>
 #include <iostream>
+#include <string>
+#include <vector>
 
 #include <windows.h>
 #include <intrin.h>
 
 #include "TestHelpers.hpp"
 #include <utility/Module.hpp>
+#include <utility/Scan.hpp>
 
+
+// KANANLIB_SAMPLE_DIR is passed unquoted by the build; stringize it here.
+#define KANANLIB_STR2(x) #x
+#define KANANLIB_STR(x) KANANLIB_STR2(x)
+#ifndef KANANLIB_SAMPLE_DIR
+#define KANANLIB_SAMPLE_DIR .
+#endif
+
+namespace {
+constexpr const char* kPe32Marker = "kananlib_pe32_marker";
+
+std::string pe32_sample_path() {
+    return std::string{ KANANLIB_STR(KANANLIB_SAMPLE_DIR) } + "/kananlib_sample32.dll";
+}
+} // namespace
 // ---------------------------------------------------------------------------
 // Bug 1: VirtualProtect(addr, 0, ...) should be a no-op returning TRUE.
 // On the buggy shim it mprotects one full page.
@@ -374,6 +392,75 @@ int test_malformed_pe_large_optional_header() {
     return 0;
 }
 
+// PE32 images can still be mapped for static analysis in a 64-bit host process:
+// the bytes are laid out by RVA and no code is executed. This no-relocation PE32
+// proves the mapper parses the 32-bit optional-header layout instead of treating
+// every file as PE32+.
+int test_pe32_image_maps_without_relocations() {
+    constexpr size_t FILE_SIZE = 512;
+    constexpr DWORD IMAGE_SIZE = 0x3000;
+    std::vector<uint8_t> pe_data(FILE_SIZE, 0);
+
+    auto* dos = (IMAGE_DOS_HEADER*)pe_data.data();
+    dos->e_magic = IMAGE_DOS_SIGNATURE;
+    dos->e_lfanew = 64;
+
+    auto* nt = (IMAGE_NT_HEADERS32*)(pe_data.data() + 64);
+    nt->Signature = IMAGE_NT_SIGNATURE;
+    nt->FileHeader.Machine = IMAGE_FILE_MACHINE_I386;
+    nt->FileHeader.NumberOfSections = 0;
+    nt->FileHeader.SizeOfOptionalHeader = sizeof(IMAGE_OPTIONAL_HEADER32);
+    nt->OptionalHeader.Magic = IMAGE_NT_OPTIONAL_HDR32_MAGIC;
+    nt->OptionalHeader.ImageBase = 0x400000;
+    nt->OptionalHeader.SizeOfImage = IMAGE_SIZE;
+    nt->OptionalHeader.SizeOfHeaders = 0x200;
+    nt->OptionalHeader.NumberOfRvaAndSizes = IMAGE_NUMBEROF_DIRECTORY_ENTRIES;
+
+    const auto tmppath = std::filesystem::temp_directory_path() / "kananlib_test_pe32.exe";
+    {
+        std::ofstream ofs(tmppath, std::ios::binary);
+        ofs.write((const char*)pe_data.data(), pe_data.size());
+    }
+
+    auto result = utility::map_view_of_file(tmppath.string());
+    std::filesystem::remove(tmppath);
+
+    TEST_ASSERT(result.has_value());
+    TEST_ASSERT(result->module != nullptr);
+    const auto mapped_size = utility::get_module_size(result->module);
+    TEST_ASSERT(mapped_size.has_value());
+    TEST_ASSERT(*mapped_size == IMAGE_SIZE);
+    return 0;
+}
+
+int test_pe32_committed_sample_maps_and_scans() {
+    auto result = utility::map_view_of_file(pe32_sample_path());
+    TEST_ASSERT(result.has_value());
+    TEST_ASSERT(result->module != nullptr);
+
+    const auto mapped_size = utility::get_module_size(result->module);
+    TEST_ASSERT(mapped_size.has_value());
+    TEST_ASSERT(*mapped_size == 0x2000);
+
+    auto sections = utility::get_module_sections(result->module);
+    TEST_ASSERT(sections.has_value());
+    bool found_rdata = false;
+    for (const auto& section : *sections) {
+        if (section.name == ".rdata") {
+            found_rdata = true;
+            TEST_ASSERT((section.characteristics & IMAGE_SCN_MEM_READ) != 0);
+            break;
+        }
+    }
+    TEST_ASSERT(found_rdata);
+
+    auto marker = utility::scan_string(result->module, std::string{ kPe32Marker });
+    TEST_ASSERT(marker.has_value());
+    const auto base = reinterpret_cast<uintptr_t>(result->module);
+    TEST_ASSERT(*marker >= base && *marker < base + *mapped_size);
+    return 0;
+}
+
 // ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
@@ -411,6 +498,8 @@ int main() try {
     // Bug 2: PE section table bounds
     RUN_TEST(test_malformed_pe_section_table_bounds);
     RUN_TEST(test_malformed_pe_large_optional_header);
+    RUN_TEST(test_pe32_image_maps_without_relocations);
+    RUN_TEST(test_pe32_committed_sample_maps_and_scans);
 
 
     return test_summary();

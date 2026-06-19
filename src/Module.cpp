@@ -780,17 +780,41 @@ namespace utility {
             return std::nullopt;
         }
 
-        if (dos->e_lfanew <= 0 || (size_t)dos->e_lfanew + sizeof(IMAGE_NT_HEADERS) > file_size) {
+        const auto nt_offset = (size_t)dos->e_lfanew;
+        constexpr size_t optional_header_offset = offsetof(IMAGE_NT_HEADERS, OptionalHeader);
+
+        if (dos->e_lfanew <= 0 || nt_offset > file_size || file_size - nt_offset < optional_header_offset + sizeof(WORD)) {
             return std::nullopt;
         }
 
-        auto* nt = (PIMAGE_NT_HEADERS)(file_data.data() + dos->e_lfanew);
+        auto* nt = (PIMAGE_NT_HEADERS)(file_data.data() + nt_offset);
         if (nt->Signature != IMAGE_NT_SIGNATURE) {
             return std::nullopt;
         }
 
-        const auto image_size = (size_t)nt->OptionalHeader.SizeOfImage;
-        const auto headers_size = (size_t)nt->OptionalHeader.SizeOfHeaders;
+        const auto optional_magic = *(const WORD*)(file_data.data() + nt_offset + optional_header_offset);
+        const bool pe32 = optional_magic == IMAGE_NT_OPTIONAL_HDR32_MAGIC;
+        const bool pe32_plus = optional_magic == IMAGE_NT_OPTIONAL_HDR64_MAGIC;
+        if (!pe32 && !pe32_plus) {
+            return std::nullopt;
+        }
+        if ((pe32 && nt->FileHeader.Machine != IMAGE_FILE_MACHINE_I386) ||
+            (pe32_plus && nt->FileHeader.Machine != IMAGE_FILE_MACHINE_AMD64)) {
+            return std::nullopt;
+        }
+
+        const size_t required_optional_size = pe32 ? sizeof(IMAGE_OPTIONAL_HEADER32) : sizeof(IMAGE_OPTIONAL_HEADER64);
+        if (nt->FileHeader.SizeOfOptionalHeader < required_optional_size ||
+            file_size - nt_offset < optional_header_offset + required_optional_size) {
+            return std::nullopt;
+        }
+
+        const auto* opt32 = pe32 ? (const IMAGE_OPTIONAL_HEADER32*)(file_data.data() + nt_offset + optional_header_offset) : nullptr;
+        const auto* opt64 = pe32_plus ? (const IMAGE_OPTIONAL_HEADER64*)(file_data.data() + nt_offset + optional_header_offset) : nullptr;
+        const auto image_size = (size_t)(pe32 ? opt32->SizeOfImage : opt64->SizeOfImage);
+        const auto headers_size = (size_t)(pe32 ? opt32->SizeOfHeaders : opt64->SizeOfHeaders);
+        const auto image_base = (uint64_t)(pe32 ? opt32->ImageBase : opt64->ImageBase);
+        const auto reloc_dir = pe32 ? opt32->DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC] : opt64->DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC];
 
         if (image_size == 0 || image_size > 0x100000000ULL) {
             return std::nullopt;
@@ -799,9 +823,26 @@ namespace utility {
         // e_lfanew was validated against the file above; also reject it against
         // the image so downstream consumers that re-read the NT headers from
         // mapped_base + e_lfanew can never read past the mapping.
-        if ((size_t)dos->e_lfanew + sizeof(IMAGE_NT_HEADERS) > image_size) {
+        if (nt_offset + sizeof(IMAGE_NT_HEADERS) > image_size) {
             return std::nullopt;
         }
+
+        // Validate section table is within file bounds. IMAGE_FIRST_SECTION
+        // uses SizeOfOptionalHeader from the file. A malformed PE could set a
+        // large SizeOfOptionalHeader or NumberOfSections, causing out-of-bounds
+        // reads.
+        if (file_size - nt_offset < optional_header_offset ||
+            nt->FileHeader.SizeOfOptionalHeader > file_size - nt_offset - optional_header_offset) {
+            return std::nullopt;
+        }
+        const auto section_table_offset = nt_offset + optional_header_offset + (size_t)nt->FileHeader.SizeOfOptionalHeader;
+        const auto section_table_size = (size_t)nt->FileHeader.NumberOfSections * sizeof(IMAGE_SECTION_HEADER);
+        if (section_table_offset > file_size || file_size - section_table_offset < section_table_size) {
+            SPDLOG_WARN("[PE] Section table extends past end of file (offset={}, size={}, file_size={})",
+                section_table_offset, section_table_size, file_size);
+            return std::nullopt;
+        }
+        auto* first_section = (PIMAGE_SECTION_HEADER)(file_data.data() + section_table_offset);
 
         auto* mapped_base = (uint8_t*)VirtualAlloc(nullptr, image_size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
         if (mapped_base == nullptr) {
@@ -812,26 +853,8 @@ namespace utility {
         // Copy the PE headers verbatim.
         std::memcpy(mapped_base, file_data.data(), std::min(std::min(headers_size, file_size), image_size));
 
-        // Validate section table is within file bounds. IMAGE_FIRST_SECTION
-        // uses SizeOfOptionalHeader from the file, which may differ from our
-        // sizeof(IMAGE_OPTIONAL_HEADER64). A malformed PE could set a large
-        // SizeOfOptionalHeader or NumberOfSections, causing out-of-bounds reads.
-        {
-            const auto section_table_offset = (size_t)dos->e_lfanew
-                + offsetof(IMAGE_NT_HEADERS, OptionalHeader)
-                + (size_t)nt->FileHeader.SizeOfOptionalHeader;
-            const auto section_table_size = (size_t)nt->FileHeader.NumberOfSections * sizeof(IMAGE_SECTION_HEADER);
-            if (section_table_offset + section_table_size > file_size) {
-                SPDLOG_WARN("[PE] Section table extends past end of file (offset={}, size={}, file_size={})",
-                    section_table_offset, section_table_size, file_size);
-                VirtualFree(mapped_base, 0, MEM_RELEASE);
-                return std::nullopt;
-            }
-        }
-
-
         // Copy each section's raw data to its virtual address.
-        auto* section = IMAGE_FIRST_SECTION(nt);
+        auto* section = first_section;
         for (uint16_t i = 0; i < nt->FileHeader.NumberOfSections; ++i, ++section) {
             const auto va = (size_t)section->VirtualAddress;
             const auto raw_ptr = (size_t)section->PointerToRawData;
@@ -854,8 +877,7 @@ namespace utility {
         // import thunks, etc.) are valid at the actual load address. The Windows
         // loader does this; we must too since mmap will not honor the preferred
         // ImageBase. Done while the pages are still writable.
-        const auto delta = (int64_t)((uintptr_t)mapped_base - (uintptr_t)nt->OptionalHeader.ImageBase);
-        const auto& reloc_dir = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC];
+        const auto delta = (int64_t)((uint64_t)(uintptr_t)mapped_base - image_base);
         if (delta != 0 && reloc_dir.VirtualAddress != 0 && reloc_dir.Size != 0) {
             size_t reloc_rva = reloc_dir.VirtualAddress;
             const size_t reloc_end = std::min(reloc_rva + (size_t)reloc_dir.Size, image_size);
@@ -878,6 +900,11 @@ namespace utility {
                             *(uint64_t*)(mapped_base + target) += (uint64_t)delta;
                         }
                     } else if (type == IMAGE_REL_BASED_HIGHLOW) {
+                        if (pe32 && (uintptr_t)mapped_base > UINT32_MAX) {
+                            SPDLOG_WARN("[PE] Cannot apply PE32 HIGHLOW relocations above the 32-bit address range");
+                            VirtualFree(mapped_base, 0, MEM_RELEASE);
+                            return std::nullopt;
+                        }
                         if (target + sizeof(uint32_t) <= image_size) {
                             *(uint32_t*)(mapped_base + target) += (uint32_t)delta;
                         }
@@ -900,7 +927,7 @@ namespace utility {
 
         // Apply per-section page protections so VirtualQuery reports executable
         // ranges (some scanners validate call targets against exec regions).
-        section = IMAGE_FIRST_SECTION(nt);
+        section = first_section;
         for (uint16_t i = 0; i < nt->FileHeader.NumberOfSections; ++i, ++section) {
             const auto va = (size_t)section->VirtualAddress;
             auto vsize = (size_t)section->Misc.VirtualSize;
