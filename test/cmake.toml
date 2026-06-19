@@ -213,3 +213,9 @@ condition = "windows-only"
 type = "kananlib-test-template"
 sources = ["TestLinuxPE.cpp"]
 condition = "non-windows"
+
+# Linux audit regression: tests for compat layer bugs found during audit.
+[target.kananlib-linux-audit-test]
+type = "kananlib-test-template"
+sources = ["TestLinuxAudit.cpp"]
+condition = "non-windows"

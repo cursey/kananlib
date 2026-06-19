@@ -1262,3 +1262,53 @@ if(NOT WIN32) # non-windows
 	add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
 
 endif()
+# Target: kananlib-linux-audit-test
+if(NOT WIN32) # non-windows
+	set(CMKR_TARGET kananlib-linux-audit-test)
+	if(NOT TARGET kananlib)
+	    add_subdirectory(kananlib)
+	endif()
+
+	set(kananlib-linux-audit-test_SOURCES
+		TestLinuxAudit.cpp
+		cmake.toml
+	)
+
+	add_executable(kananlib-linux-audit-test)
+
+	target_sources(kananlib-linux-audit-test PRIVATE ${kananlib-linux-audit-test_SOURCES})
+	source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${kananlib-linux-audit-test_SOURCES})
+
+	target_compile_features(kananlib-linux-audit-test PRIVATE
+		cxx_std_20
+	)
+
+	target_include_directories(kananlib-linux-audit-test PRIVATE
+		include
+	)
+
+	target_link_libraries(kananlib-linux-audit-test PRIVATE
+		bddisasm::bddisasm
+		bddisasm::bdshemu
+		spdlog::spdlog
+		kananlib
+	)
+
+	get_directory_property(CMKR_VS_STARTUP_PROJECT DIRECTORY ${PROJECT_SOURCE_DIR} DEFINITION VS_STARTUP_PROJECT)
+	if(NOT CMKR_VS_STARTUP_PROJECT)
+		set_property(DIRECTORY ${PROJECT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT kananlib-linux-audit-test)
+	endif()
+
+	if (CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+	    target_compile_options(${CMKR_TARGET} PRIVATE /EHa)
+	endif()
+	if (WIN32)
+	    target_link_libraries(${CMKR_TARGET} PRIVATE shlwapi)
+	endif()
+	# The PE-mapping test loads samples/kananlib_sample.dll from the source tree.
+	if (CMKR_TARGET STREQUAL "kananlib-linux-pe-test")
+	    target_compile_definitions(${CMKR_TARGET} PRIVATE KANANLIB_SAMPLE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/samples)
+	endif()
+	add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
+
+endif()

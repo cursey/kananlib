@@ -812,6 +812,24 @@ namespace utility {
         // Copy the PE headers verbatim.
         std::memcpy(mapped_base, file_data.data(), std::min(std::min(headers_size, file_size), image_size));
 
+        // Validate section table is within file bounds. IMAGE_FIRST_SECTION
+        // uses SizeOfOptionalHeader from the file, which may differ from our
+        // sizeof(IMAGE_OPTIONAL_HEADER64). A malformed PE could set a large
+        // SizeOfOptionalHeader or NumberOfSections, causing out-of-bounds reads.
+        {
+            const auto section_table_offset = (size_t)dos->e_lfanew
+                + offsetof(IMAGE_NT_HEADERS, OptionalHeader)
+                + (size_t)nt->FileHeader.SizeOfOptionalHeader;
+            const auto section_table_size = (size_t)nt->FileHeader.NumberOfSections * sizeof(IMAGE_SECTION_HEADER);
+            if (section_table_offset + section_table_size > file_size) {
+                SPDLOG_WARN("[PE] Section table extends past end of file (offset={}, size={}, file_size={})",
+                    section_table_offset, section_table_size, file_size);
+                VirtualFree(mapped_base, 0, MEM_RELEASE);
+                return std::nullopt;
+            }
+        }
+
+
         // Copy each section's raw data to its virtual address.
         auto* section = IMAGE_FIRST_SECTION(nt);
         for (uint16_t i = 0; i < nt->FileHeader.NumberOfSections; ++i, ++section) {

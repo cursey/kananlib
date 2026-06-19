@@ -60,8 +60,12 @@ void rebuild_cache() {
         return;
     }
 
-    char line[512];
-    while (std::fgets(line, sizeof(line), f) != nullptr) {
+    // Use getline() to handle arbitrarily long /proc/self/maps lines (deep
+    // paths, many VMA flags, etc.). A fixed buffer silently drops regions with
+    // long path names, causing IsBadReadPtr to misreport mapped memory as gaps.
+    char* line = nullptr;
+    size_t line_cap = 0;
+    while (getline(&line, &line_cap, f) != -1) {
         uintptr_t start = 0, end = 0;
         char perms[8] = {0};
         // Format: start-end perms offset dev inode path
@@ -76,6 +80,7 @@ void rebuild_cache() {
 
         t_cache.regions.push_back({start, end, prot});
     }
+    free(line);
     std::fclose(f);
 
     std::sort(t_cache.regions.begin(), t_cache.regions.end(),
@@ -221,6 +226,13 @@ extern "C" BOOL VirtualFree(LPVOID address, SIZE_T size, DWORD free_type) {
 }
 
 extern "C" BOOL VirtualProtect(LPVOID address, SIZE_T size, DWORD new_protect, PDWORD old_protect) {
+    if (size == 0) {
+        if (old_protect != nullptr) {
+            const Region* r = region_of((uintptr_t)address);
+            *old_protect = (r != nullptr) ? posix_to_win_prot(r->prot) : PAGE_NOACCESS;
+        }
+        return TRUE;
+    }
     const uintptr_t addr = (uintptr_t)address;
     const int ps = page_size();
     const uintptr_t aligned = addr & ~((uintptr_t)ps - 1);
@@ -265,7 +277,7 @@ extern "C" SIZE_T VirtualQuery(LPCVOID address, PMEMORY_BASIC_INFORMATION buffer
     for (const auto& reg : t_cache.regions) {
         if (reg.start > addr) { next_start = reg.start; break; }
     }
-    buffer->BaseAddress = (PVOID)addr;
+    buffer->BaseAddress = (PVOID)(addr & ~((uintptr_t)page_size() - 1));
     // The span to the next mapping is the real free-region size (Windows-faithful:
     // BaseAddress + RegionSize == next_start, a valid address, so there is no wrap
     // even for a multi-TiB gap). Do NOT clamp it -- a legitimate large
@@ -274,7 +286,7 @@ extern "C" SIZE_T VirtualQuery(LPCVOID address, PMEMORY_BASIC_INFORMATION buffer
     // (next_start unset) that could overflow BaseAddress + RegionSize.
     buffer->RegionSize  = (next_start > addr) ? (SIZE_T)(next_start - addr) : (SIZE_T)page_size();
     buffer->State       = MEM_FREE;
-    buffer->Protect     = PAGE_NOACCESS;
+    buffer->Protect     = 0;  // Windows: MEM_FREE Protect is 0, not PAGE_NOACCESS.
     buffer->Type        = 0;
     return sizeof(MEMORY_BASIC_INFORMATION);
 }
