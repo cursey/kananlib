@@ -266,9 +266,12 @@ extern "C" SIZE_T VirtualQuery(LPCVOID address, PMEMORY_BASIC_INFORMATION buffer
         if (reg.start > addr) { next_start = reg.start; break; }
     }
     buffer->BaseAddress = (PVOID)addr;
-    // When there is no later mapping, report a single page rather than a
-    // near-SIZE_MAX span, so callers that advance by BaseAddress + RegionSize
-    // cannot overflow/wrap.
+    // The span to the next mapping is the real free-region size (Windows-faithful:
+    // BaseAddress + RegionSize == next_start, a valid address, so there is no wrap
+    // even for a multi-TiB gap). Do NOT clamp it -- a legitimate large
+    // reserved-but-uncommitted gap must be reported in full. Only the
+    // no-later-mapping case is clamped to one page, to avoid a near-SIZE_MAX span
+    // (next_start unset) that could overflow BaseAddress + RegionSize.
     buffer->RegionSize  = (next_start > addr) ? (SIZE_T)(next_start - addr) : (SIZE_T)page_size();
     buffer->State       = MEM_FREE;
     buffer->Protect     = PAGE_NOACCESS;
