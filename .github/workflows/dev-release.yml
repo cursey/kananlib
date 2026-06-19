@@ -64,3 +64,46 @@ jobs:
 
       - name: Run all tests (clang-cl)
         run: ctest --test-dir ${{github.workspace}}/test/build-clang -C ${{env.BUILD_TYPE}} --output-on-failure
+
+  build-linux:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target: [kananlib, kananlib-nolog, kananlib-cli]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Install toolchain
+        run: sudo apt-get update && sudo apt-get install -y clang ninja-build
+
+      - name: Configure CMake
+        run: cmake -S ${{github.workspace}} -B ${{github.workspace}}/build -G Ninja -DKANANLIB_STANDALONE_BUILD=ON -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
+
+      - name: Build
+        run: cmake --build ${{github.workspace}}/build --target ${{matrix.target}}
+
+  test-linux:
+    runs-on: ubuntu-latest
+    needs: build-linux
+    steps:
+      - name: Checkout
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Install toolchain
+        run: sudo apt-get update && sudo apt-get install -y clang ninja-build
+
+      - name: Configure CMake
+        run: cmake -S ${{github.workspace}}/test -B ${{github.workspace}}/test/build -G Ninja -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
+
+      - name: Build all tests
+        run: cmake --build ${{github.workspace}}/test/build
+
+      - name: Run all tests
+        run: ctest --test-dir ${{github.workspace}}/test/build --output-on-failure
