@@ -10,7 +10,8 @@
 #include <type_traits>
 
 #include <bddisasm.h>
-#include <Windows.h>
+#include <windows.h>
+#include <utility/Seh.hpp>
 
 #include <utility/Logging.hpp>
 #include <utility/Benchmark.hpp>
@@ -181,11 +182,11 @@ namespace utility {
                 // This instead of IsBadReadPtr so we don't branch into kernel32 every time
                 // we want to test the readability of the memory
 #ifdef NDEBUG
-                __try {
+                KANANLIB_SEH_TRY {
                     volatile auto test1 = *(uintptr_t*)(ip);
                     volatile auto test8 = *(uintptr_t*)(ip + 56); // check if we can read ahead without page crossing
                     (void)test1; (void)test8;
-                } __except (EXCEPTION_EXECUTE_HANDLER) {
+                } KANANLIB_SEH_EXCEPT (EXCEPTION_EXECUTE_HANDLER) {
                     break;
                 }
 #else

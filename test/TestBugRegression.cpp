@@ -13,7 +13,7 @@
 #include <iostream>
 #include <vector>
 
-#include <Windows.h>
+#include <windows.h>
 #include <utility/Address.hpp>
 #include <utility/Patch.hpp>
 #include <utility/ScopeGuard.hpp>

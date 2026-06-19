@@ -3,7 +3,7 @@
 #include <string>
 #include <string_view>
 
-#include <Windows.h>
+#include <windows.h>
 
 #include <utility/Registry.hpp>
 

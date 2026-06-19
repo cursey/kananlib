@@ -24,20 +24,26 @@ if(CMAKE_CURRENT_SOURCE_DIR STREQUAL CMAKE_SOURCE_DIR)
 	configure_file(cmake.toml cmake.toml COPYONLY)
 endif()
 
- 
 add_compile_options($<$<CXX_COMPILER_ID:MSVC>:/MP>)
 
-# mklink the parent dir as kananlib/ with command line stuff
-set(TARGET_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
-set(KANANLIB_USE_DIA_SDK ON CACHE BOOL "" FORCE)
+# The PDB tests use the DIA SDK; enable it on Windows (no DIA on Linux).
+if(WIN32)
+    set(KANANLIB_USE_DIA_SDK ON CACHE BOOL "" FORCE)
+endif()
 
-execute_process(
-    COMMAND cmd /c mklink /J kananlib ..
-    WORKING_DIRECTORY ${TARGET_DIR}
-    RESULT_VARIABLE result
-    OUTPUT_VARIABLE output
-    ERROR_VARIABLE error_output
-)
+# Expose the parent (library) directory as ./kananlib so add_subdirectory works.
+# Windows uses a junction; other platforms use a symlink.
+set(TARGET_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
+if(NOT EXISTS "${TARGET_DIR}/kananlib")
+    if(WIN32)
+        execute_process(
+            COMMAND cmd /c mklink /J kananlib ..
+            WORKING_DIRECTORY ${TARGET_DIR}
+        )
+    else()
+        file(CREATE_LINK "${TARGET_DIR}/.." "${TARGET_DIR}/kananlib" SYMBOLIC)
+    endif()
+endif()
 
 project(kananlibtest)
 
@@ -51,7 +57,7 @@ if(POLICY CMP0135)
 	cmake_policy(SET CMP0135 NEW)
 endif()
 message(STATUS "Fetching bddisasm (v1.37.0)...")
-FetchContent_Declare(bddisasm SYSTEM
+FetchContent_Declare(bddisasm
 	GIT_REPOSITORY
 		"https://github.com/bitdefender/bddisasm"
 	GIT_TAG
@@ -62,7 +68,7 @@ FetchContent_Declare(bddisasm SYSTEM
 FetchContent_MakeAvailable(bddisasm)
 
 message(STATUS "Fetching spdlog (v1.12.0)...")
-FetchContent_Declare(spdlog SYSTEM
+FetchContent_Declare(spdlog
 	GIT_REPOSITORY
 		"https://github.com/gabime/spdlog"
 	GIT_TAG
@@ -73,91 +79,105 @@ FetchContent_Declare(spdlog SYSTEM
 FetchContent_MakeAvailable(spdlog)
 
 # Target: kananlib-test
-set(CMKR_TARGET kananlib-test)
-if(NOT TARGET kananlib)
-    add_subdirectory(kananlib)
+if(WIN32) # windows-only
+	set(CMKR_TARGET kananlib-test)
+	if(NOT TARGET kananlib)
+	    add_subdirectory(kananlib)
+	endif()
+
+	set(kananlib-test_SOURCES
+		Main.cpp
+		cmake.toml
+	)
+
+	add_executable(kananlib-test)
+
+	target_sources(kananlib-test PRIVATE ${kananlib-test_SOURCES})
+	source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${kananlib-test_SOURCES})
+
+	target_compile_features(kananlib-test PRIVATE
+		cxx_std_20
+	)
+
+	target_include_directories(kananlib-test PRIVATE
+		include
+	)
+
+	target_link_libraries(kananlib-test PRIVATE
+		bddisasm::bddisasm
+		bddisasm::bdshemu
+		spdlog::spdlog
+		kananlib
+	)
+
+	get_directory_property(CMKR_VS_STARTUP_PROJECT DIRECTORY ${PROJECT_SOURCE_DIR} DEFINITION VS_STARTUP_PROJECT)
+	if(NOT CMKR_VS_STARTUP_PROJECT)
+		set_property(DIRECTORY ${PROJECT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT kananlib-test)
+	endif()
+
+	if (CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+	    target_compile_options(${CMKR_TARGET} PRIVATE /EHa)
+	endif()
+	if (WIN32)
+	    target_link_libraries(${CMKR_TARGET} PRIVATE shlwapi)
+	endif()
+	# The PE-mapping test loads samples/kananlib_sample.dll from the source tree.
+	if (CMKR_TARGET STREQUAL "kananlib-linux-pe-test")
+	    target_compile_definitions(${CMKR_TARGET} PRIVATE KANANLIB_SAMPLE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/samples)
+	endif()
+	add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
+
 endif()
-
-set(kananlib-test_SOURCES
-	Main.cpp
-	cmake.toml
-)
-
-add_executable(kananlib-test)
-
-target_sources(kananlib-test PRIVATE ${kananlib-test_SOURCES})
-source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${kananlib-test_SOURCES})
-
-target_compile_features(kananlib-test PRIVATE
-	cxx_std_20
-)
-
-target_compile_options(kananlib-test PRIVATE
-	"/EHa"
-)
-
-target_include_directories(kananlib-test PRIVATE
-	include
-)
-
-target_link_libraries(kananlib-test PRIVATE
-	bddisasm::bddisasm
-	bddisasm::bdshemu
-	spdlog::spdlog
-	shlwapi
-	kananlib
-)
-
-get_directory_property(CMKR_VS_STARTUP_PROJECT DIRECTORY ${PROJECT_SOURCE_DIR} DEFINITION VS_STARTUP_PROJECT)
-if(NOT CMKR_VS_STARTUP_PROJECT)
-	set_property(DIRECTORY ${PROJECT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT kananlib-test)
-endif()
-
-add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
-
 # Target: kananlib-stress-test
-set(CMKR_TARGET kananlib-stress-test)
-if(NOT TARGET kananlib)
-    add_subdirectory(kananlib)
+if(WIN32) # windows-only
+	set(CMKR_TARGET kananlib-stress-test)
+	if(NOT TARGET kananlib)
+	    add_subdirectory(kananlib)
+	endif()
+
+	set(kananlib-stress-test_SOURCES
+		StressTest.cpp
+		cmake.toml
+	)
+
+	add_executable(kananlib-stress-test)
+
+	target_sources(kananlib-stress-test PRIVATE ${kananlib-stress-test_SOURCES})
+	source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${kananlib-stress-test_SOURCES})
+
+	target_compile_features(kananlib-stress-test PRIVATE
+		cxx_std_20
+	)
+
+	target_include_directories(kananlib-stress-test PRIVATE
+		include
+	)
+
+	target_link_libraries(kananlib-stress-test PRIVATE
+		bddisasm::bddisasm
+		bddisasm::bdshemu
+		spdlog::spdlog
+		kananlib
+	)
+
+	get_directory_property(CMKR_VS_STARTUP_PROJECT DIRECTORY ${PROJECT_SOURCE_DIR} DEFINITION VS_STARTUP_PROJECT)
+	if(NOT CMKR_VS_STARTUP_PROJECT)
+		set_property(DIRECTORY ${PROJECT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT kananlib-stress-test)
+	endif()
+
+	if (CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+	    target_compile_options(${CMKR_TARGET} PRIVATE /EHa)
+	endif()
+	if (WIN32)
+	    target_link_libraries(${CMKR_TARGET} PRIVATE shlwapi)
+	endif()
+	# The PE-mapping test loads samples/kananlib_sample.dll from the source tree.
+	if (CMKR_TARGET STREQUAL "kananlib-linux-pe-test")
+	    target_compile_definitions(${CMKR_TARGET} PRIVATE KANANLIB_SAMPLE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/samples)
+	endif()
+	add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
+
 endif()
-
-set(kananlib-stress-test_SOURCES
-	StressTest.cpp
-	cmake.toml
-)
-
-add_executable(kananlib-stress-test)
-
-target_sources(kananlib-stress-test PRIVATE ${kananlib-stress-test_SOURCES})
-source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${kananlib-stress-test_SOURCES})
-
-target_compile_features(kananlib-stress-test PRIVATE
-	cxx_std_20
-)
-
-target_compile_options(kananlib-stress-test PRIVATE
-	"/EHa"
-)
-
-target_include_directories(kananlib-stress-test PRIVATE
-	include
-)
-
-target_link_libraries(kananlib-stress-test PRIVATE
-	bddisasm::bddisasm
-	bddisasm::bdshemu
-	spdlog::spdlog
-	shlwapi
-	kananlib
-)
-
-get_directory_property(CMKR_VS_STARTUP_PROJECT DIRECTORY ${PROJECT_SOURCE_DIR} DEFINITION VS_STARTUP_PROJECT)
-if(NOT CMKR_VS_STARTUP_PROJECT)
-	set_property(DIRECTORY ${PROJECT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT kananlib-stress-test)
-endif()
-
-add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
-
 # Target: kananlib-utils-test
 set(CMKR_TARGET kananlib-utils-test)
 if(NOT TARGET kananlib)
@@ -178,10 +198,6 @@ target_compile_features(kananlib-utils-test PRIVATE
 	cxx_std_20
 )
 
-target_compile_options(kananlib-utils-test PRIVATE
-	"/EHa"
-)
-
 target_include_directories(kananlib-utils-test PRIVATE
 	include
 )
@@ -190,7 +206,6 @@ target_link_libraries(kananlib-utils-test PRIVATE
 	bddisasm::bddisasm
 	bddisasm::bdshemu
 	spdlog::spdlog
-	shlwapi
 	kananlib
 )
 
@@ -199,6 +214,16 @@ if(NOT CMKR_VS_STARTUP_PROJECT)
 	set_property(DIRECTORY ${PROJECT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT kananlib-utils-test)
 endif()
 
+if (CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+    target_compile_options(${CMKR_TARGET} PRIVATE /EHa)
+endif()
+if (WIN32)
+    target_link_libraries(${CMKR_TARGET} PRIVATE shlwapi)
+endif()
+# The PE-mapping test loads samples/kananlib_sample.dll from the source tree.
+if (CMKR_TARGET STREQUAL "kananlib-linux-pe-test")
+    target_compile_definitions(${CMKR_TARGET} PRIVATE KANANLIB_SAMPLE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/samples)
+endif()
 add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
 
 # Target: kananlib-advanced-test
@@ -221,10 +246,6 @@ target_compile_features(kananlib-advanced-test PRIVATE
 	cxx_std_20
 )
 
-target_compile_options(kananlib-advanced-test PRIVATE
-	"/EHa"
-)
-
 target_include_directories(kananlib-advanced-test PRIVATE
 	include
 )
@@ -233,7 +254,6 @@ target_link_libraries(kananlib-advanced-test PRIVATE
 	bddisasm::bddisasm
 	bddisasm::bdshemu
 	spdlog::spdlog
-	shlwapi
 	kananlib
 )
 
@@ -242,6 +262,16 @@ if(NOT CMKR_VS_STARTUP_PROJECT)
 	set_property(DIRECTORY ${PROJECT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT kananlib-advanced-test)
 endif()
 
+if (CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+    target_compile_options(${CMKR_TARGET} PRIVATE /EHa)
+endif()
+if (WIN32)
+    target_link_libraries(${CMKR_TARGET} PRIVATE shlwapi)
+endif()
+# The PE-mapping test loads samples/kananlib_sample.dll from the source tree.
+if (CMKR_TARGET STREQUAL "kananlib-linux-pe-test")
+    target_compile_definitions(${CMKR_TARGET} PRIVATE KANANLIB_SAMPLE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/samples)
+endif()
 add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
 
 # Target: kananlib-vtablehook-test
@@ -264,10 +294,6 @@ target_compile_features(kananlib-vtablehook-test PRIVATE
 	cxx_std_20
 )
 
-target_compile_options(kananlib-vtablehook-test PRIVATE
-	"/EHa"
-)
-
 target_include_directories(kananlib-vtablehook-test PRIVATE
 	include
 )
@@ -276,7 +302,6 @@ target_link_libraries(kananlib-vtablehook-test PRIVATE
 	bddisasm::bddisasm
 	bddisasm::bdshemu
 	spdlog::spdlog
-	shlwapi
 	kananlib
 )
 
@@ -285,51 +310,68 @@ if(NOT CMKR_VS_STARTUP_PROJECT)
 	set_property(DIRECTORY ${PROJECT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT kananlib-vtablehook-test)
 endif()
 
+if (CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+    target_compile_options(${CMKR_TARGET} PRIVATE /EHa)
+endif()
+if (WIN32)
+    target_link_libraries(${CMKR_TARGET} PRIVATE shlwapi)
+endif()
+# The PE-mapping test loads samples/kananlib_sample.dll from the source tree.
+if (CMKR_TARGET STREQUAL "kananlib-linux-pe-test")
+    target_compile_definitions(${CMKR_TARGET} PRIVATE KANANLIB_SAMPLE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/samples)
+endif()
 add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
 
 # Target: kananlib-input-test
-set(CMKR_TARGET kananlib-input-test)
-if(NOT TARGET kananlib)
-    add_subdirectory(kananlib)
+if(WIN32) # windows-only
+	set(CMKR_TARGET kananlib-input-test)
+	if(NOT TARGET kananlib)
+	    add_subdirectory(kananlib)
+	endif()
+
+	set(kananlib-input-test_SOURCES
+		TestInput.cpp
+		cmake.toml
+	)
+
+	add_executable(kananlib-input-test)
+
+	target_sources(kananlib-input-test PRIVATE ${kananlib-input-test_SOURCES})
+	source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${kananlib-input-test_SOURCES})
+
+	target_compile_features(kananlib-input-test PRIVATE
+		cxx_std_20
+	)
+
+	target_include_directories(kananlib-input-test PRIVATE
+		include
+	)
+
+	target_link_libraries(kananlib-input-test PRIVATE
+		bddisasm::bddisasm
+		bddisasm::bdshemu
+		spdlog::spdlog
+		kananlib
+	)
+
+	get_directory_property(CMKR_VS_STARTUP_PROJECT DIRECTORY ${PROJECT_SOURCE_DIR} DEFINITION VS_STARTUP_PROJECT)
+	if(NOT CMKR_VS_STARTUP_PROJECT)
+		set_property(DIRECTORY ${PROJECT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT kananlib-input-test)
+	endif()
+
+	if (CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+	    target_compile_options(${CMKR_TARGET} PRIVATE /EHa)
+	endif()
+	if (WIN32)
+	    target_link_libraries(${CMKR_TARGET} PRIVATE shlwapi)
+	endif()
+	# The PE-mapping test loads samples/kananlib_sample.dll from the source tree.
+	if (CMKR_TARGET STREQUAL "kananlib-linux-pe-test")
+	    target_compile_definitions(${CMKR_TARGET} PRIVATE KANANLIB_SAMPLE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/samples)
+	endif()
+	add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
+
 endif()
-
-set(kananlib-input-test_SOURCES
-	TestInput.cpp
-	cmake.toml
-)
-
-add_executable(kananlib-input-test)
-
-target_sources(kananlib-input-test PRIVATE ${kananlib-input-test_SOURCES})
-source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${kananlib-input-test_SOURCES})
-
-target_compile_features(kananlib-input-test PRIVATE
-	cxx_std_20
-)
-
-target_compile_options(kananlib-input-test PRIVATE
-	"/EHa"
-)
-
-target_include_directories(kananlib-input-test PRIVATE
-	include
-)
-
-target_link_libraries(kananlib-input-test PRIVATE
-	bddisasm::bddisasm
-	bddisasm::bdshemu
-	spdlog::spdlog
-	shlwapi
-	kananlib
-)
-
-get_directory_property(CMKR_VS_STARTUP_PROJECT DIRECTORY ${PROJECT_SOURCE_DIR} DEFINITION VS_STARTUP_PROJECT)
-if(NOT CMKR_VS_STARTUP_PROJECT)
-	set_property(DIRECTORY ${PROJECT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT kananlib-input-test)
-endif()
-
-add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
-
 # Target: kananlib-registry-test
 set(CMKR_TARGET kananlib-registry-test)
 if(NOT TARGET kananlib)
@@ -350,10 +392,6 @@ target_compile_features(kananlib-registry-test PRIVATE
 	cxx_std_20
 )
 
-target_compile_options(kananlib-registry-test PRIVATE
-	"/EHa"
-)
-
 target_include_directories(kananlib-registry-test PRIVATE
 	include
 )
@@ -362,7 +400,6 @@ target_link_libraries(kananlib-registry-test PRIVATE
 	bddisasm::bddisasm
 	bddisasm::bdshemu
 	spdlog::spdlog
-	shlwapi
 	kananlib
 )
 
@@ -371,51 +408,68 @@ if(NOT CMKR_VS_STARTUP_PROJECT)
 	set_property(DIRECTORY ${PROJECT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT kananlib-registry-test)
 endif()
 
+if (CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+    target_compile_options(${CMKR_TARGET} PRIVATE /EHa)
+endif()
+if (WIN32)
+    target_link_libraries(${CMKR_TARGET} PRIVATE shlwapi)
+endif()
+# The PE-mapping test loads samples/kananlib_sample.dll from the source tree.
+if (CMKR_TARGET STREQUAL "kananlib-linux-pe-test")
+    target_compile_definitions(${CMKR_TARGET} PRIVATE KANANLIB_SAMPLE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/samples)
+endif()
 add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
 
 # Target: kananlib-module-test
-set(CMKR_TARGET kananlib-module-test)
-if(NOT TARGET kananlib)
-    add_subdirectory(kananlib)
+if(WIN32) # windows-only
+	set(CMKR_TARGET kananlib-module-test)
+	if(NOT TARGET kananlib)
+	    add_subdirectory(kananlib)
+	endif()
+
+	set(kananlib-module-test_SOURCES
+		TestModule.cpp
+		cmake.toml
+	)
+
+	add_executable(kananlib-module-test)
+
+	target_sources(kananlib-module-test PRIVATE ${kananlib-module-test_SOURCES})
+	source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${kananlib-module-test_SOURCES})
+
+	target_compile_features(kananlib-module-test PRIVATE
+		cxx_std_20
+	)
+
+	target_include_directories(kananlib-module-test PRIVATE
+		include
+	)
+
+	target_link_libraries(kananlib-module-test PRIVATE
+		bddisasm::bddisasm
+		bddisasm::bdshemu
+		spdlog::spdlog
+		kananlib
+	)
+
+	get_directory_property(CMKR_VS_STARTUP_PROJECT DIRECTORY ${PROJECT_SOURCE_DIR} DEFINITION VS_STARTUP_PROJECT)
+	if(NOT CMKR_VS_STARTUP_PROJECT)
+		set_property(DIRECTORY ${PROJECT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT kananlib-module-test)
+	endif()
+
+	if (CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+	    target_compile_options(${CMKR_TARGET} PRIVATE /EHa)
+	endif()
+	if (WIN32)
+	    target_link_libraries(${CMKR_TARGET} PRIVATE shlwapi)
+	endif()
+	# The PE-mapping test loads samples/kananlib_sample.dll from the source tree.
+	if (CMKR_TARGET STREQUAL "kananlib-linux-pe-test")
+	    target_compile_definitions(${CMKR_TARGET} PRIVATE KANANLIB_SAMPLE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/samples)
+	endif()
+	add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
+
 endif()
-
-set(kananlib-module-test_SOURCES
-	TestModule.cpp
-	cmake.toml
-)
-
-add_executable(kananlib-module-test)
-
-target_sources(kananlib-module-test PRIVATE ${kananlib-module-test_SOURCES})
-source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${kananlib-module-test_SOURCES})
-
-target_compile_features(kananlib-module-test PRIVATE
-	cxx_std_20
-)
-
-target_compile_options(kananlib-module-test PRIVATE
-	"/EHa"
-)
-
-target_include_directories(kananlib-module-test PRIVATE
-	include
-)
-
-target_link_libraries(kananlib-module-test PRIVATE
-	bddisasm::bddisasm
-	bddisasm::bdshemu
-	spdlog::spdlog
-	shlwapi
-	kananlib
-)
-
-get_directory_property(CMKR_VS_STARTUP_PROJECT DIRECTORY ${PROJECT_SOURCE_DIR} DEFINITION VS_STARTUP_PROJECT)
-if(NOT CMKR_VS_STARTUP_PROJECT)
-	set_property(DIRECTORY ${PROJECT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT kananlib-module-test)
-endif()
-
-add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
-
 # Target: kananlib-scan-test
 set(CMKR_TARGET kananlib-scan-test)
 if(NOT TARGET kananlib)
@@ -436,10 +490,6 @@ target_compile_features(kananlib-scan-test PRIVATE
 	cxx_std_20
 )
 
-target_compile_options(kananlib-scan-test PRIVATE
-	"/EHa"
-)
-
 target_include_directories(kananlib-scan-test PRIVATE
 	include
 )
@@ -448,7 +498,6 @@ target_link_libraries(kananlib-scan-test PRIVATE
 	bddisasm::bddisasm
 	bddisasm::bdshemu
 	spdlog::spdlog
-	shlwapi
 	kananlib
 )
 
@@ -457,55 +506,72 @@ if(NOT CMKR_VS_STARTUP_PROJECT)
 	set_property(DIRECTORY ${PROJECT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT kananlib-scan-test)
 endif()
 
+if (CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+    target_compile_options(${CMKR_TARGET} PRIVATE /EHa)
+endif()
+if (WIN32)
+    target_link_libraries(${CMKR_TARGET} PRIVATE shlwapi)
+endif()
+# The PE-mapping test loads samples/kananlib_sample.dll from the source tree.
+if (CMKR_TARGET STREQUAL "kananlib-linux-pe-test")
+    target_compile_definitions(${CMKR_TARGET} PRIVATE KANANLIB_SAMPLE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/samples)
+endif()
 add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
 
 # Target: kananlib-pdb-rtti-test
-set(CMKR_TARGET kananlib-pdb-rtti-test)
-if(NOT TARGET kananlib)
-    add_subdirectory(kananlib)
+if(WIN32) # windows-only
+	set(CMKR_TARGET kananlib-pdb-rtti-test)
+	if(NOT TARGET kananlib)
+	    add_subdirectory(kananlib)
+	endif()
+
+	set(kananlib-pdb-rtti-test_SOURCES
+		TestPDBRTTI.cpp
+		cmake.toml
+	)
+
+	add_executable(kananlib-pdb-rtti-test)
+
+	target_sources(kananlib-pdb-rtti-test PRIVATE ${kananlib-pdb-rtti-test_SOURCES})
+	source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${kananlib-pdb-rtti-test_SOURCES})
+
+	target_compile_features(kananlib-pdb-rtti-test PRIVATE
+		cxx_std_20
+	)
+
+	target_include_directories(kananlib-pdb-rtti-test PRIVATE
+		include
+	)
+
+	target_link_libraries(kananlib-pdb-rtti-test PRIVATE
+		bddisasm::bddisasm
+		bddisasm::bdshemu
+		spdlog::spdlog
+		kananlib
+	)
+
+	target_compile_definitions(kananlib-pdb-rtti-test PRIVATE
+		KANANLIB_USE_DIA_SDK
+	)
+
+	get_directory_property(CMKR_VS_STARTUP_PROJECT DIRECTORY ${PROJECT_SOURCE_DIR} DEFINITION VS_STARTUP_PROJECT)
+	if(NOT CMKR_VS_STARTUP_PROJECT)
+		set_property(DIRECTORY ${PROJECT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT kananlib-pdb-rtti-test)
+	endif()
+
+	if (CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+	    target_compile_options(${CMKR_TARGET} PRIVATE /EHa)
+	endif()
+	if (WIN32)
+	    target_link_libraries(${CMKR_TARGET} PRIVATE shlwapi)
+	endif()
+	# The PE-mapping test loads samples/kananlib_sample.dll from the source tree.
+	if (CMKR_TARGET STREQUAL "kananlib-linux-pe-test")
+	    target_compile_definitions(${CMKR_TARGET} PRIVATE KANANLIB_SAMPLE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/samples)
+	endif()
+	add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
+
 endif()
-
-set(kananlib-pdb-rtti-test_SOURCES
-	TestPDBRTTI.cpp
-	cmake.toml
-)
-
-add_executable(kananlib-pdb-rtti-test)
-
-target_sources(kananlib-pdb-rtti-test PRIVATE ${kananlib-pdb-rtti-test_SOURCES})
-source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${kananlib-pdb-rtti-test_SOURCES})
-
-target_compile_features(kananlib-pdb-rtti-test PRIVATE
-	cxx_std_20
-)
-
-target_compile_options(kananlib-pdb-rtti-test PRIVATE
-	"/EHa"
-)
-
-target_include_directories(kananlib-pdb-rtti-test PRIVATE
-	include
-)
-
-target_link_libraries(kananlib-pdb-rtti-test PRIVATE
-	bddisasm::bddisasm
-	bddisasm::bdshemu
-	spdlog::spdlog
-	shlwapi
-	kananlib
-)
-
-target_compile_definitions(kananlib-pdb-rtti-test PRIVATE
-	KANANLIB_USE_DIA_SDK
-)
-
-get_directory_property(CMKR_VS_STARTUP_PROJECT DIRECTORY ${PROJECT_SOURCE_DIR} DEFINITION VS_STARTUP_PROJECT)
-if(NOT CMKR_VS_STARTUP_PROJECT)
-	set_property(DIRECTORY ${PROJECT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT kananlib-pdb-rtti-test)
-endif()
-
-add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
-
 # Target: kananlib-emulation-test
 set(CMKR_TARGET kananlib-emulation-test)
 if(NOT TARGET kananlib)
@@ -526,10 +592,6 @@ target_compile_features(kananlib-emulation-test PRIVATE
 	cxx_std_20
 )
 
-target_compile_options(kananlib-emulation-test PRIVATE
-	"/EHa"
-)
-
 target_include_directories(kananlib-emulation-test PRIVATE
 	include
 )
@@ -538,7 +600,6 @@ target_link_libraries(kananlib-emulation-test PRIVATE
 	bddisasm::bddisasm
 	bddisasm::bdshemu
 	spdlog::spdlog
-	shlwapi
 	kananlib
 )
 
@@ -547,6 +608,16 @@ if(NOT CMKR_VS_STARTUP_PROJECT)
 	set_property(DIRECTORY ${PROJECT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT kananlib-emulation-test)
 endif()
 
+if (CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+    target_compile_options(${CMKR_TARGET} PRIVATE /EHa)
+endif()
+if (WIN32)
+    target_link_libraries(${CMKR_TARGET} PRIVATE shlwapi)
+endif()
+# The PE-mapping test loads samples/kananlib_sample.dll from the source tree.
+if (CMKR_TARGET STREQUAL "kananlib-linux-pe-test")
+    target_compile_definitions(${CMKR_TARGET} PRIVATE KANANLIB_SAMPLE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/samples)
+endif()
 add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
 
 # Target: kananlib-bug-regression-test
@@ -569,10 +640,6 @@ target_compile_features(kananlib-bug-regression-test PRIVATE
 	cxx_std_20
 )
 
-target_compile_options(kananlib-bug-regression-test PRIVATE
-	"/EHa"
-)
-
 target_include_directories(kananlib-bug-regression-test PRIVATE
 	include
 )
@@ -581,7 +648,6 @@ target_link_libraries(kananlib-bug-regression-test PRIVATE
 	bddisasm::bddisasm
 	bddisasm::bdshemu
 	spdlog::spdlog
-	shlwapi
 	kananlib
 )
 
@@ -590,6 +656,16 @@ if(NOT CMKR_VS_STARTUP_PROJECT)
 	set_property(DIRECTORY ${PROJECT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT kananlib-bug-regression-test)
 endif()
 
+if (CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+    target_compile_options(${CMKR_TARGET} PRIVATE /EHa)
+endif()
+if (WIN32)
+    target_link_libraries(${CMKR_TARGET} PRIVATE shlwapi)
+endif()
+# The PE-mapping test loads samples/kananlib_sample.dll from the source tree.
+if (CMKR_TARGET STREQUAL "kananlib-linux-pe-test")
+    target_compile_definitions(${CMKR_TARGET} PRIVATE KANANLIB_SAMPLE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/samples)
+endif()
 add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
 
 # Target: kananlib-scan-bug-regression-test
@@ -612,10 +688,6 @@ target_compile_features(kananlib-scan-bug-regression-test PRIVATE
 	cxx_std_20
 )
 
-target_compile_options(kananlib-scan-bug-regression-test PRIVATE
-	"/EHa"
-)
-
 target_include_directories(kananlib-scan-bug-regression-test PRIVATE
 	include
 )
@@ -624,7 +696,6 @@ target_link_libraries(kananlib-scan-bug-regression-test PRIVATE
 	bddisasm::bddisasm
 	bddisasm::bdshemu
 	spdlog::spdlog
-	shlwapi
 	kananlib
 )
 
@@ -633,6 +704,16 @@ if(NOT CMKR_VS_STARTUP_PROJECT)
 	set_property(DIRECTORY ${PROJECT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT kananlib-scan-bug-regression-test)
 endif()
 
+if (CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+    target_compile_options(${CMKR_TARGET} PRIVATE /EHa)
+endif()
+if (WIN32)
+    target_link_libraries(${CMKR_TARGET} PRIVATE shlwapi)
+endif()
+# The PE-mapping test loads samples/kananlib_sample.dll from the source tree.
+if (CMKR_TARGET STREQUAL "kananlib-linux-pe-test")
+    target_compile_definitions(${CMKR_TARGET} PRIVATE KANANLIB_SAMPLE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/samples)
+endif()
 add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
 
 # Target: kananlib-behavior-test
@@ -655,10 +736,6 @@ target_compile_features(kananlib-behavior-test PRIVATE
 	cxx_std_20
 )
 
-target_compile_options(kananlib-behavior-test PRIVATE
-	"/EHa"
-)
-
 target_include_directories(kananlib-behavior-test PRIVATE
 	include
 )
@@ -667,7 +744,6 @@ target_link_libraries(kananlib-behavior-test PRIVATE
 	bddisasm::bddisasm
 	bddisasm::bdshemu
 	spdlog::spdlog
-	shlwapi
 	kananlib
 )
 
@@ -676,6 +752,16 @@ if(NOT CMKR_VS_STARTUP_PROJECT)
 	set_property(DIRECTORY ${PROJECT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT kananlib-behavior-test)
 endif()
 
+if (CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+    target_compile_options(${CMKR_TARGET} PRIVATE /EHa)
+endif()
+if (WIN32)
+    target_link_libraries(${CMKR_TARGET} PRIVATE shlwapi)
+endif()
+# The PE-mapping test loads samples/kananlib_sample.dll from the source tree.
+if (CMKR_TARGET STREQUAL "kananlib-linux-pe-test")
+    target_compile_definitions(${CMKR_TARGET} PRIVATE KANANLIB_SAMPLE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/samples)
+endif()
 add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
 
 # Target: kananlib-scan-coverage-test
@@ -698,10 +784,6 @@ target_compile_features(kananlib-scan-coverage-test PRIVATE
 	cxx_std_20
 )
 
-target_compile_options(kananlib-scan-coverage-test PRIVATE
-	"/EHa"
-)
-
 target_include_directories(kananlib-scan-coverage-test PRIVATE
 	include
 )
@@ -710,88 +792,126 @@ target_link_libraries(kananlib-scan-coverage-test PRIVATE
 	bddisasm::bddisasm
 	bddisasm::bdshemu
 	spdlog::spdlog
-	shlwapi
 	kananlib
 )
 
+get_directory_property(CMKR_VS_STARTUP_PROJECT DIRECTORY ${PROJECT_SOURCE_DIR} DEFINITION VS_STARTUP_PROJECT)
+if(NOT CMKR_VS_STARTUP_PROJECT)
+	set_property(DIRECTORY ${PROJECT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT kananlib-scan-coverage-test)
+endif()
+
+if (CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+    target_compile_options(${CMKR_TARGET} PRIVATE /EHa)
+endif()
+if (WIN32)
+    target_link_libraries(${CMKR_TARGET} PRIVATE shlwapi)
+endif()
+# The PE-mapping test loads samples/kananlib_sample.dll from the source tree.
+if (CMKR_TARGET STREQUAL "kananlib-linux-pe-test")
+    target_compile_definitions(${CMKR_TARGET} PRIVATE KANANLIB_SAMPLE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/samples)
+endif()
 add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
 
 # Target: kananlib-module-coverage-test
-set(CMKR_TARGET kananlib-module-coverage-test)
-if(NOT TARGET kananlib)
-    add_subdirectory(kananlib)
+if(WIN32) # windows-only
+	set(CMKR_TARGET kananlib-module-coverage-test)
+	if(NOT TARGET kananlib)
+	    add_subdirectory(kananlib)
+	endif()
+
+	set(kananlib-module-coverage-test_SOURCES
+		TestModuleCoverage.cpp
+		cmake.toml
+	)
+
+	add_executable(kananlib-module-coverage-test)
+
+	target_sources(kananlib-module-coverage-test PRIVATE ${kananlib-module-coverage-test_SOURCES})
+	source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${kananlib-module-coverage-test_SOURCES})
+
+	target_compile_features(kananlib-module-coverage-test PRIVATE
+		cxx_std_20
+	)
+
+	target_include_directories(kananlib-module-coverage-test PRIVATE
+		include
+	)
+
+	target_link_libraries(kananlib-module-coverage-test PRIVATE
+		bddisasm::bddisasm
+		bddisasm::bdshemu
+		spdlog::spdlog
+		kananlib
+	)
+
+	get_directory_property(CMKR_VS_STARTUP_PROJECT DIRECTORY ${PROJECT_SOURCE_DIR} DEFINITION VS_STARTUP_PROJECT)
+	if(NOT CMKR_VS_STARTUP_PROJECT)
+		set_property(DIRECTORY ${PROJECT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT kananlib-module-coverage-test)
+	endif()
+
+	if (CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+	    target_compile_options(${CMKR_TARGET} PRIVATE /EHa)
+	endif()
+	if (WIN32)
+	    target_link_libraries(${CMKR_TARGET} PRIVATE shlwapi)
+	endif()
+	# The PE-mapping test loads samples/kananlib_sample.dll from the source tree.
+	if (CMKR_TARGET STREQUAL "kananlib-linux-pe-test")
+	    target_compile_definitions(${CMKR_TARGET} PRIVATE KANANLIB_SAMPLE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/samples)
+	endif()
+	add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
+
 endif()
-
-set(kananlib-module-coverage-test_SOURCES
-	TestModuleCoverage.cpp
-	cmake.toml
-)
-
-add_executable(kananlib-module-coverage-test)
-
-target_sources(kananlib-module-coverage-test PRIVATE ${kananlib-module-coverage-test_SOURCES})
-source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${kananlib-module-coverage-test_SOURCES})
-
-target_compile_features(kananlib-module-coverage-test PRIVATE
-	cxx_std_20
-)
-
-target_compile_options(kananlib-module-coverage-test PRIVATE
-	"/EHa"
-)
-
-target_include_directories(kananlib-module-coverage-test PRIVATE
-	include
-)
-
-target_link_libraries(kananlib-module-coverage-test PRIVATE
-	bddisasm::bddisasm
-	bddisasm::bdshemu
-	spdlog::spdlog
-	shlwapi
-	kananlib
-)
-
-add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
-
 # Target: kananlib-rtti-coverage-test
-set(CMKR_TARGET kananlib-rtti-coverage-test)
-if(NOT TARGET kananlib)
-    add_subdirectory(kananlib)
+if(WIN32) # windows-only
+	set(CMKR_TARGET kananlib-rtti-coverage-test)
+	if(NOT TARGET kananlib)
+	    add_subdirectory(kananlib)
+	endif()
+
+	set(kananlib-rtti-coverage-test_SOURCES
+		TestRTTICoverage.cpp
+		cmake.toml
+	)
+
+	add_executable(kananlib-rtti-coverage-test)
+
+	target_sources(kananlib-rtti-coverage-test PRIVATE ${kananlib-rtti-coverage-test_SOURCES})
+	source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${kananlib-rtti-coverage-test_SOURCES})
+
+	target_compile_features(kananlib-rtti-coverage-test PRIVATE
+		cxx_std_20
+	)
+
+	target_include_directories(kananlib-rtti-coverage-test PRIVATE
+		include
+	)
+
+	target_link_libraries(kananlib-rtti-coverage-test PRIVATE
+		bddisasm::bddisasm
+		bddisasm::bdshemu
+		spdlog::spdlog
+		kananlib
+	)
+
+	get_directory_property(CMKR_VS_STARTUP_PROJECT DIRECTORY ${PROJECT_SOURCE_DIR} DEFINITION VS_STARTUP_PROJECT)
+	if(NOT CMKR_VS_STARTUP_PROJECT)
+		set_property(DIRECTORY ${PROJECT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT kananlib-rtti-coverage-test)
+	endif()
+
+	if (CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+	    target_compile_options(${CMKR_TARGET} PRIVATE /EHa)
+	endif()
+	if (WIN32)
+	    target_link_libraries(${CMKR_TARGET} PRIVATE shlwapi)
+	endif()
+	# The PE-mapping test loads samples/kananlib_sample.dll from the source tree.
+	if (CMKR_TARGET STREQUAL "kananlib-linux-pe-test")
+	    target_compile_definitions(${CMKR_TARGET} PRIVATE KANANLIB_SAMPLE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/samples)
+	endif()
+	add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
+
 endif()
-
-set(kananlib-rtti-coverage-test_SOURCES
-	TestRTTICoverage.cpp
-	cmake.toml
-)
-
-add_executable(kananlib-rtti-coverage-test)
-
-target_sources(kananlib-rtti-coverage-test PRIVATE ${kananlib-rtti-coverage-test_SOURCES})
-source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${kananlib-rtti-coverage-test_SOURCES})
-
-target_compile_features(kananlib-rtti-coverage-test PRIVATE
-	cxx_std_20
-)
-
-target_compile_options(kananlib-rtti-coverage-test PRIVATE
-	"/EHa"
-)
-
-target_include_directories(kananlib-rtti-coverage-test PRIVATE
-	include
-)
-
-target_link_libraries(kananlib-rtti-coverage-test PRIVATE
-	bddisasm::bddisasm
-	bddisasm::bdshemu
-	spdlog::spdlog
-	shlwapi
-	kananlib
-)
-
-add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
-
 # Target: kananlib-misc-coverage-test
 set(CMKR_TARGET kananlib-misc-coverage-test)
 if(NOT TARGET kananlib)
@@ -812,10 +932,6 @@ target_compile_features(kananlib-misc-coverage-test PRIVATE
 	cxx_std_20
 )
 
-target_compile_options(kananlib-misc-coverage-test PRIVATE
-	"/EHa"
-)
-
 target_include_directories(kananlib-misc-coverage-test PRIVATE
 	include
 )
@@ -824,126 +940,176 @@ target_link_libraries(kananlib-misc-coverage-test PRIVATE
 	bddisasm::bddisasm
 	bddisasm::bdshemu
 	spdlog::spdlog
-	shlwapi
 	kananlib
 )
 
+get_directory_property(CMKR_VS_STARTUP_PROJECT DIRECTORY ${PROJECT_SOURCE_DIR} DEFINITION VS_STARTUP_PROJECT)
+if(NOT CMKR_VS_STARTUP_PROJECT)
+	set_property(DIRECTORY ${PROJECT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT kananlib-misc-coverage-test)
+endif()
+
+if (CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+    target_compile_options(${CMKR_TARGET} PRIVATE /EHa)
+endif()
+if (WIN32)
+    target_link_libraries(${CMKR_TARGET} PRIVATE shlwapi)
+endif()
+# The PE-mapping test loads samples/kananlib_sample.dll from the source tree.
+if (CMKR_TARGET STREQUAL "kananlib-linux-pe-test")
+    target_compile_definitions(${CMKR_TARGET} PRIVATE KANANLIB_SAMPLE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/samples)
+endif()
 add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
 
 # Target: kananlib-scan-bounds-test
-set(CMKR_TARGET kananlib-scan-bounds-test)
-if(NOT TARGET kananlib)
-    add_subdirectory(kananlib)
+if(WIN32) # windows-only
+	set(CMKR_TARGET kananlib-scan-bounds-test)
+	if(NOT TARGET kananlib)
+	    add_subdirectory(kananlib)
+	endif()
+
+	set(kananlib-scan-bounds-test_SOURCES
+		TestScanBounds.cpp
+		cmake.toml
+	)
+
+	add_executable(kananlib-scan-bounds-test)
+
+	target_sources(kananlib-scan-bounds-test PRIVATE ${kananlib-scan-bounds-test_SOURCES})
+	source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${kananlib-scan-bounds-test_SOURCES})
+
+	target_compile_features(kananlib-scan-bounds-test PRIVATE
+		cxx_std_20
+	)
+
+	target_include_directories(kananlib-scan-bounds-test PRIVATE
+		include
+	)
+
+	target_link_libraries(kananlib-scan-bounds-test PRIVATE
+		bddisasm::bddisasm
+		bddisasm::bdshemu
+		spdlog::spdlog
+		kananlib
+	)
+
+	get_directory_property(CMKR_VS_STARTUP_PROJECT DIRECTORY ${PROJECT_SOURCE_DIR} DEFINITION VS_STARTUP_PROJECT)
+	if(NOT CMKR_VS_STARTUP_PROJECT)
+		set_property(DIRECTORY ${PROJECT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT kananlib-scan-bounds-test)
+	endif()
+
+	if (CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+	    target_compile_options(${CMKR_TARGET} PRIVATE /EHa)
+	endif()
+	if (WIN32)
+	    target_link_libraries(${CMKR_TARGET} PRIVATE shlwapi)
+	endif()
+	# The PE-mapping test loads samples/kananlib_sample.dll from the source tree.
+	if (CMKR_TARGET STREQUAL "kananlib-linux-pe-test")
+	    target_compile_definitions(${CMKR_TARGET} PRIVATE KANANLIB_SAMPLE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/samples)
+	endif()
+	add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
+
 endif()
-
-set(kananlib-scan-bounds-test_SOURCES
-	TestScanBounds.cpp
-	cmake.toml
-)
-
-add_executable(kananlib-scan-bounds-test)
-
-target_sources(kananlib-scan-bounds-test PRIVATE ${kananlib-scan-bounds-test_SOURCES})
-source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${kananlib-scan-bounds-test_SOURCES})
-
-target_compile_features(kananlib-scan-bounds-test PRIVATE
-	cxx_std_20
-)
-
-target_compile_options(kananlib-scan-bounds-test PRIVATE
-	"/EHa"
-)
-
-target_include_directories(kananlib-scan-bounds-test PRIVATE
-	include
-)
-
-target_link_libraries(kananlib-scan-bounds-test PRIVATE
-	bddisasm::bddisasm
-	bddisasm::bdshemu
-	spdlog::spdlog
-	shlwapi
-	kananlib
-)
-
-add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
-
 # Target: kananlib-scan-path-test
-set(CMKR_TARGET kananlib-scan-path-test)
-if(NOT TARGET kananlib)
-    add_subdirectory(kananlib)
+if(WIN32) # windows-only
+	set(CMKR_TARGET kananlib-scan-path-test)
+	if(NOT TARGET kananlib)
+	    add_subdirectory(kananlib)
+	endif()
+
+	set(kananlib-scan-path-test_SOURCES
+		TestScanPath.cpp
+		cmake.toml
+	)
+
+	add_executable(kananlib-scan-path-test)
+
+	target_sources(kananlib-scan-path-test PRIVATE ${kananlib-scan-path-test_SOURCES})
+	source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${kananlib-scan-path-test_SOURCES})
+
+	target_compile_features(kananlib-scan-path-test PRIVATE
+		cxx_std_20
+	)
+
+	target_include_directories(kananlib-scan-path-test PRIVATE
+		include
+	)
+
+	target_link_libraries(kananlib-scan-path-test PRIVATE
+		bddisasm::bddisasm
+		bddisasm::bdshemu
+		spdlog::spdlog
+		kananlib
+	)
+
+	get_directory_property(CMKR_VS_STARTUP_PROJECT DIRECTORY ${PROJECT_SOURCE_DIR} DEFINITION VS_STARTUP_PROJECT)
+	if(NOT CMKR_VS_STARTUP_PROJECT)
+		set_property(DIRECTORY ${PROJECT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT kananlib-scan-path-test)
+	endif()
+
+	if (CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+	    target_compile_options(${CMKR_TARGET} PRIVATE /EHa)
+	endif()
+	if (WIN32)
+	    target_link_libraries(${CMKR_TARGET} PRIVATE shlwapi)
+	endif()
+	# The PE-mapping test loads samples/kananlib_sample.dll from the source tree.
+	if (CMKR_TARGET STREQUAL "kananlib-linux-pe-test")
+	    target_compile_definitions(${CMKR_TARGET} PRIVATE KANANLIB_SAMPLE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/samples)
+	endif()
+	add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
+
 endif()
-
-set(kananlib-scan-path-test_SOURCES
-	TestScanPath.cpp
-	cmake.toml
-)
-
-add_executable(kananlib-scan-path-test)
-
-target_sources(kananlib-scan-path-test PRIVATE ${kananlib-scan-path-test_SOURCES})
-source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${kananlib-scan-path-test_SOURCES})
-
-target_compile_features(kananlib-scan-path-test PRIVATE
-	cxx_std_20
-)
-
-target_compile_options(kananlib-scan-path-test PRIVATE
-	"/EHa"
-)
-
-target_include_directories(kananlib-scan-path-test PRIVATE
-	include
-)
-
-target_link_libraries(kananlib-scan-path-test PRIVATE
-	bddisasm::bddisasm
-	bddisasm::bdshemu
-	spdlog::spdlog
-	shlwapi
-	kananlib
-)
-
-add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
-
 # Target: kananlib-scan-resolve-test
-set(CMKR_TARGET kananlib-scan-resolve-test)
-if(NOT TARGET kananlib)
-    add_subdirectory(kananlib)
+if(WIN32) # windows-only
+	set(CMKR_TARGET kananlib-scan-resolve-test)
+	if(NOT TARGET kananlib)
+	    add_subdirectory(kananlib)
+	endif()
+
+	set(kananlib-scan-resolve-test_SOURCES
+		TestScanResolve.cpp
+		cmake.toml
+	)
+
+	add_executable(kananlib-scan-resolve-test)
+
+	target_sources(kananlib-scan-resolve-test PRIVATE ${kananlib-scan-resolve-test_SOURCES})
+	source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${kananlib-scan-resolve-test_SOURCES})
+
+	target_compile_features(kananlib-scan-resolve-test PRIVATE
+		cxx_std_20
+	)
+
+	target_include_directories(kananlib-scan-resolve-test PRIVATE
+		include
+	)
+
+	target_link_libraries(kananlib-scan-resolve-test PRIVATE
+		bddisasm::bddisasm
+		bddisasm::bdshemu
+		spdlog::spdlog
+		kananlib
+	)
+
+	get_directory_property(CMKR_VS_STARTUP_PROJECT DIRECTORY ${PROJECT_SOURCE_DIR} DEFINITION VS_STARTUP_PROJECT)
+	if(NOT CMKR_VS_STARTUP_PROJECT)
+		set_property(DIRECTORY ${PROJECT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT kananlib-scan-resolve-test)
+	endif()
+
+	if (CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+	    target_compile_options(${CMKR_TARGET} PRIVATE /EHa)
+	endif()
+	if (WIN32)
+	    target_link_libraries(${CMKR_TARGET} PRIVATE shlwapi)
+	endif()
+	# The PE-mapping test loads samples/kananlib_sample.dll from the source tree.
+	if (CMKR_TARGET STREQUAL "kananlib-linux-pe-test")
+	    target_compile_definitions(${CMKR_TARGET} PRIVATE KANANLIB_SAMPLE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/samples)
+	endif()
+	add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
+
 endif()
-
-set(kananlib-scan-resolve-test_SOURCES
-	TestScanResolve.cpp
-	cmake.toml
-)
-
-add_executable(kananlib-scan-resolve-test)
-
-target_sources(kananlib-scan-resolve-test PRIVATE ${kananlib-scan-resolve-test_SOURCES})
-source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${kananlib-scan-resolve-test_SOURCES})
-
-target_compile_features(kananlib-scan-resolve-test PRIVATE
-	cxx_std_20
-)
-
-target_compile_options(kananlib-scan-resolve-test PRIVATE
-	"/EHa"
-)
-
-target_include_directories(kananlib-scan-resolve-test PRIVATE
-	include
-)
-
-target_link_libraries(kananlib-scan-resolve-test PRIVATE
-	bddisasm::bddisasm
-	bddisasm::bdshemu
-	spdlog::spdlog
-	shlwapi
-	kananlib
-)
-
-add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
-
 # Target: kananlib-module-macho-test
 set(CMKR_TARGET kananlib-module-macho-test)
 if(NOT TARGET kananlib)
@@ -964,10 +1130,6 @@ target_compile_features(kananlib-module-macho-test PRIVATE
 	cxx_std_20
 )
 
-target_compile_options(kananlib-module-macho-test PRIVATE
-	"/EHa"
-)
-
 target_include_directories(kananlib-module-macho-test PRIVATE
 	include
 )
@@ -976,50 +1138,127 @@ target_link_libraries(kananlib-module-macho-test PRIVATE
 	bddisasm::bddisasm
 	bddisasm::bdshemu
 	spdlog::spdlog
-	shlwapi
 	kananlib
 )
 
+get_directory_property(CMKR_VS_STARTUP_PROJECT DIRECTORY ${PROJECT_SOURCE_DIR} DEFINITION VS_STARTUP_PROJECT)
+if(NOT CMKR_VS_STARTUP_PROJECT)
+	set_property(DIRECTORY ${PROJECT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT kananlib-module-macho-test)
+endif()
+
+if (CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+    target_compile_options(${CMKR_TARGET} PRIVATE /EHa)
+endif()
+if (WIN32)
+    target_link_libraries(${CMKR_TARGET} PRIVATE shlwapi)
+endif()
+# The PE-mapping test loads samples/kananlib_sample.dll from the source tree.
+if (CMKR_TARGET STREQUAL "kananlib-linux-pe-test")
+    target_compile_definitions(${CMKR_TARGET} PRIVATE KANANLIB_SAMPLE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/samples)
+endif()
 add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
 
 # Target: kananlib-pdb-edge-test
-set(CMKR_TARGET kananlib-pdb-edge-test)
-if(NOT TARGET kananlib)
-    add_subdirectory(kananlib)
+if(WIN32) # windows-only
+	set(CMKR_TARGET kananlib-pdb-edge-test)
+	if(NOT TARGET kananlib)
+	    add_subdirectory(kananlib)
+	endif()
+
+	set(kananlib-pdb-edge-test_SOURCES
+		TestPDBEdge.cpp
+		cmake.toml
+	)
+
+	add_executable(kananlib-pdb-edge-test)
+
+	target_sources(kananlib-pdb-edge-test PRIVATE ${kananlib-pdb-edge-test_SOURCES})
+	source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${kananlib-pdb-edge-test_SOURCES})
+
+	target_compile_features(kananlib-pdb-edge-test PRIVATE
+		cxx_std_20
+	)
+
+	target_include_directories(kananlib-pdb-edge-test PRIVATE
+		include
+	)
+
+	target_link_libraries(kananlib-pdb-edge-test PRIVATE
+		bddisasm::bddisasm
+		bddisasm::bdshemu
+		spdlog::spdlog
+		kananlib
+	)
+
+	target_compile_definitions(kananlib-pdb-edge-test PRIVATE
+		KANANLIB_USE_DIA_SDK
+	)
+
+	get_directory_property(CMKR_VS_STARTUP_PROJECT DIRECTORY ${PROJECT_SOURCE_DIR} DEFINITION VS_STARTUP_PROJECT)
+	if(NOT CMKR_VS_STARTUP_PROJECT)
+		set_property(DIRECTORY ${PROJECT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT kananlib-pdb-edge-test)
+	endif()
+
+	if (CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+	    target_compile_options(${CMKR_TARGET} PRIVATE /EHa)
+	endif()
+	if (WIN32)
+	    target_link_libraries(${CMKR_TARGET} PRIVATE shlwapi)
+	endif()
+	# The PE-mapping test loads samples/kananlib_sample.dll from the source tree.
+	if (CMKR_TARGET STREQUAL "kananlib-linux-pe-test")
+	    target_compile_definitions(${CMKR_TARGET} PRIVATE KANANLIB_SAMPLE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/samples)
+	endif()
+	add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
+
 endif()
+# Target: kananlib-linux-pe-test
+if(NOT WIN32) # non-windows
+	set(CMKR_TARGET kananlib-linux-pe-test)
+	if(NOT TARGET kananlib)
+	    add_subdirectory(kananlib)
+	endif()
 
-set(kananlib-pdb-edge-test_SOURCES
-	TestPDBEdge.cpp
-	cmake.toml
-)
+	set(kananlib-linux-pe-test_SOURCES
+		TestLinuxPE.cpp
+		cmake.toml
+	)
 
-add_executable(kananlib-pdb-edge-test)
+	add_executable(kananlib-linux-pe-test)
 
-target_sources(kananlib-pdb-edge-test PRIVATE ${kananlib-pdb-edge-test_SOURCES})
-source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${kananlib-pdb-edge-test_SOURCES})
+	target_sources(kananlib-linux-pe-test PRIVATE ${kananlib-linux-pe-test_SOURCES})
+	source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${kananlib-linux-pe-test_SOURCES})
 
-target_compile_features(kananlib-pdb-edge-test PRIVATE
-	cxx_std_20
-)
+	target_compile_features(kananlib-linux-pe-test PRIVATE
+		cxx_std_20
+	)
 
-target_compile_options(kananlib-pdb-edge-test PRIVATE
-	"/EHa"
-)
+	target_include_directories(kananlib-linux-pe-test PRIVATE
+		include
+	)
 
-target_compile_definitions(kananlib-pdb-edge-test PRIVATE
-	KANANLIB_USE_DIA_SDK
-)
+	target_link_libraries(kananlib-linux-pe-test PRIVATE
+		bddisasm::bddisasm
+		bddisasm::bdshemu
+		spdlog::spdlog
+		kananlib
+	)
 
-target_include_directories(kananlib-pdb-edge-test PRIVATE
-	include
-)
+	get_directory_property(CMKR_VS_STARTUP_PROJECT DIRECTORY ${PROJECT_SOURCE_DIR} DEFINITION VS_STARTUP_PROJECT)
+	if(NOT CMKR_VS_STARTUP_PROJECT)
+		set_property(DIRECTORY ${PROJECT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT kananlib-linux-pe-test)
+	endif()
 
-target_link_libraries(kananlib-pdb-edge-test PRIVATE
-	bddisasm::bddisasm
-	bddisasm::bdshemu
-	spdlog::spdlog
-	shlwapi
-	kananlib
-)
+	if (CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+	    target_compile_options(${CMKR_TARGET} PRIVATE /EHa)
+	endif()
+	if (WIN32)
+	    target_link_libraries(${CMKR_TARGET} PRIVATE shlwapi)
+	endif()
+	# The PE-mapping test loads samples/kananlib_sample.dll from the source tree.
+	if (CMKR_TARGET STREQUAL "kananlib-linux-pe-test")
+	    target_compile_definitions(${CMKR_TARGET} PRIVATE KANANLIB_SAMPLE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/samples)
+	endif()
+	add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
 
-add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
+endif()

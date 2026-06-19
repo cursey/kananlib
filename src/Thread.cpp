@@ -1,7 +1,7 @@
 #include <mutex>
 
-#include <Windows.h>
-#include <TlHelp32.h>
+#include <windows.h>
+#include <tlhelp32.h>
 
 #include <utility/Logging.hpp>
 #include <utility/Module.hpp>

@@ -17,6 +17,7 @@
 #include <utility/String.hpp>
 #include <utility/Module.hpp>
 #include <utility/Scan.hpp>
+#include <utility/Seh.hpp>
 #include <utility/thirdparty/parallel-util.hpp>
 #include <utility/thirdparty/InstructionSet.hpp>
 #include <utility/ScopeGuard.hpp>
@@ -559,7 +560,7 @@ namespace utility {
 
         // We can't make use of the full 8 bytes because we need to slide past sizeof(void*) / 2, which will end up going
         // past the end of the block when reading an int32 out of it. So we'll iterate forward by 4 byte intervals.
-        for (uintptr_t i = start; i + sizeof(uint64_t) < end; i += sizeof(uint32_t)) __try {
+        for (uintptr_t i = start; i + sizeof(uint64_t) < end; i += sizeof(uint32_t)) KANANLIB_SEH_TRY {
             // Reading in 8 byte chunks at a time is significantly faster than byte-by-byte (0.6-0.7GB/s vs ~2GB/s in my testing)
             uint64_t block = *(uint64_t*)i;
             
@@ -597,12 +598,12 @@ namespace utility {
                     return i + 3;
                 }
             }
-        } __except (EXCEPTION_EXECUTE_HANDLER) {
+        } KANANLIB_SEH_EXCEPT (EXCEPTION_EXECUTE_HANDLER) {
             // We don't care about access violations, just move on
             continue;
         }
 
-        __try {
+        KANANLIB_SEH_TRY {
             // Need to read off the remaining nibble at the end
             const auto new_length = std::min<size_t>(length, 4);
             if (new_length < 4) {
@@ -618,7 +619,7 @@ namespace utility {
                     return new_start;
                 }
             }
-        } __except(EXCEPTION_EXECUTE_HANDLER) {
+        } KANANLIB_SEH_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
             // We don't care about access violations, just move on
         }
 
@@ -835,7 +836,7 @@ namespace utility {
             const __m256i zero = _mm256_setzero_si256();
 
             // Loop unrolled a bunch of times to increase throughput
-            for (auto i = start; i + lookahead_size < end;) __try {
+            for (auto i = start; i + lookahead_size < end;) KANANLIB_SEH_TRY {
                 const int32_t base = (int32_t)(i - start);
                 const auto addresses_base = _mm256_add_epi32(_mm256_set1_epi32(base), addition_mask32);
 
@@ -880,7 +881,7 @@ namespace utility {
                 PROCESS_4_MASKS_FINAL(12, mask12);
                 PROCESS_4_MASKS_FINAL(16, mask16);
                 PROCESS_4_MASKS_FINAL(20, mask20);
-            } __except (EXCEPTION_EXECUTE_HANDLER) {
+            } KANANLIB_SEH_EXCEPT (EXCEPTION_EXECUTE_HANDLER) {
                 //SPDLOG_INFO("Exception caught at {:x}", i);
                 i += sizeof(__m256i);
                 continue;
@@ -889,7 +890,7 @@ namespace utility {
             lookahead_size = (sizeof(__m256i)) + 8;
             const __m256i zero = _mm256_setzero_si256();
 
-            for (auto i = start; i + lookahead_size < end;) __try {
+            for (auto i = start; i + lookahead_size < end;) KANANLIB_SEH_TRY {
                 const int32_t base = (int32_t)(i - start);
                 const auto addresses_base = _mm256_add_epi32(_mm256_set1_epi32(base), addition_mask32);
 
@@ -899,7 +900,7 @@ namespace utility {
                 PROCESS_AVX2_BLOCKS();
                 auto mask0 = ~_mm256_movemask_pd(_mm256_castsi256_pd(_mm256_cmpeq_epi64( _mm256_load_si256((__m256i*)&masks[0]), zero))) & 0b1111; \
                 PROCESS_4_MASKS_FINAL(0, mask0);
-            } __except (EXCEPTION_EXECUTE_HANDLER) {
+            } KANANLIB_SEH_EXCEPT (EXCEPTION_EXECUTE_HANDLER) {
                 //SPDLOG_INFO("Exception caught at {:x}", i);
                 i += sizeof(__m256i);
                 continue;
@@ -2179,7 +2180,7 @@ namespace utility {
     }
 
     std::optional<uintptr_t> find_function_start_unwind(uintptr_t middle) {
-#if defined(_M_AMD64)
+#if defined(_M_AMD64) || defined(__x86_64__)
         auto entry = find_function_entry(middle);
 
         if (entry) {
@@ -2249,7 +2250,7 @@ namespace utility {
     }
 
     std::optional<uintptr_t> resolve_scope_table_owner(HMODULE module, uintptr_t filter_func) {
-#if defined(_M_AMD64)
+#if defined(_M_AMD64) || defined(__x86_64__)
         KANANLIB_BENCH();
 
         const auto base = (uintptr_t)module;

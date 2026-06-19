@@ -2,7 +2,7 @@
 #include <vector>
 #include <array>
 
-#include <Windows.h>
+#include <windows.h>
 
 #include <utility/String.hpp>
 #include <utility/Memory.hpp>

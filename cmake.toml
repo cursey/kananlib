@@ -61,14 +61,13 @@ shallow = true
 
 [template.kananlib-template]
 type = "static"
-sources = ["src/*.cpp", "include/**.hpp"]
+sources = ["src/*.cpp", "src/compat/*.cpp", "include/**.hpp", "include/compat/**.h"]
 include-directories = ["include"]
 compile-features = ["cxx_std_20"]
 link-libraries = [
     "bddisasm::bddisasm",
     "bddisasm::bdshemu",
-    "spdlog::spdlog", 
-    "shlwapi"
+    "spdlog::spdlog"
 ]
 
 [target.kananlib]
@@ -84,6 +83,17 @@ else()
         -fexceptions
         -fms-extensions
     )
+endif()
+
+# Win32 compatibility shim: on non-Windows, put the compat headers on the public
+# include path (so <Windows.h> etc. resolve) and link threading/dl. shlwapi is
+# a Windows-only dependency.
+if (WIN32)
+    target_link_libraries(kananlib PRIVATE shlwapi)
+else()
+    target_include_directories(kananlib PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include/compat")
+    find_package(Threads REQUIRED)
+    target_link_libraries(kananlib PUBLIC Threads::Threads ${CMAKE_DL_LIBS})
 endif()
 
 # Configure DIA SDK if found
@@ -110,6 +120,14 @@ else()
         -fexceptions
         -fms-extensions
     )
+endif()
+
+if (WIN32)
+    target_link_libraries(kananlib-nolog PRIVATE shlwapi)
+else()
+    target_include_directories(kananlib-nolog PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include/compat")
+    find_package(Threads REQUIRED)
+    target_link_libraries(kananlib-nolog PUBLIC Threads::Threads ${CMAKE_DL_LIBS})
 endif()
 
 # Configure DIA SDK if found

@@ -14,7 +14,7 @@
 #include <cstdio>
 #include <optional>
 #include <vector>
-#include <Windows.h>
+#include <windows.h>
 #include <Psapi.h>
 
 #include <utility/Scan.hpp>

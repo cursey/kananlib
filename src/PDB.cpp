@@ -1,3 +1,8 @@
+// PDB symbol resolution depends on the Windows DIA SDK, urlmon symbol-server
+// downloads and Win32 path/file APIs, none of which are available off Windows.
+// The whole translation unit is therefore Windows-only; on other platforms it
+// compiles to nothing and the pdb:: API is simply unavailable.
+#if defined(_WIN32)
 #include <unordered_map>
 #include <filesystem>
 #include <iomanip>
@@ -1395,3 +1400,4 @@ std::string generate_c_struct(const StructInfo& struct_info) {
 }
 
 }
+#endif // _WIN32

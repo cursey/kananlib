@@ -70,6 +70,13 @@ namespace kananlib_test {
     } \
 } while (0)
 
+// Mark a test as not applicable on the current platform/environment (e.g. needs
+// a live Win32 PE host). Counts as a pass.
+#define TEST_SKIP(msg) do { \
+    std::printf("  SKIP: %s  (%s:%d)\n", msg, __FILE__, __LINE__); \
+    return 0; \
+} while (0)
+
 // Run a zero-argument test function.
 #define RUN_TEST(fn) kananlib_test::run_test_impl(#fn, fn, __FILE__, __LINE__)
 

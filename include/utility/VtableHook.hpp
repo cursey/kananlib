@@ -3,7 +3,7 @@
 #include <cstdint>
 #include <vector>
 
-#include <Windows.h>
+#include <windows.h>
 
 #include "Address.hpp"
 

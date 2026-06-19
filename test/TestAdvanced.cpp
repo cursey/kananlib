@@ -3,7 +3,7 @@
 #include <string>
 #include <vector>
 
-#include <Windows.h>
+#include <windows.h>
 
 #include <utility/Logging.hpp>
 #include <utility/ScopeGuard.hpp>

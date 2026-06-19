@@ -1,8 +1,10 @@
 #include <algorithm>
 #include <charconv>
+#include <cctype>
 
-#include <Windows.h>
+#include <windows.h>
 
+#include <utility/Seh.hpp>
 #include <utility/Memory.hpp>
 #include <utility/Pattern.hpp>
 
@@ -121,7 +123,7 @@ namespace utility {
 
         auto it_wildcard = (uint8_t*)start;
 
-        do try {
+        do KANANLIB_AV_TRY {
             it_wildcard = std::find((uint8_t*)it_wildcard, (uint8_t*)actual_end, (uint8_t)pat[first_non_wildcard_index]);
 
             auto it = it_wildcard - first_non_wildcard_index;
@@ -149,7 +151,7 @@ namespace utility {
             }
 
             ++it_wildcard;
-        } catch(...) { // MAKE SURE YOU HAVE EXCEPTION HANDLING FOR ACCESS VIOLATIONS!!!!!!!!
+        } KANANLIB_AV_EXCEPT { // MAKE SURE YOU HAVE EXCEPTION HANDLING FOR ACCESS VIOLATIONS!!!!!!!!
             it_wildcard = (uint8_t*)(((uintptr_t)it_wildcard & ~0xFFF) + 0x1000);
             continue;
         } while ((it_wildcard - first_non_wildcard_index) < (uint8_t*)end_scan_from);
@@ -219,7 +221,7 @@ namespace utility {
 
     vector<int16_t> buildPattern(string patternStr) {
         // Remove spaces from the pattern string.
-        patternStr.erase(remove_if(begin(patternStr), end(patternStr), isspace), end(patternStr));
+        patternStr.erase(remove_if(begin(patternStr), end(patternStr), [](unsigned char c){ return std::isspace(c) != 0; }), end(patternStr));
 
         auto length = patternStr.length();
         vector<int16_t> pattern{};

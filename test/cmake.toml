@@ -1,20 +1,27 @@
 # Reference: https://build-cpp.github.io/cmkr/cmake-toml
 [project]
 name = "kananlibtest"
-cmake-before=""" 
+cmake-before="""
 add_compile_options($<$<CXX_COMPILER_ID:MSVC>:/MP>)
 
-# mklink the parent dir as kananlib/ with command line stuff
-set(TARGET_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
-set(KANANLIB_USE_DIA_SDK ON CACHE BOOL "" FORCE)
+# The PDB tests use the DIA SDK; enable it on Windows (no DIA on Linux).
+if(WIN32)
+    set(KANANLIB_USE_DIA_SDK ON CACHE BOOL "" FORCE)
+endif()
 
-execute_process(
-    COMMAND cmd /c mklink /J kananlib ..
-    WORKING_DIRECTORY ${TARGET_DIR}
-    RESULT_VARIABLE result
-    OUTPUT_VARIABLE output
-    ERROR_VARIABLE error_output
-)
+# Expose the parent (library) directory as ./kananlib so add_subdirectory works.
+# Windows uses a junction; other platforms use a symlink.
+set(TARGET_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
+if(NOT EXISTS "${TARGET_DIR}/kananlib")
+    if(WIN32)
+        execute_process(
+            COMMAND cmd /c mklink /J kananlib ..
+            WORKING_DIRECTORY ${TARGET_DIR}
+        )
+    else()
+        file(CREATE_LINK "${TARGET_DIR}/.." "${TARGET_DIR}/kananlib" SYMBOLIC)
+    endif()
+endif()
 """
 cmake-after="""
 enable_testing()
@@ -31,16 +38,18 @@ git = "https://github.com/gabime/spdlog"
 tag = "v1.12.0"
 shallow = true
 
+[conditions]
+windows-only = "WIN32"
+non-windows = "NOT WIN32"
+
 [template.kananlib-test-template]
 type = "executable"
 include-directories = ["include"]
 compile-features = ["cxx_std_20"]
-compile-options = ["/EHa"]
 link-libraries = [
     "bddisasm::bddisasm",
     "bddisasm::bdshemu",
-    "spdlog::spdlog", 
-    "shlwapi",
+    "spdlog::spdlog",
     "kananlib"
 ]
 cmake-before="""
@@ -49,17 +58,31 @@ if(NOT TARGET kananlib)
 endif()
 """
 cmake-after="""
+if (CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+    target_compile_options(${CMKR_TARGET} PRIVATE /EHa)
+endif()
+if (WIN32)
+    target_link_libraries(${CMKR_TARGET} PRIVATE shlwapi)
+endif()
+# The PE-mapping test loads samples/kananlib_sample.dll from the source tree.
+if (CMKR_TARGET STREQUAL "kananlib-linux-pe-test")
+    target_compile_definitions(${CMKR_TARGET} PRIVATE KANANLIB_SAMPLE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/samples)
+endif()
 add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
 """
 
 [target.kananlib-test]
 type = "kananlib-test-template"
 sources = ["Main.cpp"]
+# Uses pdb:: (DIA SDK), which is Windows-only.
+condition = "windows-only"
 
 # Stress tests for exhaustive_decode and collect_basic_blocks
 [target.kananlib-stress-test]
 type = "kananlib-test-template"
 sources = ["StressTest.cpp"]
+# Scans the running test image (live PE host) + uses __declspec fixtures.
+condition = "windows-only"
 
 # Tests for utility modules: Pattern, String, Address, Config
 [target.kananlib-utils-test]
@@ -80,6 +103,8 @@ sources = ["TestVtableHook.cpp"]
 [target.kananlib-input-test]
 type = "kananlib-test-template"
 sources = ["TestInput.cpp"]
+# Exercises live keyboard state (GetAsyncKeyState) + VK_* codes.
+condition = "windows-only"
 
 # Test for Registry
 [target.kananlib-registry-test]
@@ -90,6 +115,8 @@ sources = ["TestRegistry.cpp"]
 [target.kananlib-module-test]
 type = "kananlib-test-template"
 sources = ["TestModule.cpp"]
+# Introspects the running process as a PE (get_executable / loaded modules).
+condition = "windows-only"
 
 # Test for additional Scan functions
 [target.kananlib-scan-test]
@@ -101,6 +128,7 @@ sources = ["TestScan.cpp"]
 type = "kananlib-test-template"
 sources = ["TestPDBRTTI.cpp"]
 compile-definitions = ["KANANLIB_USE_DIA_SDK"]
+condition = "windows-only"
 
 # Test for Emulation (bddisasm ShemuContext)
 [target.kananlib-emulation-test]
@@ -131,11 +159,15 @@ sources = ["TestScanCoverage.cpp"]
 [target.kananlib-module-coverage-test]
 type = "kananlib-test-template"
 sources = ["TestModuleCoverage.cpp"]
+# Depends on live loaded modules (kernel32 / ntdll).
+condition = "windows-only"
 
 # Coverage: additional RTTI.cpp public API (get_vtable, derives_from, find_vtables, demangling)
 [target.kananlib-rtti-coverage-test]
 type = "kananlib-test-template"
 sources = ["TestRTTICoverage.cpp"]
+# RTTI against the running image + MSVC name demangling + __declspec fixtures.
+condition = "windows-only"
 
 # Coverage: additional Emulation.cpp public API and String.cpp format_string
 [target.kananlib-misc-coverage-test]
@@ -146,16 +178,22 @@ sources = ["TestMiscCoverage.cpp"]
 [target.kananlib-scan-bounds-test]
 type = "kananlib-test-template"
 sources = ["TestScanBounds.cpp"]
+# Function-bounds against the running image + psapi MODULEINFO.
+condition = "windows-only"
 
 # Coverage: Scan.cpp path-finder family (find_*_in_path, find_encapsulating_*, find_next_displacement)
 [target.kananlib-scan-path-test]
 type = "kananlib-test-template"
 sources = ["TestScanPath.cpp"]
+# Path-finder family against the running image + __declspec fixtures.
+condition = "windows-only"
 
 # Coverage: Scan.cpp resolver family (find_function_*_refs, string-ref collection, linear blocks)
 [target.kananlib-scan-resolve-test]
 type = "kananlib-test-template"
 sources = ["TestScanResolve.cpp"]
+# Resolver family against the running image + __declspec fixtures.
+condition = "windows-only"
 
 # Coverage: Module.cpp Mach-O mapper + safe destructive edge paths
 [target.kananlib-module-macho-test]
@@ -167,3 +205,11 @@ sources = ["TestModuleMachO.cpp"]
 type = "kananlib-test-template"
 sources = ["TestPDBEdge.cpp"]
 compile-definitions = ["KANANLIB_USE_DIA_SDK"]
+condition = "windows-only"
+
+# Linux PE-mapping + scanning proof: builds a minimal x86-64 PE in memory, maps
+# it via map_view_of_file, and asserts scan/module behavior on the mapped image.
+[target.kananlib-linux-pe-test]
+type = "kananlib-test-template"
+sources = ["TestLinuxPE.cpp"]
+condition = "non-windows"

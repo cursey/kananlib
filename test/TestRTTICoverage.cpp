@@ -15,7 +15,7 @@
 #include <typeinfo>
 #include <algorithm>
 
-#include <Windows.h>
+#include <windows.h>
 
 #include <utility/RTTI.hpp>
 #include <utility/Module.hpp>

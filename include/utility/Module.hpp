@@ -9,7 +9,7 @@
 #include <functional>
 #include <unordered_map>
 
-#include <Windows.h>
+#include <windows.h>
 #include <winternl.h>
 
 #include "Address.hpp"

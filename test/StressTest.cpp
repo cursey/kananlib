@@ -13,7 +13,7 @@
 #include <utility/Scan.hpp>
 #include <utility/Module.hpp>
 
-#include <Windows.h>
+#include <windows.h>
 
 #include "TestHelpers.hpp"
 

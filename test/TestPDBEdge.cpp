@@ -2,7 +2,7 @@
 
 #include "TestHelpers.hpp"
 
-#include <Windows.h>
+#include <windows.h>
 
 #include <cstdint>
 #include <cstring>

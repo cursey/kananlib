@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 
-#include <Windows.h>
+#include <windows.h>
 
 #include <utility/Pattern.hpp>
 #include <utility/String.hpp>

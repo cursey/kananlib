@@ -20,7 +20,11 @@ namespace utility {
             return false;
         }
 
+#if defined(_WIN32)
         ifstream f(widen(filePath));
+#else
+        ifstream f(filePath);
+#endif
 
         if (!f) {
             return false;
@@ -41,7 +45,11 @@ namespace utility {
     }
 
     bool Config::save(const string& filePath) {
+#if defined(_WIN32)
         ofstream f(widen(filePath));
+#else
+        ofstream f(filePath);
+#endif
 
         if (!f) {
             return false;
