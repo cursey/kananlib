@@ -22,7 +22,8 @@ See `include/utility/` for the full API.
 ## Platform support
 
 kananlib targets x86-64. The file-mapping analysis path is fully supported on
-Linux (and other POSIX systems) with clang:
+Linux with clang. It is Linux-specific (not portable to other POSIX systems
+as-is): the compat layer's memory queries read `/proc/self/maps`.
 
 - **Supported on Linux:** mapping a PE or x86-64 Mach-O *from disk* with
   `utility::map_view_of_file` (which lays the PE sections out at their RVAs via

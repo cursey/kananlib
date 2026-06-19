@@ -803,7 +803,7 @@ namespace utility {
         }
 
         // Copy the PE headers verbatim.
-        std::memcpy(mapped_base, file_data.data(), std::min(headers_size, file_size));
+        std::memcpy(mapped_base, file_data.data(), std::min(std::min(headers_size, file_size), image_size));
 
         // Copy each section's raw data to its virtual address.
         auto* section = IMAGE_FIRST_SECTION(nt);
@@ -833,7 +833,7 @@ namespace utility {
         const auto& reloc_dir = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC];
         if (delta != 0 && reloc_dir.VirtualAddress != 0 && reloc_dir.Size != 0) {
             size_t reloc_rva = reloc_dir.VirtualAddress;
-            const size_t reloc_end = reloc_rva + (size_t)reloc_dir.Size;
+            const size_t reloc_end = std::min(reloc_rva + (size_t)reloc_dir.Size, image_size);
 
             while (reloc_rva + sizeof(IMAGE_BASE_RELOCATION) <= reloc_end && reloc_rva + sizeof(IMAGE_BASE_RELOCATION) <= image_size) {
                 auto* block = (IMAGE_BASE_RELOCATION*)(mapped_base + reloc_rva);

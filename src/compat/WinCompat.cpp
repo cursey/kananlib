@@ -25,6 +25,7 @@
 #include <algorithm>
 
 #include <unistd.h>
+#include <sys/syscall.h>
 #include <signal.h>
 #include <sys/mman.h>
 
@@ -298,7 +299,7 @@ extern "C" UINT GetSystemDirectoryW(LPWSTR, UINT) { return 0; }
 
 extern "C" HANDLE GetCurrentProcess(void) { return (HANDLE)(LONG_PTR)-1; }
 extern "C" DWORD GetCurrentProcessId(void) { return (DWORD)getpid(); }
-extern "C" DWORD GetCurrentThreadId(void) { return (DWORD)(uintptr_t)pthread_self(); }
+extern "C" DWORD GetCurrentThreadId(void) { return (DWORD)::syscall(SYS_gettid); }
 
 extern "C" BOOL FlushInstructionCache(HANDLE, LPCVOID base, SIZE_T size) {
     if (base != nullptr && size != 0) {
