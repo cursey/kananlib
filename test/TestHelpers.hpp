@@ -35,6 +35,11 @@ inline std::vector<uint8_t> utf16le_bytes(std::wstring_view text) {
         bytes.push_back((uint8_t)(unit >> 8));
 #else
         uint32_t cp = (uint32_t)wc;
+        // Surrogates and out-of-range scalars are not valid Unicode; emit the
+        // replacement character rather than a malformed surrogate pair.
+        if (cp > 0x10FFFF || (cp >= 0xD800 && cp <= 0xDFFF)) {
+            cp = 0xFFFD;
+        }
         if (cp <= 0xFFFF) {
             bytes.push_back((uint8_t)(cp & 0xFF));
             bytes.push_back((uint8_t)(cp >> 8));

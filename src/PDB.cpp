@@ -1400,4 +1400,47 @@ std::string generate_c_struct(const StructInfo& struct_info) {
 }
 
 }
+#else // !_WIN32
+
+// PDB symbol resolution requires the Windows DIA SDK, which is unavailable off
+// Windows. Provide honest no-op stubs so the public utility::pdb API still links
+// on every platform (a Linux consumer gets empty/nullopt results and a warning
+// instead of an undefined-reference link error).
+#include <utility/PDB.hpp>
+#include <utility/Logging.hpp>
+
+namespace utility::pdb {
+    std::optional<std::string> get_pdb_path(const uint8_t*, const std::string&) {
+        SPDLOG_WARN("[pdb] symbol resolution is unsupported on this platform (no DIA SDK)");
+        return std::nullopt;
+    }
+    std::optional<uintptr_t> get_symbol_address(const uint8_t*, std::string_view) {
+        SPDLOG_WARN("[pdb] symbol resolution is unsupported on this platform (no DIA SDK)");
+        return std::nullopt;
+    }
+    std::optional<std::string> get_symbol_name(const uint8_t*, uintptr_t) {
+        SPDLOG_WARN("[pdb] symbol resolution is unsupported on this platform (no DIA SDK)");
+        return std::nullopt;
+    }
+    std::unordered_map<uintptr_t, std::string> get_symbol_map(const uint8_t*, const std::string&) {
+        SPDLOG_WARN("[pdb] symbol resolution is unsupported on this platform (no DIA SDK)");
+        return {};
+    }
+    std::vector<std::string> enumerate_symbols(const uint8_t*, size_t) {
+        SPDLOG_WARN("[pdb] symbol resolution is unsupported on this platform (no DIA SDK)");
+        return {};
+    }
+    std::optional<StructInfo> get_struct_info(const uint8_t*, std::string_view) {
+        SPDLOG_WARN("[pdb] struct analysis is unsupported on this platform (no DIA SDK)");
+        return std::nullopt;
+    }
+    std::vector<std::string> enumerate_structs(const uint8_t*, size_t) {
+        SPDLOG_WARN("[pdb] struct analysis is unsupported on this platform (no DIA SDK)");
+        return {};
+    }
+    std::string generate_c_struct(const StructInfo&) {
+        return {};
+    }
+}
+
 #endif // _WIN32

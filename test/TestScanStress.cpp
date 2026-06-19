@@ -9,6 +9,14 @@
 
 #include "TestHelpers.hpp"
 
+// Writes a 4-byte little-endian value at a (possibly unaligned) byte offset.
+// The stress tests intentionally place rel32 values at unaligned positions, so
+// use memcpy instead of a reinterpret_cast store to keep this well-defined and
+// sanitizer-clean on every architecture.
+static void store_i32(uint8_t* dst, int32_t value) {
+    std::memcpy(dst, &value, sizeof(value));
+}
+
 // Stress scan_relative_reference over a large buffer with random alignments.
 // The public dispatcher exercises the AVX2 implementation on AVX2-capable CPUs;
 // the explicit scalar and byte-by-byte calls prove all three implementations agree
@@ -49,14 +57,14 @@ int test_displacement_scan_large_random_alignments() {
 
         const int32_t delta =
             (std::ptrdiff_t)address_to_rel32_reference - (std::ptrdiff_t)address_of_next_ip;
-        *(int32_t*)(&huge_bytes[index_to_write_to]) = delta;
+        store_i32(&huge_bytes[index_to_write_to], delta);
 
         if (index_to_write_to - 4 >= 0) {
-            *(int32_t*)(&huge_bytes[index_to_write_to - 4]) = delta + 5;
+            store_i32(&huge_bytes[index_to_write_to - 4], delta + 5);
         }
 
         if (address_to_rel32_reference >= (uintptr_t)huge_bytes.data() + 4) {
-            *(int32_t*)(address_to_rel32_reference - 4) = 1 << 31;
+            store_i32((uint8_t*)(address_to_rel32_reference - 4), 1 << 31);
         }
 
         const auto start = (uintptr_t)huge_bytes.data();
@@ -95,12 +103,12 @@ int test_displacement_scan_large_random_alignments() {
             TEST_ASSERT(*byte_by_byte == address_to_write_to);
         }
 
-        *(int32_t*)(&huge_bytes[index_to_write_to]) = 0;
+        store_i32(&huge_bytes[index_to_write_to], 0);
         if (index_to_write_to - 4 >= 0) {
-            *(int32_t*)(&huge_bytes[index_to_write_to - 4]) = 0;
+            store_i32(&huge_bytes[index_to_write_to - 4], 0);
         }
         if (address_to_rel32_reference >= (uintptr_t)huge_bytes.data() + 4) {
-            *(int32_t*)(address_to_rel32_reference - 4) = 0;
+            store_i32((uint8_t*)(address_to_rel32_reference - 4), 0);
         }
     }
 
@@ -129,7 +137,7 @@ static int sweep_sliding_window(size_t size) {
 
     for (size_t o = 0; o + 4 <= size; ++o) {
         const int32_t delta = (int32_t)((std::ptrdiff_t)target - (std::ptrdiff_t)(start + o + 4));
-        *(int32_t*)&buf[o] = delta;
+        store_i32(&buf[o], delta);
         const uintptr_t expected = start + o;
 
         const auto disp = utility::scan_relative_reference(start, length, target);
@@ -141,7 +149,7 @@ static int sweep_sliding_window(size_t size) {
         const auto bbb = utility::scan_relative_reference_scalar_byte_by_byte(start, length, target);
         TEST_ASSERT(bbb.has_value() && *bbb == expected);
 
-        *(int32_t*)&buf[o] = 0; // reset for the next offset
+        store_i32(&buf[o], 0); // reset for the next offset
     }
     return 0;
 }

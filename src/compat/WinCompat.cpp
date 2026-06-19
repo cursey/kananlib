@@ -185,14 +185,23 @@ extern "C" LPVOID VirtualAlloc(LPVOID address, SIZE_T size, DWORD /*allocation_t
     // report a reservation as accessible when Windows would not.
     const int prot = win_to_posix_prot(protect);
 
-    void* p = mmap(address, size, prot, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    // Win32 reserves/commits at page granularity. Round the size up to a whole
+    // number of pages and track the rounded size so VirtualFree always passes a
+    // page-granular length to munmap.
+    const size_t ps = (size_t)page_size();
+    if (size > SIZE_MAX - (ps - 1)) {
+        return nullptr;
+    }
+    const size_t rounded = (size + ps - 1) & ~(ps - 1);
+
+    void* p = mmap(address, rounded, prot, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (p == MAP_FAILED) {
         return nullptr;
     }
 
     {
         std::scoped_lock _{g_alloc_mutex};
-        alloc_table()[p] = size;
+        alloc_table()[p] = rounded;
     }
     g_maps_generation.fetch_add(1);
     return p;

@@ -18,6 +18,7 @@
 #include "TestHelpers.hpp"
 #include <utility/Module.hpp>
 #include <utility/Scan.hpp>
+#include <utility/PDB.hpp>
 
 
 // KANANLIB_SAMPLE_DIR is passed unquoted by the build; stringize it here.
@@ -157,6 +158,22 @@ int test_virtual_free_untracked_refused() {
     TEST_ASSERT(VirtualFree(q, 4096, MEM_RELEASE) == FALSE);  // MEM_RELEASE requires size==0
     TEST_ASSERT(VirtualFree(q, 0, MEM_RELEASE) == TRUE);      // correct usage succeeds
 
+    return 0;
+}
+
+// PDB symbol resolution is Windows-only (DIA SDK). The public utility::pdb API
+// must still link on Linux and return empty/nullopt rather than leaving
+// undefined references for consumers. This test forces those symbols to resolve.
+int test_pdb_api_unsupported_on_linux() {
+    const uint8_t* module = nullptr;
+
+    TEST_ASSERT(!utility::pdb::get_pdb_path(module).has_value());
+    TEST_ASSERT(!utility::pdb::get_symbol_address(module, "anything").has_value());
+    TEST_ASSERT(!utility::pdb::get_symbol_name(module, 0x1000).has_value());
+    TEST_ASSERT(utility::pdb::get_symbol_map(module).empty());
+    TEST_ASSERT(utility::pdb::enumerate_symbols(module).empty());
+    TEST_ASSERT(!utility::pdb::get_struct_info(module, "S").has_value());
+    TEST_ASSERT(utility::pdb::enumerate_structs(module).empty());
     return 0;
 }
 
@@ -537,6 +554,7 @@ int main() try {
     RUN_TEST(test_malformed_pe_large_optional_header);
     RUN_TEST(test_pe32_image_maps_without_relocations);
     RUN_TEST(test_pe32_committed_sample_maps_and_scans);
+    RUN_TEST(test_pdb_api_unsupported_on_linux);
 
 
     return test_summary();
