@@ -796,6 +796,13 @@ namespace utility {
             return std::nullopt;
         }
 
+        // e_lfanew was validated against the file above; also reject it against
+        // the image so downstream consumers that re-read the NT headers from
+        // mapped_base + e_lfanew can never read past the mapping.
+        if ((size_t)dos->e_lfanew + sizeof(IMAGE_NT_HEADERS) > image_size) {
+            return std::nullopt;
+        }
+
         auto* mapped_base = (uint8_t*)VirtualAlloc(nullptr, image_size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
         if (mapped_base == nullptr) {
             SPDLOG_ERROR("[PE] VirtualAlloc failed for {} bytes", image_size);

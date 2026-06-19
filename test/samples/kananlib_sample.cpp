@@ -11,6 +11,10 @@
 //   * a polymorphic class      -> rtti::find_vtable (TypeDescriptor ".?AV...")
 //   * real .pdata              -> find_function_start / function bounds
 //
+// Origin/license: written for this repository (no third-party code); covered by
+// the repository LICENSE. The committed .dll is solely the compiled output of
+// this source file.
+//
 // Rebuild (from a Windows shell with clang-cl on PATH):
 //   clang-cl /LD /O2 /GR /EHsc kananlib_sample.cpp /Fe:kananlib_sample.dll
 #include <windows.h>

@@ -9,6 +9,14 @@
 // __try / __except because libstdc++ uses __try/__catch internally -- defining
 // __try as a macro corrupts every standard header that follows.
 //
+// WARNING (non-Windows): fault recovery uses siglongjmp, which does NOT unwind
+// the stack or run C++ destructors; Windows /EHa (try/catch) does. The body of a
+// KANANLIB_SEH_TRY / KANANLIB_AV_TRY block MUST therefore hold only trivially
+// destructible locals (PODs, raw pointers/refs, SIMD registers). Do NOT place
+// RAII types with side effects (locks, owning containers, file handles) inside a
+// guarded body: on a fault they would leak on Linux while unwinding cleanly on
+// Windows.
+//
 // Usage mirrors SEH exactly:
 //
 //     KANANLIB_SEH_TRY { ... } KANANLIB_SEH_EXCEPT(EXCEPTION_EXECUTE_HANDLER) { ... }

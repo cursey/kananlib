@@ -194,6 +194,10 @@ extern "C" LPVOID VirtualAlloc(LPVOID address, SIZE_T size, DWORD /*allocation_t
 }
 
 extern "C" BOOL VirtualFree(LPVOID address, SIZE_T size, DWORD free_type) {
+    // NOTE: MEM_DECOMMIT (keep the reservation) and MEM_RELEASE of a sub-range
+    // are not modeled -- this releases the whole tracked allocation. No kananlib
+    // path uses either (FakeModule frees the base with MEM_RELEASE), and per the
+    // compat scope policy this is left deliberately unsupported rather than faked.
     size_t len = 0;
     {
         std::scoped_lock _{g_alloc_mutex};
