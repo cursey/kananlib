@@ -72,7 +72,13 @@ namespace utility {
                 }
 
                 i += extra;
-                if ((cp >= 0xD800 && cp <= 0xDFFF) || cp > 0x10FFFF) {
+
+                // Reject overlong encodings (a code point encoded in more bytes
+                // than the minimum), surrogates, and out-of-range scalars; these
+                // are all malformed and map to U+FFFD, matching Windows' UTF-8
+                // conversion rather than emitting the decoded (e.g. NUL) scalar.
+                const uint32_t min_cp = (extra == 1) ? 0x80 : (extra == 2) ? 0x800 : 0x10000;
+                if (cp < min_cp || (cp >= 0xD800 && cp <= 0xDFFF) || cp > 0x10FFFF) {
                     out.push_back((wchar_t)0xFFFD);
                 } else {
                     append_wide_scalar(out, cp);

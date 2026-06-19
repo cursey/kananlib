@@ -199,25 +199,34 @@ extern "C" LPVOID VirtualAlloc(LPVOID address, SIZE_T size, DWORD /*allocation_t
 }
 
 extern "C" BOOL VirtualFree(LPVOID address, SIZE_T size, DWORD free_type) {
-    // NOTE: MEM_DECOMMIT (keep the reservation) and MEM_RELEASE of a sub-range
-    // are not modeled -- this releases the whole tracked allocation. No kananlib
-    // path uses either (FakeModule frees the base with MEM_RELEASE), and per the
-    // compat scope policy this is left deliberately unsupported rather than faked.
+    // Only MEM_RELEASE of a whole tracked VirtualAlloc base is modeled.
+    // MEM_DECOMMIT (keep the reservation) and sub-range MEM_RELEASE are not
+    // supported; no kananlib path uses them (FakeModule frees the base with
+    // MEM_RELEASE). Rather than guess a length to munmap -- which could unmap an
+    // unrelated mapping on misuse -- fail loudly per the compat scope policy.
+    if (!(free_type & MEM_RELEASE)) {
+        SPDLOG_WARN("[compat] VirtualFree: only MEM_RELEASE is supported (free_type=0x{:x})", free_type);
+        return FALSE;
+    }
+
+    // Win32: MEM_RELEASE requires size == 0 (release the entire allocation).
+    if (size != 0) {
+        SPDLOG_WARN("[compat] VirtualFree(MEM_RELEASE) requires size == 0 (got {})", (size_t)size);
+        return FALSE;
+    }
+
     size_t len = 0;
     {
         std::scoped_lock _{g_alloc_mutex};
         auto& t = alloc_table();
         auto it = t.find(address);
-        if (it != t.end()) {
-            len = it->second;
-            if (free_type & MEM_RELEASE) {
-                t.erase(it);
-            }
+        if (it == t.end()) {
+            SPDLOG_WARN("[compat] VirtualFree: 0x{:x} is not a tracked VirtualAlloc base; refusing to unmap",
+                (uintptr_t)address);
+            return FALSE;
         }
-    }
-
-    if (len == 0) {
-        len = (size != 0) ? size : (size_t)page_size();
+        len = it->second;
+        t.erase(it);
     }
 
     const int rc = munmap(address, len);

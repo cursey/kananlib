@@ -631,7 +631,7 @@ namespace utility {
 
         const auto end = start + length;
 
-        for (auto i = start; i + 4 < end; i += sizeof(uint8_t)) {
+        for (auto i = start; i + sizeof(uint32_t) <= end; i += sizeof(uint8_t)) {
             if (calculate_absolute(i, 4) == ptr) {
                 if (filter == nullptr || filter(i)) {
                     return i;
@@ -652,7 +652,8 @@ namespace utility {
 
         // We can't make use of the full 8 bytes because we need to slide past sizeof(void*) / 2, which will end up going
         // past the end of the block when reading an int32 out of it. So we'll iterate forward by 4 byte intervals.
-        for (uintptr_t i = start; i + sizeof(uint64_t) < end; i += sizeof(uint32_t)) KANANLIB_SEH_TRY {
+        uintptr_t i = start;
+        for (; i + sizeof(uint64_t) < end; i += sizeof(uint32_t)) KANANLIB_SEH_TRY {
             // Reading in 8 byte chunks at a time is significantly faster than byte-by-byte (0.6-0.7GB/s vs ~2GB/s in my testing)
             uint64_t block = *(uint64_t*)i;
             
@@ -695,24 +696,22 @@ namespace utility {
             continue;
         }
 
-        KANANLIB_SEH_TRY {
-            // Need to read off the remaining nibble at the end
-            const auto new_length = std::min<size_t>(length, 4);
-            if (new_length < 4) {
-                return std::nullopt;
-            }
-
-            const auto new_start = end - new_length;
-            const auto offset = *(int32_t*)new_start;
-            const auto landing_address = new_start + POST_IP_CONSTANT + offset;
+        // The fast loop above reads 8 bytes per step and stops with up to 7
+        // bytes left, so it can leave several unscanned positions before the
+        // end. Check every remaining position through end-4 (inclusive) so a
+        // match in the final bytes of the range is never missed.
+        for (; i + sizeof(uint32_t) <= end; ++i) KANANLIB_SEH_TRY {
+            const auto offset = *(int32_t*)i;
+            const auto landing_address = i + POST_IP_CONSTANT + offset;
 
             if (landing_address == ptr) {
-                if (filter == nullptr || filter(new_start)) {
-                    return new_start;
+                if (filter == nullptr || filter(i)) {
+                    return i;
                 }
             }
         } KANANLIB_SEH_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
             // We don't care about access violations, just move on
+            continue;
         }
 
         return std::nullopt;

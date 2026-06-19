@@ -13,6 +13,8 @@
 #include <windows.h>
 #include <intrin.h>
 
+#include <sys/mman.h>
+
 #include "TestHelpers.hpp"
 #include <utility/Module.hpp>
 #include <utility/Scan.hpp>
@@ -89,15 +91,18 @@ int test_virtual_protect_size_zero_unaligned() {
 // PAGE_NOACCESS (0x01).
 // ---------------------------------------------------------------------------
 int test_virtual_query_free_protect() {
-    // Query a high unmapped address that is almost certainly in a free region.
-    // Use 0x7FFFFF000000 — well above any normal mapping on Linux.
-    void* probe = (void*)0x7FFFFF000000ULL;
+    // Deterministically obtain a free region: allocate a page, then release it.
+    // Probing a just-freed range avoids depending on a hard-coded high address
+    // being unmapped, which is not guaranteed under ASLR.
+    void* p = VirtualAlloc(nullptr, 4096, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    TEST_ASSERT(p != nullptr);
+    TEST_ASSERT(VirtualFree(p, 0, MEM_RELEASE) == TRUE);
 
     MEMORY_BASIC_INFORMATION mbi{};
-    SIZE_T result = VirtualQuery(probe, &mbi, sizeof(mbi));
+    SIZE_T result = VirtualQuery(p, &mbi, sizeof(mbi));
     TEST_ASSERT(result == sizeof(mbi));
 
-    // The region should be MEM_FREE.
+    // The just-freed region must be MEM_FREE.
     TEST_ASSERT(mbi.State == MEM_FREE);
 
     // Windows docs: Protect is 0 for MEM_FREE regions.
@@ -110,7 +115,13 @@ int test_virtual_query_free_protect() {
 // Bug 5: VirtualQuery MEM_FREE BaseAddress should be page-aligned.
 // ---------------------------------------------------------------------------
 int test_virtual_query_free_base_aligned() {
-    void* probe = (void*)0x7FFFFF001234ULL; // intentionally not page-aligned
+    // Free a multi-page range, then probe an intentionally unaligned address
+    // inside it -- deterministic vs. a hard-coded high address.
+    void* p = VirtualAlloc(nullptr, 4096 * 4, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    TEST_ASSERT(p != nullptr);
+    TEST_ASSERT(VirtualFree(p, 0, MEM_RELEASE) == TRUE);
+
+    void* probe = (uint8_t*)p + 0x1234; // not page-aligned, within the freed range
 
     MEMORY_BASIC_INFORMATION mbi{};
     SIZE_T result = VirtualQuery(probe, &mbi, sizeof(mbi));
@@ -120,6 +131,31 @@ int test_virtual_query_free_base_aligned() {
     // BaseAddress must be page-aligned.
     uintptr_t ps = 4096;
     TEST_ASSERT(((uintptr_t)mbi.BaseAddress & (ps - 1)) == 0);
+
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// VirtualFree must refuse to unmap memory it did not allocate, and reject
+// unsupported free types, rather than guessing a length to munmap.
+// ---------------------------------------------------------------------------
+int test_virtual_free_untracked_refused() {
+    // A mapping NOT created via VirtualAlloc (not in the tracking table).
+    void* p = mmap(nullptr, 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    TEST_ASSERT(p != MAP_FAILED);
+    *(volatile uint8_t*)p = 0x5A;
+
+    // Must fail and leave the untracked mapping intact.
+    TEST_ASSERT(VirtualFree(p, 0, MEM_RELEASE) == FALSE);
+    TEST_ASSERT(*(volatile uint8_t*)p == 0x5A);
+    munmap(p, 4096);
+
+    // Unsupported free types on a tracked base must also fail loudly.
+    void* q = VirtualAlloc(nullptr, 4096, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    TEST_ASSERT(q != nullptr);
+    TEST_ASSERT(VirtualFree(q, 4096, MEM_DECOMMIT) == FALSE); // decommit not modeled
+    TEST_ASSERT(VirtualFree(q, 4096, MEM_RELEASE) == FALSE);  // MEM_RELEASE requires size==0
+    TEST_ASSERT(VirtualFree(q, 0, MEM_RELEASE) == TRUE);      // correct usage succeeds
 
     return 0;
 }
@@ -477,6 +513,7 @@ int main() try {
     // Bug 5: VirtualQuery BaseAddress alignment
     RUN_TEST(test_virtual_query_free_base_aligned);
     RUN_TEST(test_virtual_query_mapped_base_aligned);
+    RUN_TEST(test_virtual_free_untracked_refused);
 
     // Bug 3: _BitScanReverse / _BitScanForward
     RUN_TEST(test_bitscan_reverse_low_bit);

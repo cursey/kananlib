@@ -203,6 +203,10 @@ int test_widen_handles_malformed_utf8() {
         std::string_view{"\xC0\xAF", 2},
         std::string_view{"\xED\xA0\x80", 3},
         std::string_view{"\xF4\x90\x80\x80", 4},
+        std::string_view{"\xE0\x80\xAF", 3},     // overlong 3-byte ('/')
+        std::string_view{"\xE0\x9F\xBF", 3},     // overlong 3-byte (U+07FF)
+        std::string_view{"\xF0\x80\x80\x80", 4}, // overlong 4-byte (NUL)
+        std::string_view{"\xF0\x8F\xBF\xBF", 4}, // overlong 4-byte (U+FFFF)
     };
 
     for (const auto malformed : cases) {
@@ -218,6 +222,11 @@ int test_widen_handles_malformed_utf8() {
     TEST_ASSERT(utility::widen(std::string_view{"\xC0\xAF", 2}) == L"\uFFFD\uFFFD");
     TEST_ASSERT(utility::widen(std::string_view{"\xED\xA0\x80", 3}) == L"\uFFFD");
     TEST_ASSERT(utility::widen(std::string_view{"\xF4\x90\x80\x80", 4}) == L"\uFFFD");
+    // Overlong encodings are malformed and must not decode to the (shorter) scalar.
+    TEST_ASSERT(utility::widen(std::string_view{"\xE0\x80\xAF", 3}) == L"\uFFFD");
+    TEST_ASSERT(utility::widen(std::string_view{"\xE0\x9F\xBF", 3}) == L"\uFFFD");
+    TEST_ASSERT(utility::widen(std::string_view{"\xF0\x80\x80\x80", 4}) == L"\uFFFD");
+    TEST_ASSERT(utility::widen(std::string_view{"\xF0\x8F\xBF\xBF", 4}) == L"\uFFFD");
 #endif
     return 0;
 }

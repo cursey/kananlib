@@ -1,4 +1,5 @@
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <iostream>
 #include <random>
@@ -13,21 +14,30 @@
 // the explicit scalar and byte-by-byte calls prove all three implementations agree
 // on the same data. This used to live inside the Windows-only kananlib-test target,
 // so Linux builds skipped it entirely.
+//
+// The default run uses a modest buffer so it stays fast/reliable on CI while
+// still exercising the AVX2 dispatch path (buffer >> the 128-byte AVX2 threshold
+// and the 392-byte unrolled-path threshold). Set KANANLIB_SCAN_STRESS_FULL=1 for
+// the heavy 1 GiB x 512-iteration run.
 int test_displacement_scan_large_random_alignments() {
-    std::cout << "  Allocating 1 GB test buffer..." << std::endl;
+    const bool full = std::getenv("KANANLIB_SCAN_STRESS_FULL") != nullptr;
+    const size_t buffer_size = full ? (size_t)1024 * 1024 * 1024 : (size_t)16 * 1024 * 1024;
+    const size_t MAX_I = full ? 512 : 64;
+
+    std::cout << "  Allocating " << (buffer_size >> 20) << " MiB test buffer"
+              << (full ? " (KANANLIB_SCAN_STRESS_FULL)" : "") << "..." << std::endl;
 
     std::vector<uint8_t> huge_bytes{};
     try {
-        huge_bytes.resize(1024 * 1024 * 1024);
+        huge_bytes.resize(buffer_size);
     } catch (const std::bad_alloc&) {
-        std::cout << "  SKIP: not enough memory for 1 GB buffer." << std::endl;
+        std::cout << "  SKIP: not enough memory for the test buffer." << std::endl;
         return 0;
     }
     std::memset(huge_bytes.data(), 0, huge_bytes.size());
     std::cout << "  Allocated." << std::endl;
 
     std::mt19937 rng{0x4B414E41u};
-    constexpr size_t MAX_I = 512;
 
     for (int32_t i = 0; i < (int32_t)MAX_I; ++i) {
         const int32_t index_to_write_to =
@@ -98,8 +108,60 @@ int test_displacement_scan_large_random_alignments() {
     return 0;
 }
 
+// Stress the AVX2 sliding window for *stability*, not perf: place a single rel32
+// match at EVERY byte offset in a buffer and confirm the dispatcher (AVX2),
+// scalar, and byte-by-byte implementations all find it at exactly that offset.
+// Sweeping every offset exercises matches that straddle the 32-byte vector-load
+// boundaries, the 12x32-byte unrolled stride, and the main-loop/scalar-tail
+// handoff -- the parts of the sliding window most likely to break. Sizes are
+// chosen to drive both AVX2 branches: the small branch (length 128..391) and the
+// big unrolled branch (length >= 392) across several outer iterations.
+static int sweep_sliding_window(size_t size) {
+    std::vector<uint8_t> buf(size, 0);
+    const uintptr_t start = (uintptr_t)buf.data();
+    const uintptr_t length = size;
+    // Target just past the buffer: a default (zero) rel32 at any other position
+    // references position+4, which can never equal target, so the placed offset
+    // is the only match. (That AVX2 is actually used is asserted by
+    // test_displacement_scan_large_random_alignments; here we only assert that
+    // every offset is found correctly across all three implementations.)
+    const uintptr_t target = start + size + 0x1000;
+
+    for (size_t o = 0; o + 4 <= size; ++o) {
+        const int32_t delta = (int32_t)((std::ptrdiff_t)target - (std::ptrdiff_t)(start + o + 4));
+        *(int32_t*)&buf[o] = delta;
+        const uintptr_t expected = start + o;
+
+        const auto disp = utility::scan_relative_reference(start, length, target);
+        TEST_ASSERT(disp.has_value());
+        TEST_ASSERT(*disp == expected);
+
+        const auto sca = utility::scan_relative_reference_scalar(start, length, target);
+        TEST_ASSERT(sca.has_value() && *sca == expected);
+        const auto bbb = utility::scan_relative_reference_scalar_byte_by_byte(start, length, target);
+        TEST_ASSERT(bbb.has_value() && *bbb == expected);
+
+        *(int32_t*)&buf[o] = 0; // reset for the next offset
+    }
+    return 0;
+}
+
+int test_displacement_scan_sliding_window_boundaries() {
+    // 129..391 drive the small AVX2 branch; 392..4096 drive the big unrolled
+    // branch (4096 = ~10 outer iterations). All sweep the scalar tail too.
+    const size_t sizes[] = { 129, 200, 256, 391, 392, 393, 512, 1024, 4096 };
+    for (size_t s : sizes) {
+        if (sweep_sliding_window(s) != 0) {
+            return 1;
+        }
+    }
+    std::cout << "  sliding-window boundary sweep passed for all sizes" << std::endl;
+    return 0;
+}
+
 int main() try {
     std::cout << "===== kananlib-scan-stress-test =====" << std::endl;
+    RUN_TEST(test_displacement_scan_sliding_window_boundaries);
     RUN_TEST(test_displacement_scan_large_random_alignments);
     return test_summary();
 } catch (const std::exception& e) {
