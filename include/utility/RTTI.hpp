@@ -1,6 +1,6 @@
 #pragma once
 
-#include <Windows.h>
+#include <windows.h>
 
 #include <vector>
 #include <string_view>
@@ -13,6 +13,13 @@ namespace utility {
 namespace rtti {
     bool is_vtable(const void* vtable);
     _s_RTTICompleteObjectLocator* get_locator(const void* obj);
+    // NOTE: off Windows the returned pointer aliases the MSVC TypeDescriptor
+    // embedded in the mapped image, NOT a host std::type_info. It is valid for
+    // pointer-identity comparison (e.g. derives_from(obj, ti)), but you MUST NOT
+    // call std::type_info members (name()/raw_name()) on it on non-Windows: that
+    // dispatches the host RTTI vtable over foreign bytes. For name-based queries
+    // use find_vtable / find_vtables / derives_from(obj, type_name) instead,
+    // which work on every platform (matching the decorated ".?AV..." name).
     std::type_info* get_type_info(const void* obj);
     std::type_info* get_type_info(HMODULE m, std::string_view type_name);
     bool derives_from(const void* obj, std::string_view type_name);

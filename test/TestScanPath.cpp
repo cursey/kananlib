@@ -13,7 +13,7 @@
 #include <iostream>
 #include <cstring>
 
-#include <Windows.h>
+#include <windows.h>
 
 #include <bddisasm.h>
 #include <utility/Scan.hpp>

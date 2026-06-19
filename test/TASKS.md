@@ -6,7 +6,7 @@
 - **Latest test commit:** `8324df8` (clang-coverage segfault fix in kananlib-test) + coverage push (this section)
 
 ## Build System
-- **OS:** Windows 10/11, MSVC (Visual Studio 17 2022), x64 only
+- **OS:** Windows 10/11, MSVC (Visual Studio 17 2022); commands below show the x64 test configuration
 - **Config source:** `test/cmake.toml` (auto-generates `test/CMakeLists.txt`)
 - **Build:**
   ```

@@ -21,11 +21,31 @@
 
 #include <utility/thirdparty/parallel-util.hpp>
 
+#ifndef _WIN32
+namespace kananlib_msvc {
+// MSVC lays std::type_info out as a TypeDescriptor inside the image: a vftable
+// pointer, an undecorated-name cache slot, then the decorated name (".?AV...").
+// The PE bytes kananlib reads ARE such descriptors, not host std::type_info
+// objects, so we reinterpret them through this type to read the name. The host
+// CRT has no MSVC name undecorator, so name() returns the decorated form.
+struct type_info {
+    const void* _vfptr;
+    void*       _spare;
+    char        _decorated[1];
+    const char* raw_name() const { return _decorated; }
+    const char* name() const { return _decorated; }
+};
+}
+using KANANLIB_RTTI_TI = kananlib_msvc::type_info;
+#else
+using KANANLIB_RTTI_TI = std::type_info;
+#endif
+
 namespace utility {
 namespace rtti {
 namespace detail {
 struct Vtable {
-    std::type_info* ti{nullptr};
+    KANANLIB_RTTI_TI* ti{nullptr};
     uintptr_t vtable{};
 };
 
@@ -45,9 +65,9 @@ void for_each_uncached(HMODULE m, std::function<void(const Vtable&)> predicate) 
     }
     const auto end = begin + *module_size;
 
-    for (auto i = begin; i < end - sizeof(void*); i += sizeof(void*)) try {
+    for (auto i = begin; i < end - sizeof(void*); i += sizeof(void*)) KANANLIB_AV_TRY {
         const auto fake_obj = (void*)i;
-        const auto ti = get_type_info(&fake_obj);
+        const auto ti = (KANANLIB_RTTI_TI*)get_type_info(&fake_obj);
 
         if (ti == nullptr) {
             continue;
@@ -74,7 +94,7 @@ void for_each_uncached(HMODULE m, std::function<void(const Vtable&)> predicate) 
         }
 
         predicate(Vtable{ti, i});
-    } catch(...) {
+    } KANANLIB_AV_EXCEPT {
         continue;
     }
 }
@@ -130,6 +150,11 @@ std::optional<Vtable> find(HMODULE m, std::function<bool(const Vtable&)> predica
 }
 
 std::optional<HMODULE> cached_get_module_within(uintptr_t addr) {
+#if !defined(_WIN32)
+    // No loader module list off Windows; resolve against the registered fake
+    // module ranges instead.
+    return ::utility::get_module_within(addr);
+#endif
     struct ModuleInfo {
         uintptr_t begin{};
         uintptr_t end{};
@@ -208,7 +233,7 @@ std::type_info* get_type_info(HMODULE m, std::string_view type_name) {
     });
 
     if (result) {
-        return result->ti;
+        return (std::type_info*)result->ti;
     }
 
     return nullptr;
@@ -257,7 +282,7 @@ bool derives_from(const void* obj, std::string_view type_name) {
             continue;
         }
 
-        const auto ti = (std::type_info*)(module + desc->pTypeDescriptor);
+        const auto ti = (KANANLIB_RTTI_TI*)(module + desc->pTypeDescriptor);
 
         if (ti == nullptr) {
             continue;

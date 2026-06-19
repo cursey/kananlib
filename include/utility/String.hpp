@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
 #include <string_view>
 
@@ -8,8 +9,18 @@ namespace utility {
     // String utilities.
     //
 
+    // The wide-character unit for Windows-format (UTF-16) strings. On Windows
+    // wchar_t already is UTF-16; on other platforms wchar_t is UTF-32, so the
+    // 16-bit char16_t is used to represent in-binary UTF-16 data correctly.
+#if defined(_WIN32)
+    using utf16_char = wchar_t;
+#else
+    using utf16_char = char16_t;
+#endif
+
     // Conversion functions for UTF8<->UTF16.
     std::string narrow(std::wstring_view std);
+    std::string narrow(std::u16string_view std);
     std::wstring widen(std::string_view std);
 
     std::string format_string(const char* format, va_list args);

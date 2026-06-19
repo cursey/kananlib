@@ -5,7 +5,7 @@
 #include <vector>
 #include <optional>
 
-#include <Windows.h>
+#include <windows.h>
 
 class Patch {
 public:

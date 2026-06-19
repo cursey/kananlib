@@ -118,6 +118,7 @@ list(APPEND kananlib_SOURCES
 	"src/String.cpp"
 	"src/Thread.cpp"
 	"src/VtableHook.cpp"
+	"src/compat/WinCompat.cpp"
 	"include/utility/Address.hpp"
 	"include/utility/Benchmark.hpp"
 	"include/utility/Config.hpp"
@@ -134,11 +135,22 @@ list(APPEND kananlib_SOURCES
 	"include/utility/Registry.hpp"
 	"include/utility/Scan.hpp"
 	"include/utility/ScopeGuard.hpp"
+	"include/utility/Seh.hpp"
 	"include/utility/String.hpp"
 	"include/utility/Thread.hpp"
 	"include/utility/VtableHook.hpp"
 	"include/utility/thirdparty/InstructionSet.hpp"
 	"include/utility/thirdparty/parallel-util.hpp"
+	"include/compat/intrin.h"
+	"include/compat/ppl.h"
+	"include/compat/rttidata.h"
+	"include/compat/seh_compat.h"
+	"include/compat/shlwapi.h"
+	"include/compat/tlhelp32.h"
+	"include/compat/vcruntime.h"
+	"include/compat/windows.h"
+	"include/compat/winnt_compat.h"
+	"include/compat/winternl.h"
 )
 
 list(APPEND kananlib_SOURCES
@@ -164,7 +176,6 @@ target_link_libraries(kananlib PUBLIC
 	bddisasm::bddisasm
 	bddisasm::bdshemu
 	spdlog::spdlog
-	shlwapi
 )
 
 if (CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
@@ -177,6 +188,17 @@ else()
         -fexceptions
         -fms-extensions
     )
+endif()
+
+# Win32 compatibility shim: on non-Windows, put the compat headers on the public
+# include path (so <Windows.h> etc. resolve) and link threading/dl. shlwapi is
+# a Windows-only dependency.
+if (WIN32)
+    target_link_libraries(kananlib PRIVATE shlwapi)
+else()
+    target_include_directories(kananlib PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include/compat")
+    find_package(Threads REQUIRED)
+    target_link_libraries(kananlib PUBLIC Threads::Threads ${CMAKE_DL_LIBS})
 endif()
 
 # Configure DIA SDK if found
@@ -214,6 +236,7 @@ list(APPEND kananlib-nolog_SOURCES
 	"src/String.cpp"
 	"src/Thread.cpp"
 	"src/VtableHook.cpp"
+	"src/compat/WinCompat.cpp"
 	"include/utility/Address.hpp"
 	"include/utility/Benchmark.hpp"
 	"include/utility/Config.hpp"
@@ -230,11 +253,22 @@ list(APPEND kananlib-nolog_SOURCES
 	"include/utility/Registry.hpp"
 	"include/utility/Scan.hpp"
 	"include/utility/ScopeGuard.hpp"
+	"include/utility/Seh.hpp"
 	"include/utility/String.hpp"
 	"include/utility/Thread.hpp"
 	"include/utility/VtableHook.hpp"
 	"include/utility/thirdparty/InstructionSet.hpp"
 	"include/utility/thirdparty/parallel-util.hpp"
+	"include/compat/intrin.h"
+	"include/compat/ppl.h"
+	"include/compat/rttidata.h"
+	"include/compat/seh_compat.h"
+	"include/compat/shlwapi.h"
+	"include/compat/tlhelp32.h"
+	"include/compat/vcruntime.h"
+	"include/compat/windows.h"
+	"include/compat/winnt_compat.h"
+	"include/compat/winternl.h"
 )
 
 list(APPEND kananlib-nolog_SOURCES
@@ -260,7 +294,6 @@ target_link_libraries(kananlib-nolog PUBLIC
 	bddisasm::bddisasm
 	bddisasm::bdshemu
 	spdlog::spdlog
-	shlwapi
 )
 
 target_compile_definitions(kananlib-nolog PUBLIC
@@ -275,6 +308,14 @@ else()
         -fexceptions
         -fms-extensions
     )
+endif()
+
+if (WIN32)
+    target_link_libraries(kananlib-nolog PRIVATE shlwapi)
+else()
+    target_include_directories(kananlib-nolog PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include/compat")
+    find_package(Threads REQUIRED)
+    target_link_libraries(kananlib-nolog PUBLIC Threads::Threads ${CMAKE_DL_LIBS})
 endif()
 
 # Configure DIA SDK if found

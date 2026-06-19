@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 
-#include <Windows.h>
+#include <windows.h>
 
 #include <utility/Pattern.hpp>
 #include <utility/String.hpp>
@@ -192,6 +192,42 @@ int test_narrow_widen_empty() {
     auto n = utility::narrow(empty_ws);
     TEST_ASSERT(n.empty());
 
+    return 0;
+}
+
+int test_widen_handles_malformed_utf8() {
+#if defined(_WIN32)
+    const std::string_view cases[] = {
+        std::string_view{"\xE2\x82", 2},
+        std::string_view{"\xE2\x28\xA1", 3},
+        std::string_view{"\xC0\xAF", 2},
+        std::string_view{"\xED\xA0\x80", 3},
+        std::string_view{"\xF4\x90\x80\x80", 4},
+        std::string_view{"\xE0\x80\xAF", 3},     // overlong 3-byte ('/')
+        std::string_view{"\xE0\x9F\xBF", 3},     // overlong 3-byte (U+07FF)
+        std::string_view{"\xF0\x80\x80\x80", 4}, // overlong 4-byte (NUL)
+        std::string_view{"\xF0\x8F\xBF\xBF", 4}, // overlong 4-byte (U+FFFF)
+    };
+
+    for (const auto malformed : cases) {
+        const auto length = MultiByteToWideChar(CP_UTF8, 0, malformed.data(), (int)malformed.length(), nullptr, 0);
+        std::wstring expected{};
+        expected.resize(length);
+        MultiByteToWideChar(CP_UTF8, 0, malformed.data(), (int)malformed.length(), expected.data(), length);
+        TEST_ASSERT(utility::widen(malformed) == expected);
+    }
+#else
+    TEST_ASSERT(utility::widen(std::string_view{"\xE2\x82", 2}) == L"\uFFFD");
+    TEST_ASSERT(utility::widen(std::string_view{"\xE2\x28\xA1", 3}) == L"\uFFFD(\uFFFD");
+    TEST_ASSERT(utility::widen(std::string_view{"\xC0\xAF", 2}) == L"\uFFFD\uFFFD");
+    TEST_ASSERT(utility::widen(std::string_view{"\xED\xA0\x80", 3}) == L"\uFFFD");
+    TEST_ASSERT(utility::widen(std::string_view{"\xF4\x90\x80\x80", 4}) == L"\uFFFD");
+    // Overlong encodings are malformed and must not decode to the (shorter) scalar.
+    TEST_ASSERT(utility::widen(std::string_view{"\xE0\x80\xAF", 3}) == L"\uFFFD");
+    TEST_ASSERT(utility::widen(std::string_view{"\xE0\x9F\xBF", 3}) == L"\uFFFD");
+    TEST_ASSERT(utility::widen(std::string_view{"\xF0\x80\x80\x80", 4}) == L"\uFFFD");
+    TEST_ASSERT(utility::widen(std::string_view{"\xF0\x8F\xBF\xBF", 4}) == L"\uFFFD");
+#endif
     return 0;
 }
 
@@ -507,6 +543,7 @@ int main() try {
     RUN_TEST(test_narrow_widen_roundtrip);
     RUN_TEST(test_narrow_widen_unicode);
     RUN_TEST(test_narrow_widen_empty);
+    RUN_TEST(test_widen_handles_malformed_utf8);
     RUN_TEST(test_hash_determinism);
     RUN_TEST(test_hash_uniqueness);
     RUN_TEST(test_hash_wide);

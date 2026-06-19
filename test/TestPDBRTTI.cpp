@@ -3,7 +3,7 @@
 #include <iostream>
 #include <typeinfo>
 
-#include <Windows.h>
+#include <windows.h>
 
 #include <utility/PDB.hpp>
 #include <utility/RTTI.hpp>

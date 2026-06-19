@@ -17,6 +17,7 @@
 #include <utility/String.hpp>
 #include <utility/Module.hpp>
 #include <utility/Scan.hpp>
+#include <utility/Seh.hpp>
 #include <utility/thirdparty/parallel-util.hpp>
 #include <utility/thirdparty/InstructionSet.hpp>
 #include <utility/ScopeGuard.hpp>
@@ -47,6 +48,75 @@ namespace undocumented {
 }
 
 namespace utility {
+#if defined(KANANLIB_TESTING)
+    namespace testing {
+        static RelativeReferenceScanImplementation g_last_relative_reference_scan_impl =
+            RelativeReferenceScanImplementation::None;
+
+        void reset_relative_reference_scan_implementation() {
+            g_last_relative_reference_scan_impl = RelativeReferenceScanImplementation::None;
+        }
+
+        RelativeReferenceScanImplementation last_relative_reference_scan_implementation() {
+            return g_last_relative_reference_scan_impl;
+        }
+
+        bool relative_reference_avx2_available_for_dispatch() {
+            return kananlib::utility::thirdparty::InstructionSet::AVX2();
+        }
+
+        static void record_relative_reference_scan_implementation(RelativeReferenceScanImplementation impl) {
+            g_last_relative_reference_scan_impl = impl;
+        }
+    }
+#endif
+
+#if !defined(_WIN32)
+    static void append_utf16le(std::vector<uint8_t>& bytes, uint32_t cp) {
+        if (cp > 0x10FFFF || (cp >= 0xD800 && cp <= 0xDFFF)) {
+            cp = 0xFFFD;
+        }
+
+        auto append_unit = [&](uint16_t unit) {
+            bytes.push_back((uint8_t)(unit & 0xFF));
+            bytes.push_back((uint8_t)(unit >> 8));
+        };
+
+        if (cp <= 0xFFFF) {
+            append_unit((uint16_t)cp);
+            return;
+        }
+
+        cp -= 0x10000;
+        append_unit((uint16_t)(0xD800 + (cp >> 10)));
+        append_unit((uint16_t)(0xDC00 + (cp & 0x3FF)));
+    }
+#endif
+
+    // A wstring needle holds host wchar_t (UTF-16 on Windows, UTF-32 elsewhere).
+    // In-binary Windows strings are always UTF-16, so encode the needle to
+    // UTF-16LE bytes before comparing/searching against mapped image data.
+    static std::vector<uint8_t> wstring_search_bytes(std::wstring_view str, bool zero_terminated = false) {
+        std::vector<uint8_t> bytes{};
+        bytes.reserve((str.size() + (zero_terminated ? 1 : 0)) * sizeof(uint16_t));
+#if defined(_WIN32)
+        for (wchar_t wc : str) {
+            const auto unit = (uint16_t)wc;
+            bytes.push_back((uint8_t)(unit & 0xFF));
+            bytes.push_back((uint8_t)(unit >> 8));
+        }
+#else
+        for (wchar_t wc : str) {
+            append_utf16le(bytes, (uint32_t)wc);
+        }
+#endif
+        if (zero_terminated) {
+            bytes.push_back(0);
+            bytes.push_back(0);
+        }
+        return bytes;
+    }
+
     optional<uintptr_t> scan(const string& module, const string& pattern) {
         return scan(get_module(module), pattern);
     }
@@ -312,10 +382,14 @@ namespace utility {
             return {};
         }
 
+#if defined(_WIN32)
         const auto data = (uint8_t*)str.c_str();
         const auto size = (str.size() + (zero_terminated ? 1 : 0)) * sizeof(wchar_t);
-
         return scan_data(module, data, size);
+#else
+        const auto bytes = wstring_search_bytes(str, zero_terminated);
+        return scan_data(module, bytes.data(), bytes.size());
+#endif
     }
 
     std::optional<uintptr_t> scan_string(uintptr_t start, size_t length, const std::string& str, bool zero_terminated) {
@@ -338,10 +412,14 @@ namespace utility {
             return {};
         }
 
+#if defined(_WIN32)
         const auto data = (uint8_t*)str.c_str();
         const auto size = (str.size() + (zero_terminated ? 1 : 0)) * sizeof(wchar_t);
-
         return scan_data(start, length, data, size);
+#else
+        const auto bytes = wstring_search_bytes(str, zero_terminated);
+        return scan_data(start, length, bytes.data(), bytes.size());
+#endif
     }
 
     std::vector<uintptr_t> scan_strings(HMODULE module, const std::string& str, bool zero_terminated) {
@@ -378,8 +456,14 @@ namespace utility {
             return {};
         }
 
+#if defined(_WIN32)
         const auto data = (uint8_t*)str.c_str();
         const auto size = (str.size() + (zero_terminated ? 1 : 0)) * sizeof(wchar_t);
+#else
+        const auto bytes = wstring_search_bytes(str, zero_terminated);
+        const auto data = bytes.data();
+        const auto size = bytes.size();
+#endif
         const auto module_size = get_module_size(module).value_or(0);
         if (module_size < size) {
             return {};
@@ -431,8 +515,14 @@ namespace utility {
             return {};
         }
 
+#if defined(_WIN32)
         const auto data = (uint8_t*)str.c_str();
         const auto size = (str.size() + (zero_terminated ? 1 : 0)) * sizeof(wchar_t);
+#else
+        const auto bytes = wstring_search_bytes(str, zero_terminated);
+        const auto data = bytes.data();
+        const auto size = bytes.size();
+#endif
         if (length < size || start > UINTPTR_MAX - length) {
             return {};
         }
@@ -535,10 +625,13 @@ namespace utility {
     // original, really stinky implementation
     std::optional<uintptr_t> scan_relative_reference_scalar_byte_by_byte(uintptr_t start, size_t length, uintptr_t ptr, std::function<bool(uintptr_t)> filter) {
         KANANLIB_BENCH();
+#if defined(KANANLIB_TESTING)
+        testing::record_relative_reference_scan_implementation(testing::RelativeReferenceScanImplementation::ScalarByteByByte);
+#endif
 
         const auto end = start + length;
 
-        for (auto i = start; i + 4 < end; i += sizeof(uint8_t)) {
+        for (auto i = start; i + sizeof(uint32_t) <= end; i += sizeof(uint8_t)) {
             if (calculate_absolute(i, 4) == ptr) {
                 if (filter == nullptr || filter(i)) {
                     return i;
@@ -559,7 +652,8 @@ namespace utility {
 
         // We can't make use of the full 8 bytes because we need to slide past sizeof(void*) / 2, which will end up going
         // past the end of the block when reading an int32 out of it. So we'll iterate forward by 4 byte intervals.
-        for (uintptr_t i = start; i + sizeof(uint64_t) < end; i += sizeof(uint32_t)) __try {
+        uintptr_t i = start;
+        for (; i + sizeof(uint64_t) < end; i += sizeof(uint32_t)) KANANLIB_SEH_TRY {
             // Reading in 8 byte chunks at a time is significantly faster than byte-by-byte (0.6-0.7GB/s vs ~2GB/s in my testing)
             uint64_t block = *(uint64_t*)i;
             
@@ -597,29 +691,27 @@ namespace utility {
                     return i + 3;
                 }
             }
-        } __except (EXCEPTION_EXECUTE_HANDLER) {
+        } KANANLIB_SEH_EXCEPT (EXCEPTION_EXECUTE_HANDLER) {
             // We don't care about access violations, just move on
             continue;
         }
 
-        __try {
-            // Need to read off the remaining nibble at the end
-            const auto new_length = std::min<size_t>(length, 4);
-            if (new_length < 4) {
-                return std::nullopt;
-            }
-
-            const auto new_start = end - new_length;
-            const auto offset = *(int32_t*)new_start;
-            const auto landing_address = new_start + POST_IP_CONSTANT + offset;
+        // The fast loop above reads 8 bytes per step and stops with up to 7
+        // bytes left, so it can leave several unscanned positions before the
+        // end. Check every remaining position through end-4 (inclusive) so a
+        // match in the final bytes of the range is never missed.
+        for (; i + sizeof(uint32_t) <= end; ++i) KANANLIB_SEH_TRY {
+            const auto offset = *(int32_t*)i;
+            const auto landing_address = i + POST_IP_CONSTANT + offset;
 
             if (landing_address == ptr) {
-                if (filter == nullptr || filter(new_start)) {
-                    return new_start;
+                if (filter == nullptr || filter(i)) {
+                    return i;
                 }
             }
-        } __except(EXCEPTION_EXECUTE_HANDLER) {
+        } KANANLIB_SEH_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
             // We don't care about access violations, just move on
+            continue;
         }
 
         return std::nullopt;
@@ -627,6 +719,9 @@ namespace utility {
 
     std::optional<uintptr_t> scan_relative_reference_scalar(uintptr_t start, size_t length, uintptr_t ptr, std::function<bool(uintptr_t)> filter) {
         KANANLIB_BENCH();
+#if defined(KANANLIB_TESTING)
+        testing::record_relative_reference_scan_implementation(testing::RelativeReferenceScanImplementation::Scalar);
+#endif
         
         const auto result = scan_relative_reference_scalar_impl(start, length, ptr, filter);
 
@@ -712,6 +807,9 @@ namespace utility {
     __attribute__((target("avx,avx2,bmi")))
     #endif
     std::optional<uintptr_t> scan_relative_reference_avx2(uintptr_t start, size_t length, uintptr_t ptr, std::function<bool(uintptr_t)>& filter) {
+#if defined(KANANLIB_TESTING)
+        testing::record_relative_reference_scan_implementation(testing::RelativeReferenceScanImplementation::Avx2);
+#endif
         // if ptr - start > 2GB, fallback to scalar
         const int64_t dist = (int64_t)((intptr_t)ptr - (intptr_t)start);
         if (dist > INT32_MAX || dist < INT32_MIN) {
@@ -835,7 +933,7 @@ namespace utility {
             const __m256i zero = _mm256_setzero_si256();
 
             // Loop unrolled a bunch of times to increase throughput
-            for (auto i = start; i + lookahead_size < end;) __try {
+            for (auto i = start; i + lookahead_size < end;) KANANLIB_SEH_TRY {
                 const int32_t base = (int32_t)(i - start);
                 const auto addresses_base = _mm256_add_epi32(_mm256_set1_epi32(base), addition_mask32);
 
@@ -880,7 +978,7 @@ namespace utility {
                 PROCESS_4_MASKS_FINAL(12, mask12);
                 PROCESS_4_MASKS_FINAL(16, mask16);
                 PROCESS_4_MASKS_FINAL(20, mask20);
-            } __except (EXCEPTION_EXECUTE_HANDLER) {
+            } KANANLIB_SEH_EXCEPT (EXCEPTION_EXECUTE_HANDLER) {
                 //SPDLOG_INFO("Exception caught at {:x}", i);
                 i += sizeof(__m256i);
                 continue;
@@ -889,7 +987,7 @@ namespace utility {
             lookahead_size = (sizeof(__m256i)) + 8;
             const __m256i zero = _mm256_setzero_si256();
 
-            for (auto i = start; i + lookahead_size < end;) __try {
+            for (auto i = start; i + lookahead_size < end;) KANANLIB_SEH_TRY {
                 const int32_t base = (int32_t)(i - start);
                 const auto addresses_base = _mm256_add_epi32(_mm256_set1_epi32(base), addition_mask32);
 
@@ -899,7 +997,7 @@ namespace utility {
                 PROCESS_AVX2_BLOCKS();
                 auto mask0 = ~_mm256_movemask_pd(_mm256_castsi256_pd(_mm256_cmpeq_epi64( _mm256_load_si256((__m256i*)&masks[0]), zero))) & 0b1111; \
                 PROCESS_4_MASKS_FINAL(0, mask0);
-            } __except (EXCEPTION_EXECUTE_HANDLER) {
+            } KANANLIB_SEH_EXCEPT (EXCEPTION_EXECUTE_HANDLER) {
                 //SPDLOG_INFO("Exception caught at {:x}", i);
                 i += sizeof(__m256i);
                 continue;
@@ -913,6 +1011,9 @@ namespace utility {
         KANANLIB_BENCH();
 
         if (!kananlib::utility::thirdparty::InstructionSet::AVX2() || length <= sizeof(__m256i) * 4) {
+#if defined(KANANLIB_TESTING)
+            testing::record_relative_reference_scan_implementation(testing::RelativeReferenceScanImplementation::Scalar);
+#endif
             return scan_relative_reference_scalar(start, length, ptr, filter);
         }
 
@@ -2179,7 +2280,7 @@ namespace utility {
     }
 
     std::optional<uintptr_t> find_function_start_unwind(uintptr_t middle) {
-#if defined(_M_AMD64)
+#if defined(_M_AMD64) || defined(__x86_64__)
         auto entry = find_function_entry(middle);
 
         if (entry) {
@@ -2249,7 +2350,7 @@ namespace utility {
     }
 
     std::optional<uintptr_t> resolve_scope_table_owner(HMODULE module, uintptr_t filter_func) {
-#if defined(_M_AMD64)
+#if defined(_M_AMD64) || defined(__x86_64__)
         KANANLIB_BENCH();
 
         const auto base = (uintptr_t)module;
@@ -2454,13 +2555,14 @@ namespace utility {
                     }
 
                     try {
-                        const auto potential_string = (wchar_t*)*displacement;
+                        const auto needle = wstring_search_bytes(b);
+                        const auto* potential_string = (const uint8_t*)*displacement;
 
-                        if (IsBadReadPtr(potential_string, b.length() * sizeof(wchar_t))) {
+                        if (IsBadReadPtr((void*)potential_string, needle.size())) {
                             return ExhaustionResult::CONTINUE;
                         }
 
-                        if (std::memcmp(potential_string, b.data(), b.length() * sizeof(wchar_t)) == 0) {
+                        if (!needle.empty() && std::memcmp(potential_string, needle.data(), needle.size()) == 0) {
                             SPDLOG_INFO("Found correct displacement at 0x{:x}", ip);
                             is_correct_function = true;
                             return ExhaustionResult::BREAK;
@@ -2970,11 +3072,16 @@ namespace utility {
                 return utility::ExhaustionResult::CONTINUE;
             }
 
-            if (IsBadReadPtr((void*)*disp, str.length() * sizeof(wchar_t))) {
+            // Exact match including the terminator, matching the original
+            // wstring_view equality semantics, but compared as UTF-16LE bytes so
+            // it is correct regardless of host wchar_t width.
+            const auto needle = wstring_search_bytes(str, /*zero_terminated*/ true);
+
+            if (IsBadReadPtr((void*)*disp, needle.size())) {
                 return utility::ExhaustionResult::CONTINUE;
             }
 
-            if (str == (const wchar_t*)*disp) {
+            if (std::memcmp((const void*)*disp, needle.data(), needle.size()) == 0) {
                 result = ResolvedDisplacement{ { ip, ix }, *disp };
                 return utility::ExhaustionResult::BREAK;
             }
@@ -3311,14 +3418,17 @@ namespace utility {
                     return ExhaustionResult::CONTINUE;
                 }
 
-                if (IsBadReadPtr((void*)*disp, sizeof(wchar_t) * 2)) {
+                if (IsBadReadPtr((void*)*disp, sizeof(utf16_char) * 2)) {
                     return ExhaustionResult::CONTINUE;
                 }
 
-                auto wc = (wchar_t*)*disp;
+                // In-binary Windows strings are UTF-16 code units. Read them as
+                // utf16_char (16-bit) so this is correct regardless of the host
+                // wchar_t width (UTF-32 off Windows).
+                auto wc = (utf16_char*)*disp;
 
-                while (std::iswprint(*wc) && *wc != L'\0' && *wc >= 0x20 && *wc <= 0x7E) {
-                    const auto len = ((uintptr_t)wc - (uintptr_t)*disp) / sizeof(wchar_t);
+                while (*wc != u'\0' && *wc >= 0x20 && *wc <= 0x7E) {
+                    const auto len = ((uintptr_t)wc - (uintptr_t)*disp) / sizeof(utf16_char);
 
                     if (len >= options.max_length) {
                         return ExhaustionResult::CONTINUE;
@@ -3327,11 +3437,11 @@ namespace utility {
                     ++wc;
                 }
 
-                if (*wc == L'\0' && wc != (wchar_t*)*disp) {
-                    const auto len = ((uintptr_t)wc - (uintptr_t)*disp) / sizeof(wchar_t);
+                if (*wc == u'\0' && wc != (utf16_char*)*disp) {
+                    const auto len = ((uintptr_t)wc - (uintptr_t)*disp) / sizeof(utf16_char);
 
                     if (len >= options.min_length) {
-                        out.emplace_back(Resolved{ctx.addr, ctx.instrux}, (wchar_t*)*disp);
+                        out.emplace_back(Resolved{ctx.addr, ctx.instrux}, (utf16_char*)*disp);
                     }
                 }
             } catch(...) {

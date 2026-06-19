@@ -1,7 +1,6 @@
 #include <cstdint>
 #include <string>
 #include <iostream>
-#include <random>
 #include <algorithm>
 
 #include <utility/Logging.hpp>
@@ -356,74 +355,6 @@ int test_string_references() {
     return 0;
 }
 
-// ============================================================================
-// Test: AVX2 displacement scan on 1 GB data with random alignments
-// ============================================================================
-
-int test_avx2_displacement_scan() {
-    std::cout << "  Allocating 1 GB test buffer..." << std::endl;
-
-    std::vector<uint8_t> huge_bytes{};
-    try {
-        huge_bytes.resize(1024 * 1024 * 1024);
-    } catch (const std::bad_alloc&) {
-        std::cout << "  SKIP: not enough memory for 1 GB buffer." << std::endl;
-        return 0;
-    }
-    memset(huge_bytes.data(), 0, huge_bytes.size());
-    std::cout << "  Allocated." << std::endl;
-
-    std::mt19937 rng{std::random_device{}()};
-    constexpr size_t MAX_I = 512;
-
-    for (int32_t i = 0; i < (int32_t)MAX_I; ++i) {
-        const int32_t index_to_write_to =
-            ((int32_t)((rng() % (huge_bytes.size() - MAX_I - 4))) & ~7) + i;
-        const uintptr_t address_to_write_to = (uintptr_t)&huge_bytes[index_to_write_to];
-        const uintptr_t address_of_next_ip = address_to_write_to + 4;
-        const uintptr_t address_to_rel32_reference =
-            (uintptr_t)huge_bytes.data() + (rng() % (huge_bytes.size() - 32 - 4));
-
-        const int32_t delta =
-            (std::ptrdiff_t)address_to_rel32_reference - (std::ptrdiff_t)address_of_next_ip;
-        *(int32_t*)(&huge_bytes[index_to_write_to]) = delta;
-
-        if (index_to_write_to - 4 >= 0)
-            *(int32_t*)(&huge_bytes[index_to_write_to - 4]) = delta + 5;
-
-        if (address_to_rel32_reference >= (uintptr_t)huge_bytes.data() + 4)
-            *(int32_t*)(address_to_rel32_reference - 4) = 1 << 31;
-
-        const auto start  = (uintptr_t)huge_bytes.data();
-        const auto length = (uintptr_t)huge_bytes.size();
-
-        // AVX2 scan.
-        const auto scan_result = utility::scan_relative_reference(start, length, address_to_rel32_reference);
-        TEST_ASSERT(scan_result.has_value());
-        TEST_ASSERT(*scan_result == address_to_write_to);
-
-        // Scalar scan (first iteration only -- it's slow).
-        if (i == 0) {
-            const auto scalar = utility::scan_relative_reference_scalar(start, length, address_to_rel32_reference);
-            TEST_ASSERT(scalar.has_value());
-            TEST_ASSERT(*scalar == address_to_write_to);
-
-            const auto bbb = utility::scan_relative_reference_scalar_byte_by_byte(start, length, address_to_rel32_reference);
-            TEST_ASSERT(bbb.has_value());
-            TEST_ASSERT(*bbb == address_to_write_to);
-        }
-
-        // Clean up for next iteration.
-        *(int32_t*)(&huge_bytes[index_to_write_to]) = 0;
-        if (index_to_write_to - 4 >= 0)
-            *(int32_t*)(&huge_bytes[index_to_write_to - 4]) = 0;
-        if (address_to_rel32_reference >= (uintptr_t)huge_bytes.data() + 4)
-            *(int32_t*)(address_to_rel32_reference - 4) = 0;
-    }
-
-    std::cout << "  " << MAX_I << " random-alignment iterations passed." << std::endl;
-    return 0;
-}
 
 // ============================================================================
 // main
@@ -440,7 +371,6 @@ int main() try {
     RUN_TEST(test_function_from_string_ref);
     RUN_TEST(test_exception_safety);
     RUN_TEST(test_string_references);
-    RUN_TEST(test_avx2_displacement_scan);
 
     return test_summary();
 } catch(const std::exception& e) {

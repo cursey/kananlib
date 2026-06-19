@@ -3,7 +3,7 @@
 #include <iostream>
 #include <cstring>
 
-#include <Windows.h>
+#include <windows.h>
 
 #include <utility/Scan.hpp>
 #include <utility/Module.hpp>

@@ -15,11 +15,42 @@ That shape, repeated against different anchor strings, survives game patches wit
 
 For the methodology behind this approach, see [UEVR: An Exploration of Advanced Game Hacking Techniques](https://praydog.com/reverse-engineering/2023/07/03/uevr.html).
 
-The library is C++20, Windows-only, x86-64. See `include/utility/` for the full API.
+The library is C++20. It is primarily a Windows library; the file-mapping
+analysis path is also supported on Linux (see **Platform support**).
+See `include/utility/` for the full API.
+
+## Platform support
+
+The file-mapping analysis path is fully supported on Linux with clang. It is
+Linux-specific (not portable to other POSIX systems as-is): the compat layer's
+memory queries read `/proc/self/maps`.
+
+- **Supported on Linux:** mapping a PE32/PE32+ image or x86-64 Mach-O *from disk*
+  with `utility::map_view_of_file` (which lays PE sections out at their RVAs via
+  `mmap` and applies base relocations where representable), then running the
+  scanners, disassembly, emulation, import/export parsing, and the patch/hook
+  primitives against the mapped image. For x64 PE images, `.pdata`-based function
+  discovery and MSVC RTTI vtable lookup are also parsed directly from the mapped
+  image. The CLI works unchanged.
+- **Windows-only:** features that introspect the *live* process or OS: walking
+  the loader module list (`get_executable`, `GetModuleHandle`), PDB/DIA symbol
+  resolution, the registry, keyboard state, and thread suspension. On non-Windows
+  these degrade to no-ops.
+
+The non-Windows build supplies the needed Win32 surface through a small
+compatibility shim in `include/compat/`: PE/COFF structures, memory APIs backed
+by `mmap`/`mprotect`/`/proc/self/maps`, and a SIGSEGV/SIGBUS-based emulation of
+the `__try`/`__except` guards the scanners rely on. PE32 and PE32+ headers are
+parsed directly; x64 `.pdata` and MSVC RTTI are available for x64 PE images.
 
 ## CLI
 
-`kananlib-cli` exposes the library's scanners as one-shot argv commands. It maps a PE or x86-64 Mach-O binary into the host Windows process's address space using `utility::map_view_of_file` and runs queries against the live bytes. There is no analysis database and no cache. Every command starts from raw memory, finishes, and exits.
+`kananlib-cli` exposes the library's scanners as one-shot argv commands. It maps
+a PE32/PE32+ or x86-64 Mach-O binary into the host process's address space using
+`utility::map_view_of_file` (a real loaded image on Windows; an `mmap`-laid-out,
+relocated image on Linux) and runs queries against the live bytes. There is no
+analysis database and no cache. Every command starts from raw memory, finishes,
+and exits.
 
 ### When it's useful
 
@@ -37,9 +68,16 @@ The library is C++20, Windows-only, x86-64. See `include/utility/` for the full 
 ### Build
 
 ```bash
+# Windows:
 cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release
 cmake --build build --config Release --target kananlib-cli
 # build/Release/kananlib-cli.exe
+
+# Linux (clang, standalone fetches bddisasm + spdlog):
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+  -DKANANLIB_STANDALONE_BUILD=ON -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_C_COMPILER=clang
+cmake --build build --target kananlib-cli
+# build/kananlib-cli
 ```
 
 ### Conventions

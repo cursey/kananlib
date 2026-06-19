@@ -13,7 +13,7 @@
 #include <thread>
 #include <atomic>
 #include <mutex>
-#include <Windows.h>
+#include <windows.h>
 
 #include <utility/Scan.hpp>
 #include <utility/Module.hpp>
@@ -48,14 +48,13 @@ struct BehaviorTestPage {
         if (data) VirtualFree(data, 0, MEM_RELEASE);
     }
 };
-
 // ============================================================================
 // scan_strings — HMODULE string overload (line 327)
 // ============================================================================
 
 int test_scan_strings_hmodule_string_finds_marker() {
     auto* mod = GetModuleHandleA(nullptr);
-    TEST_ASSERT(mod != nullptr);
+    if (mod == nullptr) { TEST_SKIP("current executable module unavailable (no Win32 PE host)"); }
 
     const auto results = utility::scan_strings(mod, std::string{MARKER_STRING});
     TEST_ASSERT(!results.empty());
@@ -72,7 +71,7 @@ int test_scan_strings_hmodule_string_finds_marker() {
 
 int test_scan_strings_hmodule_wstring_finds_marker() {
     auto* mod = GetModuleHandleA(nullptr);
-    TEST_ASSERT(mod != nullptr);
+    if (mod == nullptr) { TEST_SKIP("current executable module unavailable (no Win32 PE host)"); }
 
     const auto results = utility::scan_strings(mod, std::wstring{MARKER_WSTRING});
     TEST_ASSERT(!results.empty());
@@ -109,13 +108,12 @@ int test_scan_strings_uintptr_string_finds_placed() {
 int test_scan_strings_uintptr_wstring_finds_placed() {
     BehaviorTestPage page;
 
-    const wchar_t* marker = L"SCAN_UINTPTR_WSTR_MARKER_5e7a";
-    const size_t marker_wchars = wcslen(marker);
-    const size_t marker_bytes = (marker_wchars + 1) * sizeof(wchar_t);
-    memcpy(page.data + 128, marker, marker_bytes);
+    const std::wstring marker = L"SCAN_UINTPTR_WSTR_MARKER_5e7a";
+    const auto marker_bytes = utf16le_bytes(marker);
+    memcpy(page.data + 128, marker_bytes.data(), marker_bytes.size());
 
     const auto results = utility::scan_strings(
-        (uintptr_t)page.data, 4096, std::wstring{marker});
+        (uintptr_t)page.data, 4096, marker);
     TEST_ASSERT(results.size() == 1);
     TEST_ASSERT(results[0] == (uintptr_t)(page.data + 128));
     return 0;
@@ -281,6 +279,9 @@ int test_threadsuspender_resume_then_destruct_no_double_unlock() {
 // ============================================================================
 
 int test_threadsuspender_actually_freezes_threads() {
+#if !defined(_WIN32)
+    TEST_SKIP("thread suspension is a no-op without a Win32 host");
+#endif
     auto fut = std::async(std::launch::async, []() -> int {
         std::atomic<uint64_t> counter{0};
         std::atomic<bool> stop{false};
@@ -363,6 +364,9 @@ int test_threadsuspender_actually_freezes_threads() {
 // ============================================================================
 
 int test_threadsuspender_suspended_flag_reflects_success() {
+#if !defined(_WIN32)
+    TEST_SKIP("thread suspension is a no-op without a Win32 host");
+#endif
     auto fut = std::async(std::launch::async, []() -> int {
         std::atomic<uint64_t> counter{0};
         std::atomic<bool> stop{false};
@@ -476,7 +480,7 @@ int test_threadsuspender_suspend_balanced() {
 
 int test_find_all_vtables_executable() {
     auto* mod = GetModuleHandleA(nullptr);
-    TEST_ASSERT(mod != nullptr);
+    if (mod == nullptr) { TEST_SKIP("no live PE host (get_executable() is null on Linux)"); }
 
     auto vtables = utility::rtti::find_all_vtables(mod);
 

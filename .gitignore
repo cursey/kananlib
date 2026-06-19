@@ -1,8 +1,11 @@
 build/
+build-win-local/
+build-win-cli/
 test/build
 test/kananlib
 test/build-cov
 test/build-clang
+test/build-win-local
 
 # clang coverage profile dumps
 *.profraw

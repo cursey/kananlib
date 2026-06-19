@@ -1,5 +1,7 @@
 #include <utility/VtableHook.hpp>
 
+#include <cstring>
+
 using namespace std;
 
 VtableHook::VtableHook()

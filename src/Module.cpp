@@ -216,9 +216,14 @@ namespace utility {
             return nullptr;
         }
 
+#if defined(_WIN32)
         auto fspath = std::filesystem::path{ *current_path } / module;
-
         return LoadLibraryW(fspath.c_str());
+#else
+        // No Win32 loader off Windows.
+        (void)module;
+        return nullptr;
+#endif
     }
 
     std::vector<uint8_t> read_module_from_disk(HMODULE module) {
@@ -377,6 +382,13 @@ namespace utility {
             return;
         }
 
+#if !defined(_WIN32)
+        // No PEB / loader module list on non-Windows. Fake modules are tracked
+        // in g_module_ranges rather than the loader list, so there is nothing to
+        // walk here.
+        (void)callback;
+        return;
+#else
 #if defined(_M_X64)
         auto peb = (PEB*)__readgsqword(0x60);
 #else
@@ -419,6 +431,7 @@ namespace utility {
         if (lock_loader != nullptr && unlock_loader != nullptr) {
             unlock_loader(0, loader_magic);
         }
+#endif // _WIN32
     } catch(std::exception& e) {
         SPDLOG_ERROR("[PEB] exception while iterating modules: {}", e.what());
     } catch(...) {
@@ -661,6 +674,7 @@ namespace utility {
     }
 
     std::optional<FakeModule> map_view_of_pe(const std::string& path) {
+#if defined(_WIN32)
         auto fspath = std::filesystem::path{ path };
 
         auto file_handle = CreateFileW(fspath.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
@@ -731,16 +745,8 @@ namespace utility {
         fake_entry->InMemoryOrderLinks.Flink = peb->Ldr->InMemoryOrderModuleList.Flink;
         fake_entry->InMemoryOrderLinks.Blink = &peb->Ldr->InMemoryOrderModuleList;
 
-        //auto& InLoadOrderLinks = *(LIST_ENTRY*)&peb->Ldr->Reserved2[1];
-        //auto& InLoadOrderLinksEntry = *(LIST_ENTRY*)(&fake_entry->Reserved1[0]);
-        //InLoadOrderLinksEntry.Flink = InLoadOrderLinks.Flink;
-        //InLoadOrderLinksEntry.Blink = &InLoadOrderLinksEntry;
-
-
         peb->Ldr->InMemoryOrderModuleList.Flink->Blink = &fake_entry->InMemoryOrderLinks;
         peb->Ldr->InMemoryOrderModuleList.Flink = &fake_entry->InMemoryOrderLinks;
-        //InLoadOrderLinks.Flink->Blink = &InLoadOrderLinks;
-        //InLoadOrderLinks.Flink = &InLoadOrderLinksEntry;
 
         {
             std::unique_lock _{ g_module_ranges_mutex };
@@ -748,6 +754,216 @@ namespace utility {
         }
 
         return FakeModule{ (HMODULE)mapped_base, file_handle, mapping_handle };
+#else
+        // Non-Windows: there is no SEC_IMAGE mapping, so we emulate it by laying
+        // out the PE sections at their RVAs in an anonymous mapping. The result
+        // has RVA == offset-from-base, exactly like a loaded image, so every
+        // scan/RTTI utility that walks the module by RVA works unchanged.
+        std::ifstream file{ path, std::ios::binary | std::ios::ate };
+        if (!file.is_open()) {
+            return std::nullopt;
+        }
+
+        const auto file_size = (size_t)file.tellg();
+        file.seekg(0, std::ios::beg);
+
+        if (file_size < sizeof(IMAGE_DOS_HEADER)) {
+            return std::nullopt;
+        }
+
+        std::vector<uint8_t> file_data(file_size);
+        file.read((char*)file_data.data(), file_size);
+        file.close();
+
+        auto* dos = (PIMAGE_DOS_HEADER)file_data.data();
+        if (dos->e_magic != IMAGE_DOS_SIGNATURE) {
+            return std::nullopt;
+        }
+
+        const auto nt_offset = (size_t)dos->e_lfanew;
+        constexpr size_t optional_header_offset = offsetof(IMAGE_NT_HEADERS, OptionalHeader);
+
+        if (dos->e_lfanew <= 0 || nt_offset > file_size || file_size - nt_offset < optional_header_offset + sizeof(WORD)) {
+            return std::nullopt;
+        }
+
+        auto* nt = (PIMAGE_NT_HEADERS)(file_data.data() + nt_offset);
+        if (nt->Signature != IMAGE_NT_SIGNATURE) {
+            return std::nullopt;
+        }
+
+        const auto optional_magic = *(const WORD*)(file_data.data() + nt_offset + optional_header_offset);
+        const bool pe32 = optional_magic == IMAGE_NT_OPTIONAL_HDR32_MAGIC;
+        const bool pe32_plus = optional_magic == IMAGE_NT_OPTIONAL_HDR64_MAGIC;
+        if (!pe32 && !pe32_plus) {
+            return std::nullopt;
+        }
+        if ((pe32 && nt->FileHeader.Machine != IMAGE_FILE_MACHINE_I386) ||
+            (pe32_plus && nt->FileHeader.Machine != IMAGE_FILE_MACHINE_AMD64)) {
+            return std::nullopt;
+        }
+
+        const size_t required_optional_size = pe32 ? sizeof(IMAGE_OPTIONAL_HEADER32) : sizeof(IMAGE_OPTIONAL_HEADER64);
+        if (nt->FileHeader.SizeOfOptionalHeader < required_optional_size ||
+            file_size - nt_offset < optional_header_offset + required_optional_size) {
+            return std::nullopt;
+        }
+
+        const auto* opt32 = pe32 ? (const IMAGE_OPTIONAL_HEADER32*)(file_data.data() + nt_offset + optional_header_offset) : nullptr;
+        const auto* opt64 = pe32_plus ? (const IMAGE_OPTIONAL_HEADER64*)(file_data.data() + nt_offset + optional_header_offset) : nullptr;
+        const auto image_size = (size_t)(pe32 ? opt32->SizeOfImage : opt64->SizeOfImage);
+        const auto headers_size = (size_t)(pe32 ? opt32->SizeOfHeaders : opt64->SizeOfHeaders);
+        const auto image_base = (uint64_t)(pe32 ? opt32->ImageBase : opt64->ImageBase);
+        const auto reloc_dir = pe32 ? opt32->DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC] : opt64->DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC];
+
+        if (image_size == 0 || image_size > 0x100000000ULL) {
+            return std::nullopt;
+        }
+
+        // e_lfanew was validated against the file above; also reject it against
+        // the image so downstream consumers that re-read the NT headers from
+        // mapped_base + e_lfanew can never read past the mapping.
+        if (nt_offset + sizeof(IMAGE_NT_HEADERS) > image_size) {
+            return std::nullopt;
+        }
+
+        // Validate section table is within file bounds. IMAGE_FIRST_SECTION
+        // uses SizeOfOptionalHeader from the file. A malformed PE could set a
+        // large SizeOfOptionalHeader or NumberOfSections, causing out-of-bounds
+        // reads.
+        if (file_size - nt_offset < optional_header_offset ||
+            nt->FileHeader.SizeOfOptionalHeader > file_size - nt_offset - optional_header_offset) {
+            return std::nullopt;
+        }
+        const auto section_table_offset = nt_offset + optional_header_offset + (size_t)nt->FileHeader.SizeOfOptionalHeader;
+        const auto section_table_size = (size_t)nt->FileHeader.NumberOfSections * sizeof(IMAGE_SECTION_HEADER);
+        if (section_table_offset > file_size || file_size - section_table_offset < section_table_size) {
+            SPDLOG_WARN("[PE] Section table extends past end of file (offset={}, size={}, file_size={})",
+                section_table_offset, section_table_size, file_size);
+            return std::nullopt;
+        }
+        auto* first_section = (PIMAGE_SECTION_HEADER)(file_data.data() + section_table_offset);
+
+        auto* mapped_base = (uint8_t*)VirtualAlloc(nullptr, image_size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+        if (mapped_base == nullptr) {
+            SPDLOG_ERROR("[PE] VirtualAlloc failed for {} bytes", image_size);
+            return std::nullopt;
+        }
+
+        // Copy the PE headers verbatim.
+        std::memcpy(mapped_base, file_data.data(), std::min(std::min(headers_size, file_size), image_size));
+
+        // Copy each section's raw data to its virtual address.
+        auto* section = first_section;
+        for (uint16_t i = 0; i < nt->FileHeader.NumberOfSections; ++i, ++section) {
+            const auto va = (size_t)section->VirtualAddress;
+            const auto raw_ptr = (size_t)section->PointerToRawData;
+            auto raw_size = (size_t)section->SizeOfRawData;
+
+            if (va >= image_size || raw_size == 0 || raw_ptr >= file_size) {
+                continue;
+            }
+            if (raw_ptr + raw_size > file_size) {
+                raw_size = file_size - raw_ptr;
+            }
+            if (va + raw_size > image_size) {
+                raw_size = image_size - va;
+            }
+
+            std::memcpy(mapped_base + va, file_data.data() + raw_ptr, raw_size);
+        }
+
+        // Apply base relocations so absolute pointers (vtable -> RTTI locator,
+        // import thunks, etc.) are valid at the actual load address. The Windows
+        // loader does this; we must too since mmap will not honor the preferred
+        // ImageBase. Done while the pages are still writable.
+        const auto delta = (int64_t)((uint64_t)(uintptr_t)mapped_base - image_base);
+        if (delta != 0 && reloc_dir.VirtualAddress != 0 && reloc_dir.Size != 0) {
+            size_t reloc_rva = reloc_dir.VirtualAddress;
+            const size_t reloc_end = std::min(reloc_rva + (size_t)reloc_dir.Size, image_size);
+            uint32_t unsupported_relocs = 0;
+            uint32_t unsupported_reloc_type = 0;
+
+            while (reloc_rva + sizeof(IMAGE_BASE_RELOCATION) <= reloc_end && reloc_rva + sizeof(IMAGE_BASE_RELOCATION) <= image_size) {
+                auto* block = (IMAGE_BASE_RELOCATION*)(mapped_base + reloc_rva);
+                if (block->SizeOfBlock < sizeof(IMAGE_BASE_RELOCATION) || block->SizeOfBlock > (reloc_end - reloc_rva)) {
+                    break;
+                }
+
+                const auto num_entries = (block->SizeOfBlock - sizeof(IMAGE_BASE_RELOCATION)) / sizeof(uint16_t);
+                auto* entries = (uint16_t*)(block + 1);
+                for (uint32_t e = 0; e < num_entries; ++e) {
+                    const auto type = entries[e] >> 12;
+                    const size_t target = (size_t)block->VirtualAddress + (entries[e] & 0xFFF);
+                    if (type == IMAGE_REL_BASED_DIR64) {
+                        if (target + sizeof(uint64_t) <= image_size) {
+                            *(uint64_t*)(mapped_base + target) += (uint64_t)delta;
+                        }
+                    } else if (type == IMAGE_REL_BASED_HIGHLOW) {
+                        if (pe32 && (uintptr_t)mapped_base > UINT32_MAX) {
+                            SPDLOG_WARN("[PE] Cannot apply PE32 HIGHLOW relocations above the 32-bit address range");
+                            VirtualFree(mapped_base, 0, MEM_RELEASE);
+                            return std::nullopt;
+                        }
+                        if (target + sizeof(uint32_t) <= image_size) {
+                            *(uint32_t*)(mapped_base + target) += (uint32_t)delta;
+                        }
+                    }
+                    else if (type != IMAGE_REL_BASED_ABSOLUTE) {
+                        // ABSOLUTE (0) is padding and intentionally skipped; any
+                        // other type is one this loader does not apply.
+                        ++unsupported_relocs;
+                        unsupported_reloc_type = type;
+                    }
+                }
+
+                reloc_rva += block->SizeOfBlock;
+            }
+
+            if (unsupported_relocs > 0) {
+                SPDLOG_WARN("[PE] Skipped {} base relocation(s) of unsupported type {}; the mapped image may be incompletely relocated", unsupported_relocs, unsupported_reloc_type);
+            }
+        }
+
+        // Apply per-section page protections so VirtualQuery reports executable
+        // ranges (some scanners validate call targets against exec regions).
+        section = first_section;
+        for (uint16_t i = 0; i < nt->FileHeader.NumberOfSections; ++i, ++section) {
+            const auto va = (size_t)section->VirtualAddress;
+            auto vsize = (size_t)section->Misc.VirtualSize;
+            if (vsize == 0) {
+                vsize = (size_t)section->SizeOfRawData;
+            }
+            if (va >= image_size || vsize == 0) {
+                continue;
+            }
+            if (va + vsize > image_size) {
+                vsize = image_size - va;
+            }
+
+            const auto chars = section->Characteristics;
+            DWORD prot = PAGE_READONLY;
+            if (chars & IMAGE_SCN_MEM_EXECUTE) {
+                prot = (chars & IMAGE_SCN_MEM_WRITE) ? PAGE_EXECUTE_READWRITE : PAGE_EXECUTE_READ;
+            } else if (chars & IMAGE_SCN_MEM_WRITE) {
+                prot = PAGE_READWRITE;
+            }
+
+            DWORD old_prot = 0;
+            VirtualProtect(mapped_base + va, vsize, prot, &old_prot);
+        }
+
+        SPDLOG_INFO("[PE] Mapped {} at {:x}, size 0x{:X}", path, (uintptr_t)mapped_base, image_size);
+
+        {
+            std::unique_lock _{ g_module_ranges_mutex };
+            g_module_ranges.push_back({ (uintptr_t)mapped_base, (uintptr_t)mapped_base + image_size, std::filesystem::path{ path }.wstring() });
+        }
+
+        // is_virtual_alloc = true: the destructor releases via VirtualFree and
+        // never touches the (nonexistent) loader module list.
+        return FakeModule{ (HMODULE)mapped_base, nullptr, nullptr, true };
+#endif
     }
 
     std::optional<ImportMap> get_module_imports(HMODULE module) {

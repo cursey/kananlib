@@ -1,7 +1,7 @@
 #include <cstdint>
 #include <iostream>
 
-#include <Windows.h>
+#include <windows.h>
 
 #include <utility/Address.hpp>
 #include <utility/VtableHook.hpp>
