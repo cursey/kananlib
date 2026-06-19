@@ -277,14 +277,18 @@ extern "C" SIZE_T VirtualQuery(LPCVOID address, PMEMORY_BASIC_INFORMATION buffer
     for (const auto& reg : t_cache.regions) {
         if (reg.start > addr) { next_start = reg.start; break; }
     }
-    buffer->BaseAddress = (PVOID)(addr & ~((uintptr_t)page_size() - 1));
-    // The span to the next mapping is the real free-region size (Windows-faithful:
-    // BaseAddress + RegionSize == next_start, a valid address, so there is no wrap
-    // even for a multi-TiB gap). Do NOT clamp it -- a legitimate large
-    // reserved-but-uncommitted gap must be reported in full. Only the
-    // no-later-mapping case is clamped to one page, to avoid a near-SIZE_MAX span
-    // (next_start unset) that could overflow BaseAddress + RegionSize.
-    buffer->RegionSize  = (next_start > addr) ? (SIZE_T)(next_start - addr) : (SIZE_T)page_size();
+    const uintptr_t aligned_base = addr & ~((uintptr_t)page_size() - 1);
+    buffer->BaseAddress = (PVOID)aligned_base;
+    // The span runs from the page-aligned base to the next mapping -- the real
+    // free-region size (Windows-faithful: BaseAddress + RegionSize == next_start,
+    // a valid address, so there is no wrap even for a multi-TiB gap). Do NOT
+    // clamp it: a legitimate large reserved-but-uncommitted gap must be reported
+    // in full. Only the no-later-mapping case is clamped to one page, to avoid a
+    // near-SIZE_MAX span (next_start unset) that could overflow BaseAddress +
+    // RegionSize. RegionSize is measured from aligned_base (not the raw query
+    // address) so the invariant holds and callers walking by BaseAddress +
+    // RegionSize land exactly on next_start.
+    buffer->RegionSize  = (next_start > aligned_base) ? (SIZE_T)(next_start - aligned_base) : (SIZE_T)page_size();
     buffer->State       = MEM_FREE;
     buffer->Protect     = 0;  // Windows: MEM_FREE Protect is 0, not PAGE_NOACCESS.
     buffer->Type        = 0;
