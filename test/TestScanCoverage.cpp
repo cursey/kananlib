@@ -162,11 +162,11 @@ int test_scan_string_wchar_finds_wide() {
     TEST_ASSERT(page.data != nullptr);
 
     memset(page.data, 0x00, page.size);
-    const wchar_t* marker = L"WIDE_TEST";
-    size_t marker_bytes = wcslen(marker) * sizeof(wchar_t);
-    memcpy(page.data + 0x200, marker, marker_bytes);
+    const std::wstring marker = L"WIDE_TEST";
+    const auto marker_bytes = utf16le_bytes(marker);
+    memcpy(page.data + 0x200, marker_bytes.data(), marker_bytes.size());
 
-    auto result = utility::scan_string((uintptr_t)page.data, page.size, std::wstring{marker});
+    auto result = utility::scan_string((uintptr_t)page.data, page.size, marker);
     TEST_ASSERT(result.has_value());
     TEST_ASSERT(*result == (uintptr_t)(page.data + 0x200));
     return 0;
@@ -498,6 +498,40 @@ int test_resolve_displacement_no_displacement() {
     return 0;
 }
 
+// collect_unicode_string_references — must read in-image UTF-16 (not host
+// wchar_t, which is UTF-32 off Windows). Regression for the CLI
+// `collect_string_references --wide` path.
+int test_collect_unicode_string_refs_finds_wide() {
+    RWXPage page;
+    TEST_ASSERT(page.data != nullptr);
+    memset(page.data, 0xCC, page.size);
+
+    // UTF-16LE "Resolve\0" at 0x200.
+    const std::wstring marker = L"Resolve";
+    const auto marker_bytes = utf16le_bytes(marker);
+    memcpy(page.data + 0x200, marker_bytes.data(), marker_bytes.size());
+    page.data[0x200 + marker_bytes.size() + 0] = 0x00;
+    page.data[0x200 + marker_bytes.size() + 1] = 0x00;
+
+    // LEA RAX, [RIP+disp] at 0x100 referencing page+0x200, then RET.
+    const size_t off = 0x100;
+    const int32_t disp = (int32_t)(0x200 - (off + 7));
+    page.data[off + 0] = 0x48;
+    page.data[off + 1] = 0x8D;
+    page.data[off + 2] = 0x05;
+    memcpy(page.data + off + 3, &disp, sizeof(disp));
+    page.data[off + 7] = 0xC3; // RET
+
+    auto refs = utility::collect_unicode_string_references(
+        (uintptr_t)(page.data + off), 0x10,
+        utility::StringReferenceOptions{}.with_min_length(1));
+
+    TEST_ASSERT(refs.size() == 1);
+    TEST_ASSERT((uintptr_t)refs[0].unicode == (uintptr_t)(page.data + 0x200));
+    TEST_ASSERT(utility::narrow(refs[0].unicode) == "Resolve");
+    return 0;
+}
+
 // ============================================================================
 // exhaustive_decode — decodes instructions following branches
 // ============================================================================
@@ -684,6 +718,7 @@ int main() try {
     RUN_TEST(test_resolve_displacement_lea_rip);
     RUN_TEST(test_resolve_displacement_call_rel32);
     RUN_TEST(test_resolve_displacement_no_displacement);
+    RUN_TEST(test_collect_unicode_string_refs_finds_wide);
 
     // exhaustive_decode
     RUN_TEST(test_exhaustive_decode_simple_sequence);

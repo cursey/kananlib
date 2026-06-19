@@ -1,4 +1,6 @@
 build/
+build-win-local/
+build-win-cli/
 test/build
 test/kananlib
 test/build-cov

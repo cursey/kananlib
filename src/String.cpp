@@ -137,6 +137,50 @@ namespace utility {
     }
 #endif
 
+    // UTF-16 -> UTF-8. Shared by both platforms: in-binary Windows strings are
+    // always UTF-16 code units, independent of the host's wchar_t width.
+    string narrow(u16string_view str) {
+        string out{};
+        out.reserve(str.size());
+        for (size_t i = 0; i < str.size(); ++i) {
+            uint32_t cp = (uint16_t)str[i];
+
+            if (cp >= 0xD800 && cp <= 0xDBFF) {
+                // High surrogate: combine with the following low surrogate.
+                if (i + 1 < str.size()) {
+                    const uint32_t low = (uint16_t)str[i + 1];
+                    if (low >= 0xDC00 && low <= 0xDFFF) {
+                        cp = 0x10000 + ((cp - 0xD800) << 10) + (low - 0xDC00);
+                        ++i;
+                    } else {
+                        cp = 0xFFFD;
+                    }
+                } else {
+                    cp = 0xFFFD;
+                }
+            } else if (cp >= 0xDC00 && cp <= 0xDFFF) {
+                cp = 0xFFFD; // lone low surrogate
+            }
+
+            if (cp < 0x80) {
+                out.push_back((char)cp);
+            } else if (cp < 0x800) {
+                out.push_back((char)(0xC0 | (cp >> 6)));
+                out.push_back((char)(0x80 | (cp & 0x3F)));
+            } else if (cp < 0x10000) {
+                out.push_back((char)(0xE0 | (cp >> 12)));
+                out.push_back((char)(0x80 | ((cp >> 6) & 0x3F)));
+                out.push_back((char)(0x80 | (cp & 0x3F)));
+            } else {
+                out.push_back((char)(0xF0 | (cp >> 18)));
+                out.push_back((char)(0x80 | ((cp >> 12) & 0x3F)));
+                out.push_back((char)(0x80 | ((cp >> 6) & 0x3F)));
+                out.push_back((char)(0x80 | (cp & 0x3F)));
+            }
+        }
+        return out;
+    }
+
     string format_string(const char* format, va_list args) {
         va_list argsCopy{};
 

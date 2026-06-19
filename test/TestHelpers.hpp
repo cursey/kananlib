@@ -17,7 +17,40 @@
 //
 
 #include <chrono>
+#include <cstdint>
 #include <cstdio>
+#include <string_view>
+#include <vector>
+
+// Encode a wide string into UTF-16LE bytes, matching the layout of Windows-format
+// wide strings inside a binary. On Windows wchar_t is already UTF-16; elsewhere
+// it is UTF-32, so scalar values are re-encoded (with surrogate pairs) to UTF-16.
+inline std::vector<uint8_t> utf16le_bytes(std::wstring_view text) {
+    std::vector<uint8_t> bytes{};
+    bytes.reserve(text.size() * 2);
+    for (wchar_t wc : text) {
+#if defined(_WIN32)
+        const auto unit = (uint16_t)wc;
+        bytes.push_back((uint8_t)(unit & 0xFF));
+        bytes.push_back((uint8_t)(unit >> 8));
+#else
+        uint32_t cp = (uint32_t)wc;
+        if (cp <= 0xFFFF) {
+            bytes.push_back((uint8_t)(cp & 0xFF));
+            bytes.push_back((uint8_t)(cp >> 8));
+        } else {
+            cp -= 0x10000;
+            const uint16_t hi = (uint16_t)(0xD800 + (cp >> 10));
+            const uint16_t lo = (uint16_t)(0xDC00 + (cp & 0x3FF));
+            bytes.push_back((uint8_t)(hi & 0xFF));
+            bytes.push_back((uint8_t)(hi >> 8));
+            bytes.push_back((uint8_t)(lo & 0xFF));
+            bytes.push_back((uint8_t)(lo >> 8));
+        }
+#endif
+    }
+    return bytes;
+}
 
 namespace kananlib_test {
     inline int g_tests_passed = 0;

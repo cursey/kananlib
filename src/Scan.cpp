@@ -71,6 +71,52 @@ namespace utility {
     }
 #endif
 
+#if !defined(_WIN32)
+    static void append_utf16le(std::vector<uint8_t>& bytes, uint32_t cp) {
+        if (cp > 0x10FFFF || (cp >= 0xD800 && cp <= 0xDFFF)) {
+            cp = 0xFFFD;
+        }
+
+        auto append_unit = [&](uint16_t unit) {
+            bytes.push_back((uint8_t)(unit & 0xFF));
+            bytes.push_back((uint8_t)(unit >> 8));
+        };
+
+        if (cp <= 0xFFFF) {
+            append_unit((uint16_t)cp);
+            return;
+        }
+
+        cp -= 0x10000;
+        append_unit((uint16_t)(0xD800 + (cp >> 10)));
+        append_unit((uint16_t)(0xDC00 + (cp & 0x3FF)));
+    }
+#endif
+
+    // A wstring needle holds host wchar_t (UTF-16 on Windows, UTF-32 elsewhere).
+    // In-binary Windows strings are always UTF-16, so encode the needle to
+    // UTF-16LE bytes before comparing/searching against mapped image data.
+    static std::vector<uint8_t> wstring_search_bytes(std::wstring_view str, bool zero_terminated = false) {
+        std::vector<uint8_t> bytes{};
+        bytes.reserve((str.size() + (zero_terminated ? 1 : 0)) * sizeof(uint16_t));
+#if defined(_WIN32)
+        for (wchar_t wc : str) {
+            const auto unit = (uint16_t)wc;
+            bytes.push_back((uint8_t)(unit & 0xFF));
+            bytes.push_back((uint8_t)(unit >> 8));
+        }
+#else
+        for (wchar_t wc : str) {
+            append_utf16le(bytes, (uint32_t)wc);
+        }
+#endif
+        if (zero_terminated) {
+            bytes.push_back(0);
+            bytes.push_back(0);
+        }
+        return bytes;
+    }
+
     optional<uintptr_t> scan(const string& module, const string& pattern) {
         return scan(get_module(module), pattern);
     }
@@ -336,10 +382,14 @@ namespace utility {
             return {};
         }
 
+#if defined(_WIN32)
         const auto data = (uint8_t*)str.c_str();
         const auto size = (str.size() + (zero_terminated ? 1 : 0)) * sizeof(wchar_t);
-
         return scan_data(module, data, size);
+#else
+        const auto bytes = wstring_search_bytes(str, zero_terminated);
+        return scan_data(module, bytes.data(), bytes.size());
+#endif
     }
 
     std::optional<uintptr_t> scan_string(uintptr_t start, size_t length, const std::string& str, bool zero_terminated) {
@@ -362,10 +412,14 @@ namespace utility {
             return {};
         }
 
+#if defined(_WIN32)
         const auto data = (uint8_t*)str.c_str();
         const auto size = (str.size() + (zero_terminated ? 1 : 0)) * sizeof(wchar_t);
-
         return scan_data(start, length, data, size);
+#else
+        const auto bytes = wstring_search_bytes(str, zero_terminated);
+        return scan_data(start, length, bytes.data(), bytes.size());
+#endif
     }
 
     std::vector<uintptr_t> scan_strings(HMODULE module, const std::string& str, bool zero_terminated) {
@@ -402,8 +456,14 @@ namespace utility {
             return {};
         }
 
+#if defined(_WIN32)
         const auto data = (uint8_t*)str.c_str();
         const auto size = (str.size() + (zero_terminated ? 1 : 0)) * sizeof(wchar_t);
+#else
+        const auto bytes = wstring_search_bytes(str, zero_terminated);
+        const auto data = bytes.data();
+        const auto size = bytes.size();
+#endif
         const auto module_size = get_module_size(module).value_or(0);
         if (module_size < size) {
             return {};
@@ -455,8 +515,14 @@ namespace utility {
             return {};
         }
 
+#if defined(_WIN32)
         const auto data = (uint8_t*)str.c_str();
         const auto size = (str.size() + (zero_terminated ? 1 : 0)) * sizeof(wchar_t);
+#else
+        const auto bytes = wstring_search_bytes(str, zero_terminated);
+        const auto data = bytes.data();
+        const auto size = bytes.size();
+#endif
         if (length < size || start > UINTPTR_MAX - length) {
             return {};
         }
@@ -2490,13 +2556,14 @@ namespace utility {
                     }
 
                     try {
-                        const auto potential_string = (wchar_t*)*displacement;
+                        const auto needle = wstring_search_bytes(b);
+                        const auto* potential_string = (const uint8_t*)*displacement;
 
-                        if (IsBadReadPtr(potential_string, b.length() * sizeof(wchar_t))) {
+                        if (IsBadReadPtr((void*)potential_string, needle.size())) {
                             return ExhaustionResult::CONTINUE;
                         }
 
-                        if (std::memcmp(potential_string, b.data(), b.length() * sizeof(wchar_t)) == 0) {
+                        if (!needle.empty() && std::memcmp(potential_string, needle.data(), needle.size()) == 0) {
                             SPDLOG_INFO("Found correct displacement at 0x{:x}", ip);
                             is_correct_function = true;
                             return ExhaustionResult::BREAK;
@@ -3006,11 +3073,16 @@ namespace utility {
                 return utility::ExhaustionResult::CONTINUE;
             }
 
-            if (IsBadReadPtr((void*)*disp, str.length() * sizeof(wchar_t))) {
+            // Exact match including the terminator, matching the original
+            // wstring_view equality semantics, but compared as UTF-16LE bytes so
+            // it is correct regardless of host wchar_t width.
+            const auto needle = wstring_search_bytes(str, /*zero_terminated*/ true);
+
+            if (IsBadReadPtr((void*)*disp, needle.size())) {
                 return utility::ExhaustionResult::CONTINUE;
             }
 
-            if (str == (const wchar_t*)*disp) {
+            if (std::memcmp((const void*)*disp, needle.data(), needle.size()) == 0) {
                 result = ResolvedDisplacement{ { ip, ix }, *disp };
                 return utility::ExhaustionResult::BREAK;
             }
@@ -3347,14 +3419,17 @@ namespace utility {
                     return ExhaustionResult::CONTINUE;
                 }
 
-                if (IsBadReadPtr((void*)*disp, sizeof(wchar_t) * 2)) {
+                if (IsBadReadPtr((void*)*disp, sizeof(utf16_char) * 2)) {
                     return ExhaustionResult::CONTINUE;
                 }
 
-                auto wc = (wchar_t*)*disp;
+                // In-binary Windows strings are UTF-16 code units. Read them as
+                // utf16_char (16-bit) so this is correct regardless of the host
+                // wchar_t width (UTF-32 off Windows).
+                auto wc = (utf16_char*)*disp;
 
-                while (std::iswprint(*wc) && *wc != L'\0' && *wc >= 0x20 && *wc <= 0x7E) {
-                    const auto len = ((uintptr_t)wc - (uintptr_t)*disp) / sizeof(wchar_t);
+                while (*wc != u'\0' && *wc >= 0x20 && *wc <= 0x7E) {
+                    const auto len = ((uintptr_t)wc - (uintptr_t)*disp) / sizeof(utf16_char);
 
                     if (len >= options.max_length) {
                         return ExhaustionResult::CONTINUE;
@@ -3363,11 +3438,11 @@ namespace utility {
                     ++wc;
                 }
 
-                if (*wc == L'\0' && wc != (wchar_t*)*disp) {
-                    const auto len = ((uintptr_t)wc - (uintptr_t)*disp) / sizeof(wchar_t);
+                if (*wc == u'\0' && wc != (utf16_char*)*disp) {
+                    const auto len = ((uintptr_t)wc - (uintptr_t)*disp) / sizeof(utf16_char);
 
                     if (len >= options.min_length) {
-                        out.emplace_back(Resolved{ctx.addr, ctx.instrux}, (wchar_t*)*disp);
+                        out.emplace_back(Resolved{ctx.addr, ctx.instrux}, (utf16_char*)*disp);
                     }
                 }
             } catch(...) {

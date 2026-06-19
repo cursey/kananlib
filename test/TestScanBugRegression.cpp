@@ -193,11 +193,11 @@ static void write_scan_macho_tail_file(const std::filesystem::path& path, bool w
     seg.maxprot = 1;
     seg.initprot = 1;
     std::memcpy(bytes.data() + sizeof(header), &seg, sizeof(seg));
-
     if (wide) {
         const std::wstring marker = L"abc";
-        std::memcpy(bytes.data() + fileoff + image_size - marker.size() * sizeof(wchar_t),
-            marker.data(), marker.size() * sizeof(wchar_t));
+        const auto marker_bytes = utf16le_bytes(marker);
+        std::memcpy(bytes.data() + fileoff + image_size - marker_bytes.size(),
+            marker_bytes.data(), marker_bytes.size());
     } else {
         std::memcpy(bytes.data() + fileoff + image_size - 3, "abc", 3);
     }
@@ -389,11 +389,12 @@ int test_scan_strings_wide_nonzero_terminated_exact_length_finds_tail() {
     ScanTestPage page;
     TEST_ASSERT(page.data != nullptr);
     const std::wstring marker = L"abc";
-    std::memcpy(page.data + 0x80, marker.data(), marker.size() * sizeof(wchar_t));
+    const auto marker_bytes = utf16le_bytes(marker);
+    std::memcpy(page.data + 0x80, marker_bytes.data(), marker_bytes.size());
 
     const auto results = utility::scan_strings(
         (uintptr_t)(page.data + 0x80),
-        marker.size() * sizeof(wchar_t),
+        marker_bytes.size(),
         marker,
         false);
     TEST_ASSERT(results.size() == 1);
@@ -422,7 +423,7 @@ int test_scan_strings_hmodule_wide_nonzero_terminated_exact_tail_finds_match() {
     const std::wstring marker = L"abc";
     const auto results = utility::scan_strings(module->module, marker, false);
     TEST_ASSERT(results.size() == 1);
-    TEST_ASSERT(results[0] == (uintptr_t)module->module + 0x1000 - marker.size() * sizeof(wchar_t));
+    TEST_ASSERT(results[0] == (uintptr_t)module->module + 0x1000 - utf16le_bytes(marker).size());
     return 0;
 }
 

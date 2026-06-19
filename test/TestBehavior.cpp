@@ -48,7 +48,6 @@ struct BehaviorTestPage {
         if (data) VirtualFree(data, 0, MEM_RELEASE);
     }
 };
-
 // ============================================================================
 // scan_strings — HMODULE string overload (line 327)
 // ============================================================================
@@ -109,13 +108,12 @@ int test_scan_strings_uintptr_string_finds_placed() {
 int test_scan_strings_uintptr_wstring_finds_placed() {
     BehaviorTestPage page;
 
-    const wchar_t* marker = L"SCAN_UINTPTR_WSTR_MARKER_5e7a";
-    const size_t marker_wchars = wcslen(marker);
-    const size_t marker_bytes = (marker_wchars + 1) * sizeof(wchar_t);
-    memcpy(page.data + 128, marker, marker_bytes);
+    const std::wstring marker = L"SCAN_UINTPTR_WSTR_MARKER_5e7a";
+    const auto marker_bytes = utf16le_bytes(marker);
+    memcpy(page.data + 128, marker_bytes.data(), marker_bytes.size());
 
     const auto results = utility::scan_strings(
-        (uintptr_t)page.data, 4096, std::wstring{marker});
+        (uintptr_t)page.data, 4096, marker);
     TEST_ASSERT(results.size() == 1);
     TEST_ASSERT(results[0] == (uintptr_t)(page.data + 128));
     return 0;

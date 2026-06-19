@@ -15,6 +15,7 @@
 
 #include <utility/Logging.hpp>
 #include <utility/Benchmark.hpp>
+#include <utility/String.hpp>
 
 
 #if defined(KANANLIB_TESTING)
@@ -494,11 +495,11 @@ namespace utility {
         Resolved resolved{};
         union {
             const char* ascii{nullptr};
-            const wchar_t* unicode;
+            const utf16_char* unicode;
         };
 
         StringReference(const Resolved& resolved, const char* ascii) : resolved(resolved), ascii(ascii) {}
-        StringReference(const Resolved& resolved, const wchar_t* unicode) : resolved(resolved), unicode(unicode) {}
+        StringReference(const Resolved& resolved, const utf16_char* unicode) : resolved(resolved), unicode(unicode) {}
     };
 
     struct StringReferenceOptions {
