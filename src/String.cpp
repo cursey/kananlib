@@ -35,7 +35,10 @@ namespace utility {
         string out{};
         out.reserve(str.size());
         for (wchar_t wc : str) {
-            const uint32_t cp = (uint32_t)wc;
+            uint32_t cp = (uint32_t)wc;
+            if (cp > 0x10FFFF || (cp >= 0xD800 && cp <= 0xDFFF)) {
+                cp = 0xFFFD; // invalid scalar value -> U+FFFD (avoids malformed UTF-8)
+            }
             if (cp < 0x80) {
                 out.push_back((char)cp);
             } else if (cp < 0x800) {

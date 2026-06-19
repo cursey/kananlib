@@ -248,12 +248,15 @@ extern "C" SIZE_T VirtualQuery(LPCVOID address, PMEMORY_BASIC_INFORMATION buffer
 
     // Address is in a gap: report a free region up to the next mapping so callers
     // skipping by RegionSize advance past the hole.
-    uintptr_t next_start = (uintptr_t)-1;
+    uintptr_t next_start = 0;
     for (const auto& reg : t_cache.regions) {
         if (reg.start > addr) { next_start = reg.start; break; }
     }
     buffer->BaseAddress = (PVOID)addr;
-    buffer->RegionSize  = (SIZE_T)(next_start - addr);
+    // When there is no later mapping, report a single page rather than a
+    // near-SIZE_MAX span, so callers that advance by BaseAddress + RegionSize
+    // cannot overflow/wrap.
+    buffer->RegionSize  = (next_start > addr) ? (SIZE_T)(next_start - addr) : (SIZE_T)page_size();
     buffer->State       = MEM_FREE;
     buffer->Protect     = PAGE_NOACCESS;
     buffer->Type        = 0;

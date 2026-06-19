@@ -114,7 +114,9 @@ int test_string_scan() {
     TEST_ASSERT(str.has_value());
 
     const auto base = reinterpret_cast<uintptr_t>(mapped->module);
-    const auto size = *utility::get_module_size(mapped->module);
+    const auto size_opt = utility::get_module_size(mapped->module);
+    TEST_ASSERT(size_opt.has_value());
+    const auto size = *size_opt;
     TEST_ASSERT(*str >= base && *str < base + size);
     return 0;
 }
@@ -159,7 +161,9 @@ int test_rtti_find_vtable() {
     auto mapped = utility::map_view_of_file(sample_path());
     TEST_ASSERT(mapped.has_value());
     const auto base = reinterpret_cast<uintptr_t>(mapped->module);
-    const auto size = *utility::get_module_size(mapped->module);
+    const auto size_opt = utility::get_module_size(mapped->module);
+    TEST_ASSERT(size_opt.has_value());
+    const auto size = *size_opt;
 
     auto vtable = utility::rtti::find_vtable(mapped->module, kRttiName);
     TEST_ASSERT(vtable.has_value());
