@@ -94,7 +94,13 @@ namespace utility {
     }
 
     wstring widen(string_view str) {
-        return widen_utf8_lossy(str);
+        auto length = MultiByteToWideChar(CP_UTF8, 0, str.data(), (int)str.length(), nullptr, 0);
+        wstring wideStr{};
+
+        wideStr.resize(length);
+        MultiByteToWideChar(CP_UTF8, 0, str.data(), (int)str.length(), (LPWSTR)wideStr.c_str(), length);
+
+        return wideStr;
     }
 #else
     // Non-Windows wchar_t is 32-bit (UTF-32), so convert directly to/from UTF-8
