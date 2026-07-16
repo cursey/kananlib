@@ -1496,7 +1496,7 @@ namespace utility {
                     // If the disassembly is successful, we can assume it's a valid instruction
                     // and continue sliding the end forward until we hit an invalid instruction
                     while (true && num_decoded < 16) {
-                        const auto next_status = NdDecodeEx(&ix, (uint8_t*)highest_block_end, 16, KANANLIB_DECODE_MODE, KANANLIB_DECODE_DATA);
+                        const auto next_status = NdDecodeEx(&ix, (uint8_t*)highest_block_end + ix.Length, 16, KANANLIB_DECODE_MODE, KANANLIB_DECODE_DATA);
 
                         if (!ND_SUCCESS(next_status)) {
                             break;
@@ -1970,7 +1970,7 @@ namespace utility {
                     if (ND_SUCCESS(status)) {
                         size_t num_decoded = 0;
                         while (num_decoded < 16) {
-                            const auto next_status = NdDecodeEx(&ix, (uint8_t*)highest_block_end, 16, KANANLIB_DECODE_MODE, KANANLIB_DECODE_DATA);
+                            const auto next_status = NdDecodeEx(&ix, (uint8_t*)highest_block_end + ix.Length, 16, KANANLIB_DECODE_MODE, KANANLIB_DECODE_DATA);
 
                             if (!ND_SUCCESS(next_status)) {
                                 break;
@@ -2029,7 +2029,7 @@ namespace utility {
             const auto region_size = region.RegionSize;
             const auto region_end = region_start + region_size;
 
-            for (auto addr = region_start; addr + sizeof(uintptr_t) <= region_end; addr += sizeof(uintptr_t)) {
+            for (auto addr = region_start; addr + sizeof(uintptr_t) < region_end; addr += sizeof(uintptr_t)) {
                 const auto potential_fn_ptr = *(uintptr_t*)addr;
 
                 // make sure aligned on sizeof(void*)
@@ -3125,12 +3125,8 @@ namespace utility {
                 }
 #if KANANLIB_ARCH_X86_32
                 // On x86 there is no RIP-relative addressing; references use
-                // absolute [disp32] operands, so the displacement is the
-                // address. Only a *pure* absolute [disp32] (no base/index
-                // register) is an address -- a displacement with a base/index
-                // (e.g. [ebp-4], [eax+8]) is a frame/struct offset, not a
-                // pointer, and must not be reported as a resolved reference.
-                if (mem.HasDisp && !mem.IsRipRel && !mem.HasBase && !mem.HasIndex) {
+                // absolute [disp32] operands, so the displacement is the address.
+                if (mem.HasDisp && !mem.IsRipRel) {
                     return (uintptr_t)mem.Disp;
                 }
 #endif
@@ -3162,6 +3158,13 @@ namespace utility {
         if (ix->HasDisp && ix->IsRipRelative) {
             return ip + ix->Length + ix->Displacement;
         }
+
+#if KANANLIB_ARCH_X86_32
+        // x86 absolute displacement embedded directly in the instruction.
+        if (ix->HasDisp && !ix->IsRipRelative) {
+            return (uintptr_t)ix->Displacement;
+        }
+#endif
 
         return std::nullopt;
     }
