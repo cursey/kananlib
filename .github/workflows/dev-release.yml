@@ -40,6 +40,43 @@ jobs:
       - name: Run all tests
         run: ctest --test-dir ${{github.workspace}}/test/build -C ${{env.BUILD_TYPE}} --output-on-failure
 
+  build-x86:
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        target: [kananlib, kananlib-nolog]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Configure CMake
+        run: cmake -S ${{github.workspace}} -B ${{github.workspace}}/build32 -G "Visual Studio 18 2026" -A Win32 -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
+
+      - name: Build
+        run: cmake --build ${{github.workspace}}/build32 --config ${{env.BUILD_TYPE}} --target ${{matrix.target}}
+
+  test-x86:
+    runs-on: windows-latest
+    needs: build-x86
+    steps:
+      - name: Checkout
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Configure CMake
+        run: cmake -S ${{github.workspace}}/test -B ${{github.workspace}}/test/build32 -G "Visual Studio 18 2026" -A Win32 -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
+
+      - name: Build all tests
+        run: cmake --build ${{github.workspace}}/test/build32 --config ${{env.BUILD_TYPE}}
+
+      - name: Run all tests
+        run: ctest --test-dir ${{github.workspace}}/test/build32 -C ${{env.BUILD_TYPE}} --output-on-failure
+
   # Non-blocking: clang-cl is a supported compiler but the clang/MSVC-STL pairing
   # on the GitHub runner can drift independently of our code. Keep this lane
   # informational (continue-on-error) until it proves stable, then promote it to
