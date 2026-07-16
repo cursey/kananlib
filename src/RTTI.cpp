@@ -178,6 +178,12 @@ std::optional<HMODULE> cached_get_module_within(uintptr_t addr) {
 }
 }
 
+// On x64, RTTI cross-references are image-relative RVAs (signature==1).
+// On x86, they are absolute pointers (signature==0).
+inline uintptr_t resolve_rtti_ref(uintptr_t module, uint32_t field, uint32_t signature) {
+    return signature == 1 ? module + field : (uintptr_t)field;
+}
+
 bool is_vtable(const void* vtable) {
     if (vtable == nullptr) {
         return false;
@@ -222,7 +228,7 @@ std::type_info* get_type_info(const void* obj) {
     }
 
     const auto module = (uintptr_t)*module_within;
-    const auto ti = (std::type_info*)(module + locator->pTypeDescriptor);
+    const auto ti = (std::type_info*)resolve_rtti_ref(module, (uint32_t)(uintptr_t)locator->pTypeDescriptor, locator->signature);
 
     return ti;
 }
@@ -257,13 +263,13 @@ bool derives_from(const void* obj, std::string_view type_name) {
     }
 
     const auto module = (uintptr_t)*module_within;
-    const auto class_hierarchy = (_s_RTTIClassHierarchyDescriptor*)(module + locator->pClassDescriptor);
+    const auto class_hierarchy = (_s_RTTIClassHierarchyDescriptor*)resolve_rtti_ref(module, (uint32_t)(uintptr_t)locator->pClassDescriptor, locator->signature);
 
     if (class_hierarchy == nullptr) {
         return false;
     }
 
-    const auto base_classes = (_s_RTTIBaseClassArray*)(module + class_hierarchy->pBaseClassArray);
+    const auto base_classes = (_s_RTTIBaseClassArray*)resolve_rtti_ref(module, (uint32_t)(uintptr_t)class_hierarchy->pBaseClassArray, locator->signature);
 
     if (base_classes == nullptr) {
         return false;
@@ -276,13 +282,13 @@ bool derives_from(const void* obj, std::string_view type_name) {
             continue;
         }
 
-        const auto desc = (_s_RTTIBaseClassDescriptor*)(module + desc_offset);
+        const auto desc = (_s_RTTIBaseClassDescriptor*)resolve_rtti_ref(module, (uint32_t)(uintptr_t)desc_offset, locator->signature);
 
         if (desc == nullptr) {
             continue;
         }
 
-        const auto ti = (KANANLIB_RTTI_TI*)(module + desc->pTypeDescriptor);
+        const auto ti = (KANANLIB_RTTI_TI*)resolve_rtti_ref(module, (uint32_t)(uintptr_t)desc->pTypeDescriptor, locator->signature);
 
         if (ti == nullptr) {
             continue;
@@ -324,13 +330,13 @@ bool derives_from(const void* obj, std::type_info* ti_compare) {
     }
 
     const auto module = (uintptr_t)*module_within;
-    const auto class_hierarchy = (_s_RTTIClassHierarchyDescriptor*)(module + locator->pClassDescriptor);
+    const auto class_hierarchy = (_s_RTTIClassHierarchyDescriptor*)resolve_rtti_ref(module, (uint32_t)(uintptr_t)locator->pClassDescriptor, locator->signature);
 
     if (class_hierarchy == nullptr) {
         return false;
     }
 
-    const auto base_classes = (_s_RTTIBaseClassArray*)(module + class_hierarchy->pBaseClassArray);
+    const auto base_classes = (_s_RTTIBaseClassArray*)resolve_rtti_ref(module, (uint32_t)(uintptr_t)class_hierarchy->pBaseClassArray, locator->signature);
 
     if (base_classes == nullptr) {
         return false;
@@ -343,13 +349,13 @@ bool derives_from(const void* obj, std::type_info* ti_compare) {
             continue;
         }
 
-        const auto desc = (_s_RTTIBaseClassDescriptor*)(module + desc_offset);
+        const auto desc = (_s_RTTIBaseClassDescriptor*)resolve_rtti_ref(module, (uint32_t)(uintptr_t)desc_offset, locator->signature);
 
         if (desc == nullptr) {
             continue;
         }
 
-        const auto ti = (std::type_info*)(module + desc->pTypeDescriptor);
+        const auto ti = (std::type_info*)resolve_rtti_ref(module, (uint32_t)(uintptr_t)desc->pTypeDescriptor, locator->signature);
 
         if (ti == ti_compare) {
             return true;

@@ -59,12 +59,16 @@ namespace {
         dos.e_lfanew = nt_offset;
         write_struct(bytes, 0, dos);
 
-        IMAGE_NT_HEADERS64 nt{};
+        IMAGE_NT_HEADERS nt{};
         nt.Signature = IMAGE_NT_SIGNATURE;
+#if defined(_WIN64)
         nt.FileHeader.Machine = IMAGE_FILE_MACHINE_AMD64;
+#else
+        nt.FileHeader.Machine = IMAGE_FILE_MACHINE_I386;
+#endif
         nt.FileHeader.NumberOfSections = 1;
-        nt.FileHeader.SizeOfOptionalHeader = sizeof(IMAGE_OPTIONAL_HEADER64);
-        nt.OptionalHeader.Magic = IMAGE_NT_OPTIONAL_HDR64_MAGIC;
+        nt.FileHeader.SizeOfOptionalHeader = sizeof(IMAGE_OPTIONAL_HEADER);
+        nt.OptionalHeader.Magic = IMAGE_NT_OPTIONAL_HDR_MAGIC;
         nt.OptionalHeader.SizeOfImage = 0x2000;
         if (has_debug) {
             nt.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_DEBUG].VirtualAddress = debug_rva;
@@ -78,7 +82,7 @@ namespace {
         sec.VirtualAddress = section_rva;
         sec.SizeOfRawData = 0x400;
         sec.PointerToRawData = section_raw;
-        write_struct(bytes, nt_offset + offsetof(IMAGE_NT_HEADERS64, OptionalHeader) + sizeof(IMAGE_OPTIONAL_HEADER64), sec);
+        write_struct(bytes, nt_offset + offsetof(IMAGE_NT_HEADERS, OptionalHeader) + sizeof(IMAGE_OPTIONAL_HEADER), sec);
 
         if (has_debug) {
             IMAGE_DEBUG_DIRECTORY debug{};
@@ -109,7 +113,7 @@ int test_get_pdb_path_null_and_bad_headers() {
 
     auto bad_nt = make_pe_with_debug("badnt.pdb");
     auto* dos = reinterpret_cast<IMAGE_DOS_HEADER*>(bad_nt.data());
-    auto* nt = reinterpret_cast<IMAGE_NT_HEADERS64*>(bad_nt.data() + dos->e_lfanew);
+    auto* nt = reinterpret_cast<IMAGE_NT_HEADERS*>(bad_nt.data() + dos->e_lfanew);
     nt->Signature = 0;
     TEST_ASSERT(!utility::pdb::get_pdb_path(keep_module(std::move(bad_nt))).has_value());
     return 0;

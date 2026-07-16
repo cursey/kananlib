@@ -1150,6 +1150,7 @@ namespace utility {
     std::optional<uintptr_t> scan_displacement_reference(uintptr_t start, size_t length, uintptr_t ptr, std::function<bool(uintptr_t)> filter) {
         KANANLIB_BENCH();
 
+#if !KANANLIB_ARCH_X86_32
         return scan_relative_reference(start, length, ptr, [ptr, filter](uintptr_t candidate_addr) {
             const auto resolved = utility::resolve_instruction(candidate_addr);
 
@@ -1165,6 +1166,59 @@ namespace utility {
 
             return false;
         });
+#else
+        // On x86, strings are referenced via absolute imm32, not rel32.
+        // First try the rel32 scan (for any legacy cases), then fall back to
+        // scanning for absolute pointer values using scan_ptr.
+        {
+            const auto rel = scan_relative_reference(start, length, ptr, [ptr, filter](uintptr_t candidate_addr) {
+                const auto resolved = utility::resolve_instruction(candidate_addr);
+                if (resolved) {
+                    const auto displacement = utility::resolve_displacement(resolved->addr, &resolved->instrux);
+                    if (displacement && *displacement == ptr) {
+                        if (filter == nullptr || filter(candidate_addr)) {
+                            return true;
+                        }
+                    }
+                }
+                return false;
+            });
+            if (rel) {
+                return rel;
+            }
+        }
+
+        // A raw byte match can land in data (e.g. another string's tail
+        // bytes, an unrelated pointer table entry) that coincidentally
+        // shares the same 4 bytes as the target address. Validate every
+        // candidate by resolving it back to a real instruction whose
+        // displacement/immediate equals `ptr`, and keep searching past
+        // rejected candidates instead of accepting the first raw hit.
+        for (auto search_start = start; start + length > search_start && start + length - search_start >= sizeof(uintptr_t);) {
+            const auto remaining = (start + length) - search_start;
+            const auto absRef = scan_ptr_noalign(search_start, remaining, ptr);
+
+            if (!absRef) {
+                break;
+            }
+
+            const auto resolved = utility::resolve_instruction(*absRef);
+
+            if (resolved) {
+                const auto displacement = utility::resolve_displacement(resolved->addr, &resolved->instrux);
+
+                if (displacement && *displacement == ptr) {
+                    if (filter == nullptr || filter(*absRef)) {
+                        return absRef;
+                    }
+                }
+            }
+
+            search_start = *absRef + 1;
+        }
+
+        return std::nullopt;
+#endif
     }
     
     std::optional<uintptr_t> scan_opcode(uintptr_t ip, size_t num_instructions, uint8_t opcode) {
@@ -1172,7 +1226,7 @@ namespace utility {
 
         for (size_t i = 0; i < num_instructions; ++i) {
             INSTRUX ix{};
-            const auto status = NdDecodeEx(&ix, (uint8_t*)ip, 1000, ND_CODE_64, ND_DATA_64);
+            const auto status = NdDecodeEx(&ix, (uint8_t*)ip, 1000, KANANLIB_DECODE_MODE, KANANLIB_DECODE_DATA);
 
             if (!ND_SUCCESS(status)) {
                 break;
@@ -1193,7 +1247,7 @@ namespace utility {
 
         for (size_t i = 0; i < num_instructions; ++i) {
             INSTRUX ix{};
-            const auto status = NdDecodeEx(&ix, (uint8_t*)ip, 1000, ND_CODE_64, ND_DATA_64);
+            const auto status = NdDecodeEx(&ix, (uint8_t*)ip, 1000, KANANLIB_DECODE_MODE, KANANLIB_DECODE_DATA);
 
             if (!ND_SUCCESS(status)) {
                 break;
@@ -1214,7 +1268,7 @@ namespace utility {
 
         for (size_t i = 0; i < num_instructions; ++i) {
             INSTRUX ix{};
-            const auto status = NdDecodeEx(&ix, (uint8_t*)ip, 1000, ND_CODE_64, ND_DATA_64);
+            const auto status = NdDecodeEx(&ix, (uint8_t*)ip, 1000, KANANLIB_DECODE_MODE, KANANLIB_DECODE_DATA);
 
             if (!ND_SUCCESS(status)) {
                 break;
@@ -1232,7 +1286,7 @@ namespace utility {
 
     uint32_t get_insn_size(uintptr_t ip) {
         INSTRUX ix{};
-        const auto status = NdDecodeEx(&ix, (uint8_t*)ip, 1000, ND_CODE_64, ND_DATA_64);
+        const auto status = NdDecodeEx(&ix, (uint8_t*)ip, 1000, KANANLIB_DECODE_MODE, KANANLIB_DECODE_DATA);
 
         if (!ND_SUCCESS(status)) {
             return 0;
@@ -1249,7 +1303,7 @@ namespace utility {
 
     std::optional<INSTRUX> decode_one(uint8_t* ip, size_t max_size) {
         INSTRUX ix{};
-        const auto status = NdDecodeEx(&ix, ip, max_size, ND_CODE_64, ND_DATA_64);
+        const auto status = NdDecodeEx(&ix, ip, max_size, KANANLIB_DECODE_MODE, KANANLIB_DECODE_DATA);
 
         if (!ND_SUCCESS(status)) {
             return {};
@@ -1264,7 +1318,7 @@ namespace utility {
         ctx.addr = (uintptr_t)ip;
 
         for (size_t i = 0; i < max_size;) try {
-            const auto status = NdDecodeEx(&ctx.instrux, (uint8_t*)ctx.addr, 64, ND_CODE_64, ND_DATA_64);
+            const auto status = NdDecodeEx(&ctx.instrux, (uint8_t*)ctx.addr, 64, KANANLIB_DECODE_MODE, KANANLIB_DECODE_DATA);
 
             if (!ND_SUCCESS(status)) {
                 break;
@@ -1437,13 +1491,13 @@ namespace utility {
             // the CFG does not account for, but we can still linearly decode through it.
             if (highest_block_end < blocks.back().end) {
                 INSTRUX ix{};
-                const auto status = NdDecodeEx(&ix, (uint8_t*)highest_block_end, 16, ND_CODE_64, ND_DATA_64);
+                const auto status = NdDecodeEx(&ix, (uint8_t*)highest_block_end, 16, KANANLIB_DECODE_MODE, KANANLIB_DECODE_DATA);
 
                 if (ND_SUCCESS(status)) {
                     // If the disassembly is successful, we can assume it's a valid instruction
                     // and continue sliding the end forward until we hit an invalid instruction
                     while (true && num_decoded < 16) {
-                        const auto next_status = NdDecodeEx(&ix, (uint8_t*)highest_block_end + ix.Length, 16, ND_CODE_64, ND_DATA_64);
+                        const auto next_status = NdDecodeEx(&ix, (uint8_t*)highest_block_end + ix.Length, 16, KANANLIB_DECODE_MODE, KANANLIB_DECODE_DATA);
 
                         if (!ND_SUCCESS(next_status)) {
                             break;
@@ -1665,6 +1719,16 @@ namespace utility {
         });
     }
 
+    namespace detail {
+        void remove_undecodable_starts(std::vector<uint32_t>& starts, uintptr_t module) {
+            std::erase_if(starts, [module](uint32_t rva) {
+                INSTRUX ix{};
+                const auto status = NdDecodeEx(&ix, (uint8_t*)(module + rva), 16, KANANLIB_DECODE_MODE, KANANLIB_DECODE_DATA);
+                return !ND_SUCCESS(status);
+            });
+        }
+    }
+
     void populate_function_buckets_heuristic(uintptr_t module) {
         KANANLIB_BENCH();
 
@@ -1825,7 +1889,7 @@ namespace utility {
             const auto absolute = module + rva;
 
             INSTRUX ix{};
-            const auto status = NdDecodeEx(&ix, (uint8_t*)absolute, 16, ND_CODE_64, ND_DATA_64);
+            const auto status = NdDecodeEx(&ix, (uint8_t*)absolute, 16, KANANLIB_DECODE_MODE, KANANLIB_DECODE_DATA);
 
             if (!ND_SUCCESS(status)) {
                 return true;
@@ -1865,8 +1929,8 @@ namespace utility {
             const auto region_size = region.RegionSize;
             const auto region_end = region_start + region_size;
 
-            for (auto addr = region_start; addr + 8 < region_end; addr += 8) {
-                const auto potential_fn_ptr = *(uint64_t*)addr;
+            for (auto addr = region_start; addr + sizeof(uintptr_t) < region_end; addr += sizeof(uintptr_t)) {
+                const auto potential_fn_ptr = *(uintptr_t*)addr;
 
                 // make sure aligned on sizeof(void*)
                 if ((addr & (sizeof(void*) - 1)) != 0) {
@@ -1897,6 +1961,20 @@ namespace utility {
         std::sort(function_starts.begin(), function_starts.end());
         function_starts.erase(std::unique(function_starts.begin(), function_starts.end()), function_starts.end());
 
+#if KANANLIB_ARCH_X86_32
+        // x86-only. The readable-region pointer scan above appends candidates
+        // that bypass the earlier decode check. On the live x86 process a value
+        // that merely happens to point into an executable region need not sit on
+        // an instruction boundary. When it fails to decode, exhaustive_decode
+        // yields only a zero-length [start,start] block and get_insn_size returns
+        // 0, so the heuristic end becomes start_rva + 0 -- a degenerate bucket
+        // entry (EndAddress == BeginAddress) that corrupts find_function_entry's
+        // coverage and surfaces as a bogus zero-width function. Drop such
+        // candidates. Guarded to x86 because this failure is x86-specific and
+        // x64 behavior must remain unchanged.
+        detail::remove_undecodable_starts(function_starts, module);
+#endif
+
         // Sort function starts by gap to next function (proxy for complexity)
         std::vector<size_t> indices(function_starts.size());
         std::iota(indices.begin(), indices.end(), 0);
@@ -1925,8 +2003,16 @@ namespace utility {
 
             auto t0 = std::chrono::high_resolution_clock::now();
 
+            // x86 caps exploration at max_size 8192 (matching determine_function_bounds).
+            // exhaustive_decode allocates a per-thread seen table sized from max_size;
+            // at 100000 that is ~96 MiB of TLS tables per worker on x86 (calloc'd
+            // slots + dirty indices, 4-byte pointers/size_t). Under parallel_for the
+            // workers together exhaust the 32-bit address space, calloc fails,
+            // exhaustive_decode aborts before decoding, and collect_basic_blocks
+            // yields only a zero-length [start,start] block -> a bogus ~1-byte end.
+            // Retain the existing x64 limit.
             const auto blocks = utility::collect_basic_blocks(start_absolute, BasicBlockCollectOptions{ 
-                .max_size = 100000, .sort = true, .merge_call_blocks = true, .copy_instructions = false
+                .max_size = KANANLIB_ARCH_X86_32 ? 8192 : 100000, .sort = true, .merge_call_blocks = true, .copy_instructions = false
             });
 
             functions_populated[i] = 1;
@@ -1973,13 +2059,13 @@ namespace utility {
                 // the CFG does not account for, but we can still linearly decode through it.
                 if (highest_block_end < blocks.back().end) {
                     INSTRUX ix{};
-                    const auto status = NdDecodeEx(&ix, (uint8_t*)highest_block_end, 16, ND_CODE_64, ND_DATA_64);
+                    const auto status = NdDecodeEx(&ix, (uint8_t*)highest_block_end, 16, KANANLIB_DECODE_MODE, KANANLIB_DECODE_DATA);
 
                     if (ND_SUCCESS(status)) {
                         // If the disassembly is successful, we can assume it's a valid instruction
                         // and continue sliding the end forward until we hit an invalid instruction
                         while (true && num_decoded < 16) {
-                            const auto next_status = NdDecodeEx(&ix, (uint8_t*)highest_block_end + ix.Length, 16, ND_CODE_64, ND_DATA_64);
+                            const auto next_status = NdDecodeEx(&ix, (uint8_t*)highest_block_end + ix.Length, 16, KANANLIB_DECODE_MODE, KANANLIB_DECODE_DATA);
 
                             if (!ND_SUCCESS(next_status)) {
                                 break;
@@ -2061,7 +2147,7 @@ namespace utility {
     void populate_function_buckets(uintptr_t module) {
         KANANLIB_BENCH();
 
-#ifdef _M_X86
+#if KANANLIB_ARCH_X86_32
         return populate_function_buckets_heuristic(module);
 #else
 
@@ -2936,11 +3022,41 @@ namespace utility {
                 if (mem.HasDisp && mem.IsRipRel) {
                     return ip + ix->Length + (intptr_t)mem.Disp;
                 }
+#if KANANLIB_ARCH_X86_32
+                // On x86 there is no RIP-relative addressing; references use
+                // absolute [disp32] operands. Require a pure displacement --
+                // no base/index register and no segment override -- so that
+                // frame/stack-relative ([ebp-4]) and segment-relative
+                // (fs:[0x18]) operands are NOT mistaken for absolute addresses.
+                if (mem.HasDisp && !mem.IsRipRel
+                        && !mem.HasBase && !mem.HasIndex && !ix->HasSeg) {
+                    return (uintptr_t)mem.Disp;
+                }
+#endif
             } else if (operand.Type == ND_OP_OFFS) {
                 const auto& offs = operand.Info.RelativeOffset;
                 return ip + ix->Length + (intptr_t)offs.Rel;
             }
         }
+
+#if KANANLIB_ARCH_X86_32
+        // Handle immediate operands that encode absolute addresses. x86-only:
+        // MSVC frequently loads string/data addresses via push/mov imm32 with
+        // no RIP-relative equivalent. Bounds-check against a loaded module so
+        // small integer immediates (e.g. `add eax, 5`) aren't mistaken for
+        // addresses; this does not run on x64, where absolute imm32 pointers
+        // aren't how references are encoded and RIP-relative handling above
+        // already covers real references.
+        for (auto i = 0; i < ix->OperandsCount; ++i) {
+            const auto& operand = ix->Operands[i];
+            if (operand.Type == ND_OP_IMM) {
+                const auto imm = (uintptr_t)operand.Info.Immediate.Imm;
+                if (imm != 0 && utility::get_module_within(imm).has_value()) {
+                    return imm;
+                }
+            }
+        }
+#endif
 
         if (ix->HasDisp && ix->IsRipRelative) {
             return ip + ix->Length + ix->Displacement;

@@ -446,8 +446,9 @@ int test_resolve_displacement_lea_rip() {
     TEST_ASSERT(page.data != nullptr);
     memset(page.data, 0xCC, page.size);
 
-    // Place: LEA RAX, [RIP+0x10] = 48 8D 05 10 00 00 00 (7 bytes)
     const size_t off = 0x100;
+#if !KANANLIB_ARCH_X86_32
+    // Place: LEA RAX, [RIP+0x10] = 48 8D 05 10 00 00 00 (7 bytes)
     page.data[off + 0] = 0x48;
     page.data[off + 1] = 0x8D;
     page.data[off + 2] = 0x05;
@@ -460,6 +461,18 @@ int test_resolve_displacement_lea_rip() {
     TEST_ASSERT(result.has_value());
     // Expected: ip + 7 (instruction length) + 0x10 (displacement) = ip + 0x17
     TEST_ASSERT(*result == (uintptr_t)(page.data + off) + 7 + 0x10);
+#else
+    // x86 has no RIP-relative addressing; LEA reg,[disp32] embeds the
+    // absolute target directly. Place: LEA EAX, [0x12345678] = 8D 05 78 56 34 12 (6 bytes)
+    const uint32_t target = 0x12345678;
+    page.data[off + 0] = 0x8D;
+    page.data[off + 1] = 0x05;
+    std::memcpy(page.data + off + 2, &target, sizeof(target));
+
+    auto result = utility::resolve_displacement((uintptr_t)(page.data + off), nullptr);
+    TEST_ASSERT(result.has_value());
+    TEST_ASSERT(*result == (uintptr_t)target);
+#endif
     return 0;
 }
 
@@ -498,6 +511,79 @@ int test_resolve_displacement_no_displacement() {
     return 0;
 }
 
+// x86 regression: a base/index (frame or stack) memory operand must NOT be
+// reported as an absolute address. Before the fix the x86 `mem.HasDisp &&
+// !mem.IsRipRel` branch (and the instruction-wide fallback) returned the raw
+// displacement, so `mov eax,[ebp-4]` resolved to 0xFFFFFFFC. On x64 `[rbp-4]`
+// is already nullopt (no absolute-displacement path there), so this holds on
+// both arches and is red only on the buggy x86 build.
+int test_resolve_displacement_x86_frame_relative_nullopt() {
+    RWXPage page;
+    TEST_ASSERT(page.data != nullptr);
+    memset(page.data, 0xCC, page.size);
+
+    // mov eax, [ebp-4] = 8B 45 FC (3 bytes); base=ebp, disp8=-4
+    const size_t off = 0x340;
+    page.data[off + 0] = 0x8B;
+    page.data[off + 1] = 0x45;
+    page.data[off + 2] = 0xFC;
+
+    // Pin the fixture shape so a future decode change can't make this pass
+    // vacuously: it must decode to a base+disp memory operand.
+    auto decoded = utility::decode_one(page.data + off, 16);
+    TEST_ASSERT(decoded.has_value());
+    bool saw_base_disp_mem = false;
+    for (uint32_t i = 0; i < decoded->OperandsCount; ++i) {
+        const auto& op = decoded->Operands[i];
+        if (op.Type == ND_OP_MEM) {
+            TEST_ASSERT(op.Info.Memory.HasDisp && op.Info.Memory.HasBase);
+            saw_base_disp_mem = true;
+        }
+    }
+    TEST_ASSERT(saw_base_disp_mem);
+
+    auto result = utility::resolve_displacement((uintptr_t)(page.data + off), &*decoded);
+    TEST_ASSERT(!result.has_value());
+    return 0;
+}
+
+// x86 regression: a segment-relative operand (fs:[disp], e.g. TEB access) must
+// NOT be reported as a flat absolute address. Before the fix `mov eax,fs:[0x18]`
+// resolved to 0x18 because the mem branch ignored the segment override.
+int test_resolve_displacement_x86_segment_relative_nullopt() {
+    RWXPage page;
+    TEST_ASSERT(page.data != nullptr);
+    memset(page.data, 0xCC, page.size);
+
+    // mov eax, fs:[0x18] = 64 A1 18 00 00 00 (x86 moffs32 with FS override)
+    const size_t off = 0x360;
+    page.data[off + 0] = 0x64;
+    page.data[off + 1] = 0xA1;
+    page.data[off + 2] = 0x18;
+    page.data[off + 3] = 0x00;
+    page.data[off + 4] = 0x00;
+    page.data[off + 5] = 0x00;
+
+    // Pin the fixture shape: it must decode with a segment override and a
+    // pure-displacement (no base/index) memory operand.
+    auto decoded = utility::decode_one(page.data + off, 16);
+    TEST_ASSERT(decoded.has_value());
+    TEST_ASSERT(decoded->HasSeg);
+    bool saw_seg_disp_mem = false;
+    for (uint32_t i = 0; i < decoded->OperandsCount; ++i) {
+        const auto& op = decoded->Operands[i];
+        if (op.Type == ND_OP_MEM) {
+            TEST_ASSERT(op.Info.Memory.HasDisp && !op.Info.Memory.HasBase && !op.Info.Memory.HasIndex);
+            saw_seg_disp_mem = true;
+        }
+    }
+    TEST_ASSERT(saw_seg_disp_mem);
+
+    auto result = utility::resolve_displacement((uintptr_t)(page.data + off), &*decoded);
+    TEST_ASSERT(!result.has_value());
+    return 0;
+}
+
 // collect_unicode_string_references — must read in-image UTF-16 (not host
 // wchar_t, which is UTF-32 off Windows). Regression for the CLI
 // `collect_string_references --wide` path.
@@ -513,14 +599,25 @@ int test_collect_unicode_string_refs_finds_wide() {
     page.data[0x200 + marker_bytes.size() + 0] = 0x00;
     page.data[0x200 + marker_bytes.size() + 1] = 0x00;
 
-    // LEA RAX, [RIP+disp] at 0x100 referencing page+0x200, then RET.
+    // LEA reg, [target] at 0x100 referencing page+0x200, then RET.
     const size_t off = 0x100;
+#if !KANANLIB_ARCH_X86_32
+    // x64: LEA RAX, [RIP+disp] — RIP-relative, disp computed from next IP.
     const int32_t disp = (int32_t)(0x200 - (off + 7));
     page.data[off + 0] = 0x48;
     page.data[off + 1] = 0x8D;
     page.data[off + 2] = 0x05;
     memcpy(page.data + off + 3, &disp, sizeof(disp));
     page.data[off + 7] = 0xC3; // RET
+#else
+    // x86: LEA EAX, [disp32] — no RIP-relative addressing; the disp32 is the
+    // absolute target address directly.
+    const uint32_t target = (uint32_t)(uintptr_t)(page.data + 0x200);
+    page.data[off + 0] = 0x8D;
+    page.data[off + 1] = 0x05;
+    memcpy(page.data + off + 2, &target, sizeof(target));
+    page.data[off + 6] = 0xC3; // RET
+#endif
 
     auto refs = utility::collect_unicode_string_references(
         (uintptr_t)(page.data + off), 0x10,
@@ -573,15 +670,21 @@ int test_linear_decode_simple() {
     TEST_ASSERT(page.data != nullptr);
     memset(page.data, 0xCC, page.size);
 
-    // Place: PUSH RBP; MOV RBP,RSP; POP RBP; RET
-    // 55; 48 89 E5; 5D; C3
+    // Place: PUSH EBP/RBP; MOV EBP/RBP,ESP/RSP; POP EBP/RBP; RET
     const size_t off = 0x100;
-    page.data[off + 0] = 0x55;             // PUSH RBP
+    page.data[off + 0] = 0x55;             // PUSH EBP/RBP — identical on both archs
+#if !KANANLIB_ARCH_X86_32
     page.data[off + 1] = 0x48;             // MOV RBP, RSP (48 89 E5)
     page.data[off + 2] = 0x89;
     page.data[off + 3] = 0xE5;
     page.data[off + 4] = 0x5D;             // POP RBP
     page.data[off + 5] = 0xC3;             // RET
+#else
+    page.data[off + 1] = 0x89;             // MOV EBP, ESP (89 E5) — no REX on x86
+    page.data[off + 2] = 0xE5;
+    page.data[off + 3] = 0x5D;             // POP EBP
+    page.data[off + 4] = 0xC3;             // RET
+#endif
 
     int call_count = 0;
 
@@ -669,6 +772,40 @@ int test_scan_disasm_no_match() {
 }
 
 // ============================================================================
+// detail::remove_undecodable_starts — drops candidates that do not decode
+// (deterministic, layout-independent regression for the x86 zero-width bucket:
+//  an undecodable function-start candidate would otherwise yield get_insn_size
+//  == 0 and a degenerate EndAddress == BeginAddress bucket entry).
+// ============================================================================
+
+int test_remove_undecodable_starts_filters_bad() {
+    RWXPage page;
+    TEST_ASSERT(page.data != nullptr);
+
+    // Fill with 0x66 (operand-size prefix): a run of prefixes with no opcode
+    // exceeds the 15-byte max instruction length and fails to decode.
+    memset(page.data, 0x66, page.size);
+
+    const size_t valid_off = 0x100;   // decodable: RET
+    page.data[valid_off] = 0xC3;
+    const size_t bad_off   = 0x400;   // undecodable: surrounded by 0x66 fill
+
+    // Preconditions: pin the fixture's classification using the SAME 16-byte
+    // decode window the seam uses, so the test cannot silently pass if the
+    // decoder behavior changes.
+    TEST_ASSERT(utility::decode_one(page.data + valid_off, 16).has_value());
+    TEST_ASSERT(!utility::decode_one(page.data + bad_off, 16).has_value());
+
+    std::vector<uint32_t> starts = { (uint32_t)valid_off, (uint32_t)bad_off };
+    utility::detail::remove_undecodable_starts(starts, (uintptr_t)page.data);
+
+    // The undecodable candidate must be dropped; the decodable one retained.
+    TEST_ASSERT(starts.size() == 1);
+    TEST_ASSERT(starts[0] == (uint32_t)valid_off);
+    return 0;
+}
+
+// ============================================================================
 // main
 // ============================================================================
 
@@ -718,6 +855,8 @@ int main() try {
     RUN_TEST(test_resolve_displacement_lea_rip);
     RUN_TEST(test_resolve_displacement_call_rel32);
     RUN_TEST(test_resolve_displacement_no_displacement);
+    RUN_TEST(test_resolve_displacement_x86_frame_relative_nullopt);
+    RUN_TEST(test_resolve_displacement_x86_segment_relative_nullopt);
     RUN_TEST(test_collect_unicode_string_refs_finds_wide);
 
     // exhaustive_decode
@@ -732,6 +871,7 @@ int main() try {
     // scan_disasm
     RUN_TEST(test_scan_disasm_finds_pattern);
     RUN_TEST(test_scan_disasm_no_match);
+    RUN_TEST(test_remove_undecodable_starts_filters_bad);
 
     return test_summary();
 } catch(const std::exception& e) {
