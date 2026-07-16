@@ -5,6 +5,10 @@
 #include <unordered_set>
 #include <mutex>
 #include <shared_mutex>
+#include <algorithm>
+#include <array>
+#include <cstring>
+#include <cctype>
 
 #include <shlwapi.h>
 #include <windows.h>
@@ -25,10 +29,266 @@ namespace utility {
         uintptr_t begin;
         uintptr_t end;
         std::wstring path;
+        std::optional<AnalysisContext> analysis;
     };
 
     std::vector<ModuleRange> g_module_ranges{};
     std::shared_mutex g_module_ranges_mutex{};
+
+    namespace {
+        struct ParsedPe {
+            TargetArch arch{host_arch()};
+            uint64_t preferred_image_base{};
+            size_t image_size{};
+            uint16_t number_of_sections{};
+            size_t section_table_offset{};
+            std::array<IMAGE_DATA_DIRECTORY, IMAGE_NUMBEROF_DIRECTORY_ENTRIES> directories{};
+        };
+
+        bool range_fits(size_t offset, size_t size, size_t available) {
+            return offset <= available && size <= available - offset;
+        }
+
+        template <typename T>
+        bool read_image_value(uintptr_t base, size_t available, size_t offset, T& value) {
+            if (!range_fits(offset, sizeof(T), available)) {
+                return false;
+            }
+            std::memcpy(&value, (const void*)(base + offset), sizeof(T));
+            return true;
+        }
+
+        std::optional<ParsedPe> parse_pe_image(uintptr_t base, size_t available) {
+            if (base == 0 || available < sizeof(IMAGE_DOS_HEADER)) {
+                return std::nullopt;
+            }
+
+            IMAGE_DOS_HEADER dos{};
+            if (!read_image_value(base, available, 0, dos) ||
+                dos.e_magic != IMAGE_DOS_SIGNATURE || dos.e_lfanew <= 0) {
+                return std::nullopt;
+            }
+
+            const auto nt_offset = (size_t)dos.e_lfanew;
+            DWORD signature{};
+            IMAGE_FILE_HEADER file_header{};
+            if (!read_image_value(base, available, nt_offset, signature) ||
+                signature != IMAGE_NT_SIGNATURE ||
+                !read_image_value(base, available, nt_offset + sizeof(DWORD), file_header)) {
+                return std::nullopt;
+            }
+
+            const auto optional_offset = nt_offset + sizeof(DWORD) + sizeof(IMAGE_FILE_HEADER);
+            WORD magic{};
+            if (!read_image_value(base, available, optional_offset, magic)) {
+                return std::nullopt;
+            }
+
+            ParsedPe result{};
+            if (magic == IMAGE_NT_OPTIONAL_HDR32_MAGIC &&
+                file_header.Machine == IMAGE_FILE_MACHINE_I386 &&
+                file_header.SizeOfOptionalHeader >= sizeof(IMAGE_OPTIONAL_HEADER32)) {
+                IMAGE_OPTIONAL_HEADER32 optional{};
+                if (!read_image_value(base, available, optional_offset, optional)) {
+                    return std::nullopt;
+                }
+                result.arch = TargetArch::X86;
+                result.preferred_image_base = optional.ImageBase;
+                result.image_size = optional.SizeOfImage;
+                const auto count = std::min<size_t>(optional.NumberOfRvaAndSizes, result.directories.size());
+                std::copy_n(optional.DataDirectory, count, result.directories.begin());
+            } else if (magic == IMAGE_NT_OPTIONAL_HDR64_MAGIC &&
+                       file_header.Machine == IMAGE_FILE_MACHINE_AMD64 &&
+                       file_header.SizeOfOptionalHeader >= sizeof(IMAGE_OPTIONAL_HEADER64)) {
+                IMAGE_OPTIONAL_HEADER64 optional{};
+                if (!read_image_value(base, available, optional_offset, optional)) {
+                    return std::nullopt;
+                }
+                result.arch = TargetArch::X64;
+                result.preferred_image_base = optional.ImageBase;
+                result.image_size = optional.SizeOfImage;
+                const auto count = std::min<size_t>(optional.NumberOfRvaAndSizes, result.directories.size());
+                std::copy_n(optional.DataDirectory, count, result.directories.begin());
+            } else {
+                return std::nullopt;
+            }
+
+            if (result.image_size == 0) {
+                return std::nullopt;
+            }
+
+            result.number_of_sections = file_header.NumberOfSections;
+            result.section_table_offset = optional_offset + file_header.SizeOfOptionalHeader;
+            const auto section_bytes = (size_t)result.number_of_sections * sizeof(IMAGE_SECTION_HEADER);
+            if (!range_fits(result.section_table_offset, section_bytes, available)) {
+                return std::nullopt;
+            }
+
+            return result;
+        }
+
+        std::optional<ParsedPe> parse_pe_file(const std::filesystem::path& path) {
+            std::ifstream file(path, std::ios::binary | std::ios::ate);
+            if (!file) {
+                return std::nullopt;
+            }
+            const auto length = file.tellg();
+            if (length < (std::streamoff)sizeof(IMAGE_DOS_HEADER)) {
+                return std::nullopt;
+            }
+
+            constexpr size_t kMaxPeHeaders = 1024 * 1024;
+            const auto header_size = (size_t)std::min<std::streamoff>(length, kMaxPeHeaders);
+            std::vector<uint8_t> headers(header_size);
+            file.seekg(0, std::ios::beg);
+            if (!file.read((char*)headers.data(), headers.size())) {
+                return std::nullopt;
+            }
+            return parse_pe_image((uintptr_t)headers.data(), headers.size());
+        }
+
+        size_t module_header_span(uintptr_t base) {
+            MEMORY_BASIC_INFORMATION mbi{};
+            if (VirtualQuery((const void*)base, &mbi, sizeof(mbi)) == 0) {
+                return 0;
+            }
+            const auto region_base = (uintptr_t)mbi.BaseAddress;
+            if (base < region_base || base - region_base >= mbi.RegionSize) {
+                return 0;
+            }
+            return mbi.RegionSize - (base - region_base);
+        }
+    }
+
+    bool AnalysisContext::contains_host(uintptr_t address, size_t size) const noexcept {
+        if (!mapped_image || address < host_base) {
+            return false;
+        }
+        const auto offset = address - host_base;
+        return offset <= image_size && size <= image_size - offset;
+    }
+
+    std::optional<uintptr_t> AnalysisContext::target_va_to_host(uint64_t address) const noexcept {
+        if (!mapped_image) {
+            if (address > std::numeric_limits<uintptr_t>::max()) {
+                return std::nullopt;
+            }
+            return (uintptr_t)address;
+        }
+        if (address < preferred_image_base) {
+            return std::nullopt;
+        }
+        const auto rva = address - preferred_image_base;
+        if (rva >= image_size || rva > std::numeric_limits<uintptr_t>::max() - host_base) {
+            return std::nullopt;
+        }
+        return host_base + (uintptr_t)rva;
+    }
+
+    std::optional<uint64_t> AnalysisContext::host_to_target_va(uintptr_t address) const noexcept {
+        if (!mapped_image) {
+            return (uint64_t)address;
+        }
+        if (!contains_host(address)) {
+            return std::nullopt;
+        }
+        const auto rva = address - host_base;
+        if (rva > std::numeric_limits<uint64_t>::max() - preferred_image_base) {
+            return std::nullopt;
+        }
+        return preferred_image_base + rva;
+    }
+
+    std::optional<uint64_t> AnalysisContext::host_address_to_stored(
+        uintptr_t address) const noexcept {
+        const auto width_max = arch == TargetArch::X86
+            ? (uint64_t)UINT32_MAX
+            : std::numeric_limits<uint64_t>::max();
+        if (!mapped_image) {
+            return (uint64_t)address <= width_max
+                ? std::optional<uint64_t>{(uint64_t)address}
+                : std::nullopt;
+        }
+        if (contains_host(address)) {
+            const auto rva = address - host_base;
+            const auto stored_base = stored_image_base != 0
+                ? stored_image_base
+                : (relocations_applied
+                    ? (uint64_t)host_base : preferred_image_base);
+            if (rva > width_max || stored_base > width_max - rva) {
+                return std::nullopt;
+            }
+            return stored_base + rva;
+        }
+        return (uint64_t)address <= width_max
+            ? std::optional<uint64_t>{(uint64_t)address}
+            : std::nullopt;
+    }
+
+    std::optional<uintptr_t> AnalysisContext::stored_address_to_host(
+        uint64_t address) const noexcept {
+        if (!mapped_image) {
+            return target_va_to_host(address);
+        }
+        const auto stored_base = stored_image_base != 0
+            ? stored_image_base
+            : (relocations_applied
+                ? (uint64_t)host_base : preferred_image_base);
+        if (address >= stored_base) {
+            const auto rva = address - stored_base;
+            if (rva < image_size &&
+                rva <= std::numeric_limits<uintptr_t>::max() - host_base) {
+                return host_base + (uintptr_t)rva;
+            }
+        }
+        return std::nullopt;
+    }
+
+    std::optional<AnalysisContext> get_analysis_context(HMODULE module) {
+        if (module == nullptr) {
+            return std::nullopt;
+        }
+
+        const auto base = (uintptr_t)module;
+        {
+            std::shared_lock _{g_module_ranges_mutex};
+            for (const auto& range : g_module_ranges) {
+                if (range.begin == base) {
+                    if (range.analysis) {
+                        return range.analysis;
+                    }
+                    return AnalysisContext{
+                        .arch = host_arch(),
+                        .host_base = range.begin,
+                        .preferred_image_base = range.begin,
+                        .stored_image_base = range.begin,
+                        .image_size = range.end - range.begin,
+                        .mapped_image = true,
+                        .relocations_applied = true,
+                    };
+                }
+            }
+        }
+
+        const auto parsed = parse_pe_image(base, module_header_span(base));
+        if (!parsed) {
+            return std::nullopt;
+        }
+        return AnalysisContext{
+            .arch = parsed->arch,
+            .host_base = base,
+            .preferred_image_base = parsed->preferred_image_base,
+            .stored_image_base = parsed->preferred_image_base,
+            .image_size = parsed->image_size,
+            .mapped_image = true,
+            .relocations_applied = true,
+        };
+    }
+
+    std::optional<AnalysisContext> get_analysis_context_within(Address address) {
+        const auto module = get_module_within(address);
+        return module ? get_analysis_context(*module) : std::nullopt;
+    }
 
     optional<size_t> get_module_size(const string& module) {
         return get_module_size(get_module(module));
@@ -39,34 +299,8 @@ namespace utility {
     }
 
     optional<size_t> get_module_size(HMODULE module) {
-        if (module == nullptr) {
-            return {};
-        }
-
-        // Get the dos header and verify that it seems valid.
-        auto dosHeader = (PIMAGE_DOS_HEADER)module;
-
-        if (dosHeader->e_magic == IMAGE_DOS_SIGNATURE) {
-            // Get the nt headers and verify that they seem valid.
-            auto ntHeaders = (PIMAGE_NT_HEADERS)((uintptr_t)dosHeader + dosHeader->e_lfanew);
-
-            if (ntHeaders->Signature == IMAGE_NT_SIGNATURE) {
-                // OptionalHeader is not actually optional.
-                return ntHeaders->OptionalHeader.SizeOfImage;
-            }
-        }
-
-        // Fallback for non-PE fake modules (Mach-O, etc.)
-        {
-            std::shared_lock _{g_module_ranges_mutex};
-            for (const auto& range : g_module_ranges) {
-                if (range.begin == (uintptr_t)module) {
-                    return range.end - range.begin;
-                }
-            }
-        }
-
-        return {};
+        const auto context = get_analysis_context(module);
+        return context ? std::optional<size_t>{context->image_size} : std::nullopt;
     }
 
     std::optional<HMODULE> get_module_within(Address address) {
@@ -94,24 +328,13 @@ namespace utility {
 
     std::optional<uintptr_t> get_dll_imagebase(Address dll) {
         if (dll == nullptr) {
-            return {};
+            return std::nullopt;
         }
-
-        // Get the dos header and verify that it seems valid.
-        auto dosHeader = dll.as<PIMAGE_DOS_HEADER>();
-
-        if (dosHeader->e_magic != IMAGE_DOS_SIGNATURE) {
-            return {};
+        const auto context = get_analysis_context(dll.as<HMODULE>());
+        if (!context || context->preferred_image_base > std::numeric_limits<uintptr_t>::max()) {
+            return std::nullopt;
         }
-
-        // Get the nt headers and verify that they seem valid.
-        auto ntHeaders = (PIMAGE_NT_HEADERS)((uintptr_t)dosHeader + dosHeader->e_lfanew);
-
-        if (ntHeaders->Signature != IMAGE_NT_SIGNATURE) {
-            return {};
-        }
-
-        return ntHeaders->OptionalHeader.ImageBase;
+        return (uintptr_t)context->preferred_image_base;
     }
 
     std::optional<uintptr_t> get_imagebase_va_from_ptr(Address dll, Address base, void* ptr) {
@@ -676,6 +899,10 @@ namespace utility {
     std::optional<FakeModule> map_view_of_pe(const std::string& path) {
 #if defined(_WIN32)
         auto fspath = std::filesystem::path{ path };
+        const auto pe = parse_pe_file(fspath);
+        if (!pe) {
+            return std::nullopt;
+        }
 
         auto file_handle = CreateFileW(fspath.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
 
@@ -709,29 +936,38 @@ namespace utility {
         // race conditions.
         LoaderLockGuard lock{};
 
+        if (pe->image_size > UINT32_MAX ||
+            pe->image_size > std::numeric_limits<uintptr_t>::max() - (uintptr_t)mapped_base) {
+            UnmapViewOfFile(mapped_base);
+            CloseHandle(mapping_handle);
+            CloseHandle(file_handle);
+            return std::nullopt;
+        }
+
+        const auto mapped_pe =
+            parse_pe_image((uintptr_t)mapped_base, module_header_span((uintptr_t)mapped_base));
+        if (!mapped_pe || mapped_pe->arch != pe->arch ||
+            mapped_pe->image_size != pe->image_size) {
+            UnmapViewOfFile(mapped_base);
+            CloseHandle(mapping_handle);
+            CloseHandle(file_handle);
+            return std::nullopt;
+        }
+
+        // SEC_IMAGE can share already-relocated image pages. In that case the
+        // mapped header's ImageBase is neither the file's preferred base nor
+        // this view's address: it is the base whose relocation delta was
+        // applied to stored pointers. Preserve it explicitly for translation.
+        const auto stored_image_base = mapped_pe->preferred_image_base;
+        const bool relocations_applied =
+            stored_image_base != pe->preferred_image_base;
+
         auto fake_entry = new _LDR_DATA_TABLE_ENTRY{};
         std::memset(fake_entry, 0, sizeof(_LDR_DATA_TABLE_ENTRY));
 
-        // get size of image from pe header and assign to entry
-        auto dosHeader = (PIMAGE_DOS_HEADER)mapped_base;
-        if (dosHeader->e_magic != IMAGE_DOS_SIGNATURE) {
-            UnmapViewOfFile(mapped_base);
-            CloseHandle(mapping_handle);
-            CloseHandle(file_handle);
-            return std::nullopt;
-        }
-
-        auto ntHeaders = (PIMAGE_NT_HEADERS)((uintptr_t)dosHeader + dosHeader->e_lfanew);
-
-        if (ntHeaders->Signature != IMAGE_NT_SIGNATURE) {
-            UnmapViewOfFile(mapped_base);
-            CloseHandle(mapping_handle);
-            CloseHandle(file_handle);
-            return std::nullopt;
-        }
-
-        // SizeOfImage
-        *(uint32_t*)&fake_entry->Reserved3[1] = ntHeaders->OptionalHeader.SizeOfImage;
+        // _LDR_DATA_TABLE_ENTRY stores SizeOfImage in this reserved slot on the
+        // compatibility definition used by kananlib.
+        *(uint32_t*)&fake_entry->Reserved3[1] = (uint32_t)pe->image_size;
 
         fake_entry->DllBase = (PVOID)mapped_base;
 
@@ -749,8 +985,23 @@ namespace utility {
         peb->Ldr->InMemoryOrderModuleList.Flink = &fake_entry->InMemoryOrderLinks;
 
         {
+            const AnalysisContext analysis{
+                .arch = pe->arch,
+                .host_base = (uintptr_t)mapped_base,
+                .preferred_image_base = pe->preferred_image_base,
+                .stored_image_base = stored_image_base,
+                .image_size = pe->image_size,
+                .mapped_image = true,
+                // Observed from the Magic-aware ImageBase in the mapped header.
+                .relocations_applied = relocations_applied,
+            };
             std::unique_lock _{ g_module_ranges_mutex };
-            g_module_ranges.push_back({ (uintptr_t)mapped_base, (uintptr_t)mapped_base + ntHeaders->OptionalHeader.SizeOfImage, wpath });
+            g_module_ranges.push_back({
+                (uintptr_t)mapped_base,
+                (uintptr_t)mapped_base + pe->image_size,
+                wpath,
+                analysis,
+            });
         }
 
         return FakeModule{ (HMODULE)mapped_base, file_handle, mapping_handle };
@@ -878,51 +1129,83 @@ namespace utility {
         // loader does this; we must too since mmap will not honor the preferred
         // ImageBase. Done while the pages are still writable.
         const auto delta = (int64_t)((uint64_t)(uintptr_t)mapped_base - image_base);
-        if (delta != 0 && reloc_dir.VirtualAddress != 0 && reloc_dir.Size != 0) {
-            size_t reloc_rva = reloc_dir.VirtualAddress;
-            const size_t reloc_end = std::min(reloc_rva + (size_t)reloc_dir.Size, image_size);
-            uint32_t unsupported_relocs = 0;
-            uint32_t unsupported_reloc_type = 0;
-
-            while (reloc_rva + sizeof(IMAGE_BASE_RELOCATION) <= reloc_end && reloc_rva + sizeof(IMAGE_BASE_RELOCATION) <= image_size) {
-                auto* block = (IMAGE_BASE_RELOCATION*)(mapped_base + reloc_rva);
-                if (block->SizeOfBlock < sizeof(IMAGE_BASE_RELOCATION) || block->SizeOfBlock > (reloc_end - reloc_rva)) {
-                    break;
-                }
-
-                const auto num_entries = (block->SizeOfBlock - sizeof(IMAGE_BASE_RELOCATION)) / sizeof(uint16_t);
-                auto* entries = (uint16_t*)(block + 1);
-                for (uint32_t e = 0; e < num_entries; ++e) {
-                    const auto type = entries[e] >> 12;
-                    const size_t target = (size_t)block->VirtualAddress + (entries[e] & 0xFFF);
-                    if (type == IMAGE_REL_BASED_DIR64) {
-                        if (target + sizeof(uint64_t) <= image_size) {
-                            *(uint64_t*)(mapped_base + target) += (uint64_t)delta;
-                        }
-                    } else if (type == IMAGE_REL_BASED_HIGHLOW) {
-                        if (pe32 && (uintptr_t)mapped_base > UINT32_MAX) {
-                            SPDLOG_WARN("[PE] Cannot apply PE32 HIGHLOW relocations above the 32-bit address range");
-                            VirtualFree(mapped_base, 0, MEM_RELEASE);
-                            return std::nullopt;
-                        }
-                        if (target + sizeof(uint32_t) <= image_size) {
-                            *(uint32_t*)(mapped_base + target) += (uint32_t)delta;
-                        }
-                    }
-                    else if (type != IMAGE_REL_BASED_ABSOLUTE) {
-                        // ABSOLUTE (0) is padding and intentionally skipped; any
-                        // other type is one this loader does not apply.
-                        ++unsupported_relocs;
-                        unsupported_reloc_type = type;
-                    }
-                }
-
-                reloc_rva += block->SizeOfBlock;
+        bool relocations_applied = delta == 0;
+        const bool has_relocations =
+            delta != 0 && reloc_dir.VirtualAddress != 0 && reloc_dir.Size != 0;
+        const bool relocations_fit_target =
+            !pe32 || (uintptr_t)mapped_base <= UINT32_MAX;
+        if (has_relocations && relocations_fit_target) {
+            const size_t reloc_begin = reloc_dir.VirtualAddress;
+            if (!range_fits(reloc_begin, reloc_dir.Size, image_size)) {
+                VirtualFree(mapped_base, 0, MEM_RELEASE);
+                return std::nullopt;
             }
 
-            if (unsupported_relocs > 0) {
-                SPDLOG_WARN("[PE] Skipped {} base relocation(s) of unsupported type {}; the mapped image may be incompletely relocated", unsupported_relocs, unsupported_reloc_type);
+            const size_t reloc_end = reloc_begin + (size_t)reloc_dir.Size;
+            auto walk_relocations = [&](bool apply) {
+                size_t reloc_rva = reloc_begin;
+                while (reloc_rva < reloc_end) {
+                    if (!range_fits(reloc_rva, sizeof(IMAGE_BASE_RELOCATION), reloc_end)) {
+                        return false;
+                    }
+                    auto* block = (IMAGE_BASE_RELOCATION*)(mapped_base + reloc_rva);
+                    if (block->SizeOfBlock < sizeof(IMAGE_BASE_RELOCATION) ||
+                        block->SizeOfBlock > reloc_end - reloc_rva ||
+                        (block->SizeOfBlock - sizeof(IMAGE_BASE_RELOCATION)) % sizeof(uint16_t) != 0) {
+                        return false;
+                    }
+
+                    const auto num_entries =
+                        (block->SizeOfBlock - sizeof(IMAGE_BASE_RELOCATION)) / sizeof(uint16_t);
+                    auto* entries = (uint16_t*)(block + 1);
+                    for (uint32_t e = 0; e < num_entries; ++e) {
+                        const auto type = entries[e] >> 12;
+                        const size_t page_rva = (size_t)block->VirtualAddress;
+                        const size_t page_offset = (size_t)(entries[e] & 0x0FFF);
+                        if (page_rva > SIZE_MAX - page_offset) {
+                            return false;
+                        }
+                        const size_t target = page_rva + page_offset;
+                        if (type == IMAGE_REL_BASED_ABSOLUTE) {
+                            continue;
+                        }
+                        if (pe32 && type == IMAGE_REL_BASED_HIGHLOW) {
+                            if (!range_fits(target, sizeof(uint32_t), image_size)) {
+                                return false;
+                            }
+                            if (apply) {
+                                *(uint32_t*)(mapped_base + target) += (uint32_t)delta;
+                            }
+                            continue;
+                        }
+                        if (pe32_plus && type == IMAGE_REL_BASED_DIR64) {
+                            if (!range_fits(target, sizeof(uint64_t), image_size)) {
+                                return false;
+                            }
+                            if (apply) {
+                                *(uint64_t*)(mapped_base + target) += (uint64_t)delta;
+                            }
+                            continue;
+                        }
+                        return false;
+                    }
+                    reloc_rva += block->SizeOfBlock;
+                }
+                return reloc_rva == reloc_end;
+            };
+
+            // Validate the complete table before mutating any slot. Publishing a
+            // partially relocated image would make stored-pointer interpretation
+            // ambiguous for every downstream scanner.
+            if (!walk_relocations(false) || !walk_relocations(true)) {
+                SPDLOG_WARN("[PE] Invalid or unsupported base relocation table");
+                VirtualFree(mapped_base, 0, MEM_RELEASE);
+                return std::nullopt;
             }
+            relocations_applied = true;
+        }
+        if (has_relocations && !relocations_fit_target) {
+            SPDLOG_INFO("[PE] Preserving PE32 target VAs because the host mapping is above 4 GiB");
         }
 
         // Apply per-section page protections so VirtualQuery reports executable
@@ -956,8 +1239,23 @@ namespace utility {
         SPDLOG_INFO("[PE] Mapped {} at {:x}, size 0x{:X}", path, (uintptr_t)mapped_base, image_size);
 
         {
+            const AnalysisContext analysis{
+                .arch = pe32 ? TargetArch::X86 : TargetArch::X64,
+                .host_base = (uintptr_t)mapped_base,
+                .preferred_image_base = image_base,
+                .stored_image_base = relocations_applied
+                    ? (uint64_t)(uintptr_t)mapped_base : image_base,
+                .image_size = image_size,
+                .mapped_image = true,
+                .relocations_applied = relocations_applied,
+            };
             std::unique_lock _{ g_module_ranges_mutex };
-            g_module_ranges.push_back({ (uintptr_t)mapped_base, (uintptr_t)mapped_base + image_size, std::filesystem::path{ path }.wstring() });
+            g_module_ranges.push_back({
+                (uintptr_t)mapped_base,
+                (uintptr_t)mapped_base + image_size,
+                std::filesystem::path{ path }.wstring(),
+                analysis,
+            });
         }
 
         // is_virtual_alloc = true: the destructor releases via VirtualFree and
@@ -967,104 +1265,114 @@ namespace utility {
     }
 
     std::optional<ImportMap> get_module_imports(HMODULE module) {
-        if (module == nullptr) {
+        const auto context = get_analysis_context(module);
+        if (!context) {
             return std::nullopt;
         }
 
         const auto base = (uintptr_t)module;
-        auto* dos = (PIMAGE_DOS_HEADER)base;
-
-        if (dos->e_magic != IMAGE_DOS_SIGNATURE) {
+        const auto pe = parse_pe_image(base, context->image_size);
+        if (!pe) {
             return std::nullopt;
         }
-
-        auto* nt = (PIMAGE_NT_HEADERS)(base + dos->e_lfanew);
-
-        if (nt->Signature != IMAGE_NT_SIGNATURE) {
-            return std::nullopt;
-        }
-
-        const auto module_size = (size_t)nt->OptionalHeader.SizeOfImage;
-        const auto module_end = base + module_size;
-
-        auto rva_ok = [&](uintptr_t rva, size_t min_size = 1) -> bool {
-            return rva >= 1 && rva + min_size <= module_size;
+        const auto module_size = context->image_size;
+        auto rva_ok = [&](uintptr_t rva, size_t min_size = 1) {
+            return rva >= 1 && range_fits((size_t)rva, min_size, module_size);
+        };
+        auto cstr_at = [&](uintptr_t rva) -> const char* {
+            if (!rva_ok(rva)) {
+                return nullptr;
+            }
+            const auto* value = (const char*)(base + rva);
+            return std::memchr(value, '\0', module_size - (size_t)rva) ? value : nullptr;
         };
 
-        auto& import_dir = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
-
-        if (import_dir.VirtualAddress == 0 || import_dir.Size == 0) {
-            return std::nullopt;
-        }
-
-        if (!rva_ok(import_dir.VirtualAddress, sizeof(IMAGE_IMPORT_DESCRIPTOR))) {
+        const auto import_dir = pe->directories[IMAGE_DIRECTORY_ENTRY_IMPORT];
+        if (import_dir.VirtualAddress == 0 ||
+            import_dir.Size < sizeof(IMAGE_IMPORT_DESCRIPTOR) ||
+            !rva_ok(import_dir.VirtualAddress, import_dir.Size)) {
             return std::nullopt;
         }
 
         ImportMap result{};
-        auto* desc = (PIMAGE_IMPORT_DESCRIPTOR)(base + import_dir.VirtualAddress);
+        const auto descriptor_end = (size_t)import_dir.VirtualAddress + import_dir.Size;
+        for (size_t descriptor_rva = import_dir.VirtualAddress;
+             range_fits(descriptor_rva, sizeof(IMAGE_IMPORT_DESCRIPTOR), descriptor_end);
+             descriptor_rva += sizeof(IMAGE_IMPORT_DESCRIPTOR)) {
+            IMAGE_IMPORT_DESCRIPTOR descriptor{};
+            std::memcpy(&descriptor, (const void*)(base + descriptor_rva), sizeof(descriptor));
+            if (descriptor.Name == 0) {
+                break;
+            }
 
-        for (; rva_ok((uintptr_t)desc - base + sizeof(IMAGE_IMPORT_DESCRIPTOR) - 1) && desc->Name != 0; ++desc) {
-            if (!rva_ok(desc->Name)) {
+            const auto* dll_name = cstr_at(descriptor.Name);
+            if (!dll_name) {
                 continue;
             }
-
-            auto* dll_name = (const char*)(base + desc->Name);
-
-            // Ensure the string is within bounds (scan for null terminator)
-            bool name_valid = false;
-            for (auto* p = dll_name; (uintptr_t)p < module_end; ++p) {
-                if (*p == '\0') { name_valid = true; break; }
-            }
-            if (!name_valid) {
-                continue;
-            }
-
-            // Lowercase the DLL name for consistent keys
             std::string dll_lower = dll_name;
-            std::transform(dll_lower.begin(), dll_lower.end(), dll_lower.begin(), ::tolower);
+            std::transform(dll_lower.begin(), dll_lower.end(), dll_lower.begin(),
+                [](unsigned char c) { return (char)std::tolower(c); });
 
-            auto int_rva = desc->OriginalFirstThunk ? desc->OriginalFirstThunk : desc->FirstThunk;
-            if (!rva_ok(int_rva, sizeof(IMAGE_THUNK_DATA)) || !rva_ok(desc->FirstThunk, sizeof(IMAGE_THUNK_DATA))) {
-                continue;
-            }
+            const auto int_rva = descriptor.OriginalFirstThunk
+                ? descriptor.OriginalFirstThunk
+                : descriptor.FirstThunk;
+            auto walk_thunks = [&]<typename Thunk>() {
+                for (size_t index = 0;; ++index) {
+                    if (index > SIZE_MAX / sizeof(Thunk)) {
+                        break;
+                    }
+                    const auto offset = index * sizeof(Thunk);
+                    if ((size_t)int_rva > SIZE_MAX - offset ||
+                        (size_t)descriptor.FirstThunk > SIZE_MAX - offset) {
+                        break;
+                    }
+                    const auto int_entry_rva = (size_t)int_rva + offset;
+                    const auto iat_entry_rva = (size_t)descriptor.FirstThunk + offset;
+                    if (!rva_ok(int_entry_rva, sizeof(Thunk)) ||
+                        !rva_ok(iat_entry_rva, sizeof(Thunk))) {
+                        break;
+                    }
 
-            // OriginalFirstThunk = Import Name Table (names), FirstThunk = IAT (addresses)
-            auto* int_entry = (PIMAGE_THUNK_DATA)(base + int_rva);
-            auto* iat_entry = (PIMAGE_THUNK_DATA)(base + desc->FirstThunk);
+                    Thunk int_entry{};
+                    std::memcpy(&int_entry, (const void*)(base + int_entry_rva), sizeof(int_entry));
+                    const auto value = (uint64_t)int_entry.u1.AddressOfData;
+                    if (value == 0) {
+                        break;
+                    }
 
-            for (; rva_ok((uintptr_t)int_entry - base, sizeof(IMAGE_THUNK_DATA)) && int_entry->u1.AddressOfData != 0; ++int_entry, ++iat_entry) {
-                // Skip ordinal imports
-                if (IMAGE_SNAP_BY_ORDINAL(int_entry->u1.Ordinal)) {
-                    auto ordinal = IMAGE_ORDINAL(int_entry->u1.Ordinal);
-                    auto key = dll_lower + "!#" + std::to_string(ordinal);
-                    auto iat_addr = (uintptr_t)&iat_entry->u1.Function;
+                    const auto iat_addr = base + iat_entry_rva;
+                    constexpr uint64_t ordinal_flag =
+                        sizeof(Thunk) == sizeof(IMAGE_THUNK_DATA32)
+                            ? (uint64_t)IMAGE_ORDINAL_FLAG32
+                            : (uint64_t)IMAGE_ORDINAL_FLAG64;
+                    if ((value & ordinal_flag) != 0) {
+                        const auto ordinal = (uint16_t)(value & 0xFFFF);
+                        const auto key = dll_lower + "!#" + std::to_string(ordinal);
+                        result.name_to_addr[key] = iat_addr;
+                        result.addr_to_name[iat_addr] = key;
+                        continue;
+                    }
 
-                    result.name_to_addr[std::move(key)] = iat_addr;
-                    result.addr_to_name[iat_addr] = dll_lower + "!#" + std::to_string(ordinal);
-                    continue;
+                    constexpr size_t name_offset = offsetof(IMAGE_IMPORT_BY_NAME, Name);
+                    if (value > UINT32_MAX || value > SIZE_MAX - name_offset ||
+                        !rva_ok((uintptr_t)value, sizeof(IMAGE_IMPORT_BY_NAME))) {
+                        continue;
+                    }
+                    const auto* function_name = cstr_at((size_t)value + name_offset);
+                    if (!function_name) {
+                        continue;
+                    }
+
+                    const auto key = dll_lower + "!" + function_name;
+                    result.name_to_addr[key] = iat_addr;
+                    result.addr_to_name[iat_addr] = key;
                 }
+            };
 
-                if (!rva_ok((uintptr_t)int_entry->u1.AddressOfData, sizeof(IMAGE_IMPORT_BY_NAME))) {
-                    continue;
-                }
-
-                auto* hint_name = (PIMAGE_IMPORT_BY_NAME)(base + int_entry->u1.AddressOfData);
-
-                // Verify the name string is within bounds
-                bool func_name_valid = false;
-                for (auto* p = (const char*)hint_name->Name; (uintptr_t)p < module_end; ++p) {
-                    if (*p == '\0') { func_name_valid = true; break; }
-                }
-                if (!func_name_valid) {
-                    continue;
-                }
-
-                auto key = dll_lower + "!" + (const char*)hint_name->Name;
-                auto iat_addr = (uintptr_t)&iat_entry->u1.Function;
-
-                result.addr_to_name[iat_addr] = key;
-                result.name_to_addr[std::move(key)] = iat_addr;
+            if (context->arch == TargetArch::X86) {
+                walk_thunks.template operator()<IMAGE_THUNK_DATA32>();
+            } else {
+                walk_thunks.template operator()<IMAGE_THUNK_DATA64>();
             }
         }
 
@@ -1072,31 +1380,24 @@ namespace utility {
     }
 
     std::optional<ExportMap> get_module_exports(HMODULE module) {
-        if (module == nullptr) {
+        const auto context = get_analysis_context(module);
+        if (!context) {
             return std::nullopt;
         }
 
         const auto base = (uintptr_t)module;
-        auto* dos = (PIMAGE_DOS_HEADER)base;
-
-        if (dos->e_magic != IMAGE_DOS_SIGNATURE) {
+        const auto pe = parse_pe_image(base, context->image_size);
+        if (!pe) {
             return std::nullopt;
         }
-
-        auto* nt = (PIMAGE_NT_HEADERS)(base + dos->e_lfanew);
-
-        if (nt->Signature != IMAGE_NT_SIGNATURE) {
-            return std::nullopt;
-        }
-
-        const auto module_size = (size_t)nt->OptionalHeader.SizeOfImage;
+        const auto module_size = context->image_size;
         const auto module_end = base + module_size;
 
         auto rva_ok = [&](uintptr_t rva, size_t min_size = 1) -> bool {
-            return rva >= 1 && rva + min_size <= module_size;
+            return rva >= 1 && range_fits((size_t)rva, min_size, module_size);
         };
 
-        auto& export_dir_entry = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT];
+        const auto export_dir_entry = pe->directories[IMAGE_DIRECTORY_ENTRY_EXPORT];
 
         if (export_dir_entry.VirtualAddress == 0 || export_dir_entry.Size == 0) {
             return std::nullopt;
@@ -1177,47 +1478,39 @@ namespace utility {
     }
 
     std::optional<std::vector<ModuleSection>> get_module_sections(HMODULE module) {
-        if (module == nullptr) {
+        const auto context = get_analysis_context(module);
+        if (!context) {
             return std::nullopt;
         }
 
         const auto base = (uintptr_t)module;
-        auto* dos = (PIMAGE_DOS_HEADER)base;
-
-        if (dos->e_magic != IMAGE_DOS_SIGNATURE) {
-            return std::nullopt;
-        }
-
-        auto* nt = (PIMAGE_NT_HEADERS)(base + dos->e_lfanew);
-
-        if (nt->Signature != IMAGE_NT_SIGNATURE) {
+        const auto pe = parse_pe_image(base, context->image_size);
+        if (!pe) {
             return std::nullopt;
         }
 
         std::vector<ModuleSection> sections{};
-        const auto num_sections = nt->FileHeader.NumberOfSections;
-        sections.reserve(num_sections);
+        sections.reserve(pe->number_of_sections);
+        for (uint16_t i = 0; i < pe->number_of_sections; ++i) {
+            IMAGE_SECTION_HEADER section{};
+            const auto offset = pe->section_table_offset + (size_t)i * sizeof(section);
+            if (!read_image_value(base, context->image_size, offset, section)) {
+                return std::nullopt;
+            }
 
-        auto* section = IMAGE_FIRST_SECTION(nt);
-
-        for (uint16_t i = 0; i < num_sections; ++i, ++section) {
-            ModuleSection sec{};
-
-            // Truncate the section name to the first null, or use all 8 chars.
-            auto name_len = 0u;
-            for (; name_len < IMAGE_SIZEOF_SHORT_NAME && section->Name[name_len] != '\0'; ++name_len)
-                ;
-            sec.name.assign((const char*)section->Name, name_len);
-
-            sec.virtual_address = base + section->VirtualAddress;
-            sec.virtual_size = section->Misc.VirtualSize;
-            sec.raw_size = section->SizeOfRawData;
-            sec.raw_pointer = section->PointerToRawData;
-            sec.characteristics = section->Characteristics;
-
-            sections.push_back(std::move(sec));
+            ModuleSection result{};
+            size_t name_len = 0;
+            while (name_len < IMAGE_SIZEOF_SHORT_NAME && section.Name[name_len] != '\0') {
+                ++name_len;
+            }
+            result.name.assign((const char*)section.Name, name_len);
+            result.virtual_address = base + section.VirtualAddress;
+            result.virtual_size = section.Misc.VirtualSize;
+            result.raw_size = section.SizeOfRawData;
+            result.raw_pointer = section.PointerToRawData;
+            result.characteristics = section.Characteristics;
+            sections.push_back(std::move(result));
         }
-
         return sections;
     }
 

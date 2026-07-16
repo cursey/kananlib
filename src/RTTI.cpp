@@ -11,6 +11,7 @@
 #include <regex>
 #include <mutex>
 #include <unordered_map>
+#include <cstring>
 
 #include <utility/Logging.hpp>
 
@@ -45,9 +46,71 @@ namespace utility {
 namespace rtti {
 namespace detail {
 struct Vtable {
-    KANANLIB_RTTI_TI* ti{nullptr};
+    uintptr_t type_descriptor{};
     uintptr_t vtable{};
+    TargetArch arch{host_arch()};
+    std::string cross_name{};
+
+    const char* raw_name() const {
+        return reinterpret_cast<const char*>(
+            type_descriptor + (arch == TargetArch::X86 ? 8 : 16));
+    }
+
+    std::string_view name() const {
+        if (arch == host_arch()) {
+            return reinterpret_cast<KANANLIB_RTTI_TI*>(
+                type_descriptor)->name();
+        }
+        return cross_name;
+    }
 };
+
+std::string cross_type_name(std::string_view raw) {
+    const char* kind = nullptr;
+    if (raw.starts_with(".?AV")) {
+        kind = "class ";
+    } else if (raw.starts_with(".?AU")) {
+        kind = "struct ";
+    } else {
+        return std::string{raw};
+    }
+
+    raw.remove_prefix(4);
+    const auto terminator = raw.find("@@");
+    if (terminator == std::string_view::npos) {
+        return std::string{raw};
+    }
+    raw = raw.substr(0, terminator);
+
+    std::vector<std::string_view> components{};
+    for (size_t offset = 0; offset <= raw.size();) {
+        const auto separator = raw.find('@', offset);
+        components.push_back(raw.substr(
+            offset, separator == std::string_view::npos
+                ? raw.size() - offset : separator - offset));
+        if (separator == std::string_view::npos) {
+            break;
+        }
+        offset = separator + 1;
+    }
+
+    std::string result{kind};
+    for (auto it = components.rbegin(); it != components.rend(); ++it) {
+        if (it != components.rbegin()) {
+            result += "::";
+        }
+        result.append(it->data(), it->size());
+    }
+    return result;
+}
+
+std::optional<uintptr_t> read_target_pointer(
+    uintptr_t address, const AnalysisContext& context) {
+    const uint64_t stored = context.arch == TargetArch::X86
+        ? (uint64_t)*reinterpret_cast<const uint32_t*>(address)
+        : *reinterpret_cast<const uint64_t*>(address);
+    return context.stored_address_to_host(stored);
+}
 
 std::recursive_mutex s_vtable_cache_mutex{};
 std::unordered_map<HMODULE, std::vector<Vtable>> s_vtable_cache{};
@@ -55,45 +118,60 @@ std::unordered_map<HMODULE, std::vector<Vtable>> s_vtable_cache{};
 void for_each_uncached(HMODULE m, std::function<void(const Vtable&)> predicate) {
     KANANLIB_BENCH();
 
-    const auto begin = (uintptr_t)m;
-    const auto module_size = utility::get_module_size(m);
-    if (!module_size) {
+    const auto context = utility::get_analysis_context(m);
+    if (!context || context->image_size < context->pointer_width() * 3) {
         return;
     }
-    if (*module_size < sizeof(void*)) {
-        return;
-    }
-    const auto end = begin + *module_size;
+    const auto begin = reinterpret_cast<uintptr_t>(m);
+    const auto end = begin + context->image_size;
+    const auto width = context->pointer_width();
 
-    for (auto i = begin; i < end - sizeof(void*); i += sizeof(void*)) KANANLIB_AV_TRY {
-        const auto fake_obj = (void*)i;
-        const auto ti = (KANANLIB_RTTI_TI*)get_type_info(&fake_obj);
-
-        if (ti == nullptr) {
+    for (auto vtable = begin + width; vtable + width <= end;
+         vtable += width) KANANLIB_AV_TRY {
+        const auto locator_address =
+            read_target_pointer(vtable - width, *context);
+        if (!locator_address ||
+            !context->contains_host(
+                *locator_address, sizeof(_s_RTTICompleteObjectLocator))) {
             continue;
         }
 
-        // Using IsBadReadPtr helps us stop accidentally triggering some Vectored Exception Handlers
-        // if those get triggered, it MASSIVELY slows down this function, especially if they write mini dumps.
-        if (IsBadReadPtr(ti, sizeof(void*))) {
+        const auto* locator =
+            reinterpret_cast<const _s_RTTICompleteObjectLocator*>(
+                *locator_address);
+        const auto type_descriptor =
+            locator->signature == 1
+                ? std::optional<uintptr_t>{
+                      begin + (uint32_t)(uintptr_t)locator->pTypeDescriptor}
+                : context->stored_address_to_host(
+                      (uint32_t)(uintptr_t)locator->pTypeDescriptor);
+        if (!type_descriptor ||
+            !context->contains_host(*type_descriptor, width * 2 + 3)) {
             continue;
         }
 
-        const auto rn = ti->raw_name();
-
-        if (IsBadReadPtr(rn, sizeof(void*))) {
+        const auto* raw_name = reinterpret_cast<const char*>(
+            *type_descriptor + width * 2);
+        const auto max_name = end - reinterpret_cast<uintptr_t>(raw_name);
+        const auto* terminator =
+            reinterpret_cast<const char*>(std::memchr(raw_name, '\0', max_name));
+        if (!terminator) {
+            continue;
+        }
+        const std::string_view raw{raw_name, (size_t)(terminator - raw_name)};
+        if (!raw.starts_with(".?") || raw.find('@') == std::string_view::npos) {
             continue;
         }
 
-        if (rn[0] != '.' || rn[1] != '?') {
-            continue;
+        Vtable result{
+            .type_descriptor = *type_descriptor,
+            .vtable = vtable,
+            .arch = context->arch,
+        };
+        if (context->arch != host_arch()) {
+            result.cross_name = cross_type_name(raw);
         }
-
-        if (std::string_view{rn}.find("@") == std::string_view::npos) {
-            continue;
-        }
-
-        predicate(Vtable{ti, i});
+        predicate(result);
     } KANANLIB_AV_EXCEPT {
         continue;
     }
@@ -235,11 +313,11 @@ std::type_info* get_type_info(const void* obj) {
 
 std::type_info* get_type_info(HMODULE m, std::string_view type_name) {
     const auto result = detail::find(m, [&](const detail::Vtable& vtable) {
-        return vtable.ti->name() == type_name;
+        return vtable.name() == type_name;
     });
 
     if (result) {
-        return (std::type_info*)result->ti;
+        return reinterpret_cast<std::type_info*>(result->type_descriptor);
     }
 
     return nullptr;
@@ -369,7 +447,8 @@ std::optional<uintptr_t> find_vtable(HMODULE m, std::string_view type_name) try 
     KANANLIB_BENCH();
 
     const auto result = detail::find(m, [&](const detail::Vtable& vtable) {
-        return vtable.ti->name() == type_name || vtable.ti->raw_name() == type_name;
+        return std::string_view{vtable.raw_name()} == type_name ||
+               vtable.name() == type_name;
     });
     
     if (result) {
@@ -388,18 +467,31 @@ std::vector<uintptr_t> find_vtables(HMODULE m, std::string_view type_name) {
     std::vector<uintptr_t> result{};
 
     detail::for_each(m, [&](const detail::Vtable& vtable) {
-        if (vtable.ti->name() == type_name || vtable.ti->raw_name() == type_name) {
+        if (std::string_view{vtable.raw_name()} == type_name ||
+            vtable.name() == type_name) {
             result.push_back(vtable.vtable);
         }
     });
 
-    // Sort the vtables by the offset into each vtable (_s_RTTICompleteObjectLocator)
-    std::sort(result.begin(), result.end(), [](uintptr_t a, uintptr_t b) {
-        const auto locator_a = *(_s_RTTICompleteObjectLocator**)(a - sizeof(void*));
-        const auto locator_b = *(_s_RTTICompleteObjectLocator**)(b - sizeof(void*));
-
-        return locator_a->offset < locator_b->offset;
-    });
+    // Sort by the locator's subobject offset using the target pointer width.
+    const auto context = utility::get_analysis_context(m);
+    if (context) {
+        std::sort(result.begin(), result.end(), [&](uintptr_t a, uintptr_t b) {
+            const auto locator_a =
+                detail::read_target_pointer(a - context->pointer_width(), *context);
+            const auto locator_b =
+                detail::read_target_pointer(b - context->pointer_width(), *context);
+            const auto offset_a = locator_a
+                ? reinterpret_cast<const _s_RTTICompleteObjectLocator*>(
+                      *locator_a)->offset
+                : UINT32_MAX;
+            const auto offset_b = locator_b
+                ? reinterpret_cast<const _s_RTTICompleteObjectLocator*>(
+                      *locator_b)->offset
+                : UINT32_MAX;
+            return offset_a < offset_b;
+        });
+    }
 
     return result;
 }
@@ -408,7 +500,7 @@ std::optional<uintptr_t> find_vtable_partial(HMODULE m, std::string_view type_na
     KANANLIB_BENCH();
 
     const auto result = detail::find(m, [&](const detail::Vtable& vtable) {
-        return std::string_view{vtable.ti->name()}.find(type_name) != std::string_view::npos;
+        return vtable.name().find(type_name) != std::string_view::npos;
     });
     
     if (result) {
@@ -427,7 +519,8 @@ std::optional<uintptr_t> find_vtable_regex(HMODULE m, std::string_view reg_str) 
     std::regex reg{reg_str.data()};
 
     const auto result = detail::find(m, [&](const detail::Vtable& vtable) {
-        return std::regex_match(vtable.ti->name(), reg);
+        const auto name = vtable.name();
+        return std::regex_match(name.begin(), name.end(), reg);
     });
 
     if (result) {

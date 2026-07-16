@@ -8,6 +8,7 @@
 #include <vector>
 #include <array>
 #include <type_traits>
+#include <utility>
 
 #include <bddisasm.h>
 #include <windows.h>
@@ -16,6 +17,7 @@
 #include <utility/Logging.hpp>
 #include <utility/Benchmark.hpp>
 #include <utility/String.hpp>
+#include <utility/Module.hpp>
 
 
 #if defined(KANANLIB_TESTING)
@@ -56,6 +58,14 @@ namespace utility {
     constexpr auto KANANLIB_DECODE_DATA = ND_DATA_64;
 #endif
 
+    constexpr uint8_t decode_mode(TargetArch arch) noexcept {
+        return arch == TargetArch::X86 ? ND_CODE_32 : ND_CODE_64;
+    }
+
+    constexpr uint8_t decode_data(TargetArch arch) noexcept {
+        return arch == TargetArch::X86 ? ND_DATA_32 : ND_DATA_64;
+    }
+
     std::optional<uintptr_t> scan(const std::string& module, const std::string& pattern);
     std::optional<uintptr_t> scan(const std::wstring& module, const std::string& pattern);
     std::optional<uintptr_t> scan(const std::string& module, uintptr_t start, const std::string& pattern);
@@ -79,9 +89,19 @@ namespace utility {
 
     std::optional<uintptr_t> scan_data_reverse(uintptr_t start, size_t length, const uint8_t* data, size_t size);
     std::optional<uintptr_t> scan_ptr(HMODULE module, uintptr_t ptr);
-    std::optional<uintptr_t> scan_ptr(uintptr_t start, size_t length, uintptr_t ptr);
+    std::optional<uintptr_t> scan_ptr(
+        uintptr_t start, size_t length, uintptr_t ptr,
+        TargetArch arch = host_arch());
+    std::optional<uintptr_t> scan_ptr(
+        uintptr_t start, size_t length, uintptr_t ptr,
+        const AnalysisContext& context);
     std::optional<uintptr_t> scan_ptr_noalign(HMODULE module, uintptr_t ptr);
-    std::optional<uintptr_t> scan_ptr_noalign(uintptr_t start, size_t length, uintptr_t ptr);
+    std::optional<uintptr_t> scan_ptr_noalign(
+        uintptr_t start, size_t length, uintptr_t ptr,
+        TargetArch arch = host_arch());
+    std::optional<uintptr_t> scan_ptr_noalign(
+        uintptr_t start, size_t length, uintptr_t ptr,
+        const AnalysisContext& context);
     std::optional<uintptr_t> scan_string(HMODULE module, const std::string& str, bool zero_terminated = false);
     std::optional<uintptr_t> scan_string(HMODULE module, const std::wstring& str, bool zero_terminated = false);
     std::optional<uintptr_t> scan_string(uintptr_t start, size_t length, const std::string& str, bool zero_terminated = false);
@@ -109,15 +129,32 @@ namespace utility {
     std::vector<uintptr_t> scan_displacement_references(HMODULE module, uintptr_t ptr);
     std::vector<uintptr_t> scan_displacement_references(uintptr_t start, size_t length, uintptr_t ptr);
 
-    std::optional<uintptr_t> scan_opcode(uintptr_t ip, size_t num_instructions, uint8_t opcode);
-    std::optional<uintptr_t> scan_disasm(uintptr_t ip, size_t num_instructions, const std::string& pattern);
-    std::optional<uintptr_t> scan_mnemonic(uintptr_t ip, size_t num_instructions, const std::string& mnemonic);
+    std::optional<uintptr_t> scan_opcode(
+        uintptr_t ip, size_t num_instructions, uint8_t opcode,
+        TargetArch arch = host_arch());
+    std::optional<uintptr_t> scan_opcode(
+        uintptr_t ip, size_t num_instructions, uint8_t opcode,
+        const AnalysisContext& context);
+    std::optional<uintptr_t> scan_disasm(
+        uintptr_t ip, size_t num_instructions, const std::string& pattern,
+        TargetArch arch = host_arch());
+    std::optional<uintptr_t> scan_disasm(
+        uintptr_t ip, size_t num_instructions, const std::string& pattern,
+        const AnalysisContext& context);
+    std::optional<uintptr_t> scan_mnemonic(
+        uintptr_t ip, size_t num_instructions, const std::string& mnemonic,
+        TargetArch arch = host_arch());
+    std::optional<uintptr_t> scan_mnemonic(
+        uintptr_t ip, size_t num_instructions, const std::string& mnemonic,
+        const AnalysisContext& context);
 
-    uint32_t get_insn_size(uintptr_t ip);
+    uint32_t get_insn_size(uintptr_t ip, TargetArch arch = host_arch());
+    uint32_t get_insn_size(uintptr_t ip, const AnalysisContext& context);
 
     uintptr_t calculate_absolute(uintptr_t address, uint8_t custom_offset = 4);
 
-    std::optional<INSTRUX> decode_one(uint8_t* ip, size_t max_size = 1000);
+    std::optional<INSTRUX> decode_one(uint8_t* ip, size_t max_size = 1000, TargetArch arch = host_arch());
+    std::optional<INSTRUX> decode_one(uint8_t* ip, size_t max_size, const AnalysisContext& context);
     // exhaustive_decode decodes until it hits something like a return, int3, etc
     // except when it notices a conditional jmp, it will decode both branches separately
     enum ExhaustionResult {
@@ -134,7 +171,8 @@ namespace utility {
     };
 
     // Forward declaration needed by the template below
-    std::optional<uintptr_t> resolve_displacement(uintptr_t ip, const INSTRUX* instrux_in);
+    std::optional<uintptr_t> resolve_displacement(
+        uintptr_t ip, const INSTRUX* instrux_in, const AnalysisContext& context);
 
     namespace detail {
         // Grow-on-demand open-addressing address set for exhaustive_decode.
@@ -247,7 +285,8 @@ namespace utility {
     }
 
     template<typename F>
-    void exhaustive_decode(uint8_t* start, size_t max_size, F&& callback) {
+    void exhaustive_decode(
+        uint8_t* start, size_t max_size, F&& callback, const AnalysisContext& context) {
         KANANLIB_BENCH();
         SPDLOG_DEBUG("Running exhaustive_decode on {:x}", (uintptr_t)start);
 
@@ -333,7 +372,8 @@ namespace utility {
                     break;
                 }
 #endif
-                const auto status = NdDecodeEx(&ctx.instrux, ip, 64, KANANLIB_DECODE_MODE, KANANLIB_DECODE_DATA);
+                const auto status = NdDecodeEx(
+                    &ctx.instrux, ip, 64, decode_mode(context.arch), decode_data(context.arch));
 
                 if (!ND_SUCCESS(status)) {
                     break;
@@ -346,7 +386,7 @@ namespace utility {
                 // Pre-resolve branch target so the callback can use it without re-resolving
                 ctx.resolved_target = 0;
                 if (ix.IsRipRelative && !ix.BranchInfo.IsIndirect && ix.BranchInfo.IsBranch) {
-                    if (auto dest = utility::resolve_displacement((uintptr_t)ip, &ix); dest) {
+                    if (auto dest = utility::resolve_displacement((uintptr_t)ip, &ix, context); dest) {
                         ctx.resolved_target = *dest;
                     }
                 }
@@ -461,7 +501,24 @@ namespace utility {
         seen.clear();
     }
 
-    void linear_decode(uint8_t* ip, size_t max_size, std::function<bool(ExhaustionContext&)> callback);
+    template<typename F>
+    void exhaustive_decode(uint8_t* start, size_t max_size, F&& callback) {
+        exhaustive_decode(
+            start, max_size, std::forward<F>(callback), AnalysisContext::raw());
+    }
+
+    template<typename F>
+    void exhaustive_decode(uint8_t* start, size_t max_size, F&& callback, TargetArch arch) {
+        exhaustive_decode(
+            start, max_size, std::forward<F>(callback), AnalysisContext::raw(arch));
+    }
+
+    void linear_decode(
+        uint8_t* ip, size_t max_size, std::function<bool(ExhaustionContext&)> callback,
+        TargetArch arch = host_arch());
+    void linear_decode(
+        uint8_t* ip, size_t max_size, std::function<bool(ExhaustionContext&)> callback,
+        const AnalysisContext& context);
 
     struct BasicBlock {
         struct Instruction {
@@ -482,9 +539,24 @@ namespace utility {
         bool merge_call_blocks{true}; // if a block ends with a call, and the next block starts with the instruction after the call, merge them into one block
         bool copy_instructions{true}; // if false, the instructions vector will be empty, and only the start/end/branches will be populated
     };
-    void collect_basic_blocks_into(uintptr_t start, const BasicBlockCollectOptions& options, std::vector<BasicBlock>& blocks);
-    std::vector<BasicBlock> collect_basic_blocks(uintptr_t start, const BasicBlockCollectOptions& options = {});
-    std::vector<BasicBlock>::const_iterator get_highest_contiguous_block(const std::vector<BasicBlock>& blocks);
+    void collect_basic_blocks_into(
+        uintptr_t start, const BasicBlockCollectOptions& options,
+        std::vector<BasicBlock>& blocks, TargetArch arch = host_arch());
+    void collect_basic_blocks_into(
+        uintptr_t start, const BasicBlockCollectOptions& options,
+        std::vector<BasicBlock>& blocks, const AnalysisContext& context);
+    std::vector<BasicBlock> collect_basic_blocks(
+        uintptr_t start, const BasicBlockCollectOptions& options = {},
+        TargetArch arch = host_arch());
+    std::vector<BasicBlock> collect_basic_blocks(
+        uintptr_t start, const BasicBlockCollectOptions& options,
+        const AnalysisContext& context);
+    std::vector<BasicBlock>::const_iterator get_highest_contiguous_block(
+        const std::vector<BasicBlock>& blocks,
+        TargetArch arch = host_arch());
+    std::vector<BasicBlock>::const_iterator get_highest_contiguous_block(
+        const std::vector<BasicBlock>& blocks,
+        const AnalysisContext& context);
 
     struct LinearBlock {
         uintptr_t start{};
@@ -523,7 +595,10 @@ namespace utility {
         std::vector<IMAGE_RUNTIME_FUNCTION_ENTRY_KANANLIB> entries{};
     };
 
-    void populate_function_buckets_heuristic(uintptr_t module);
+    void populate_function_buckets_heuristic(
+        uintptr_t module, TargetArch arch = host_arch());
+    void populate_function_buckets_heuristic(
+        uintptr_t module, const AnalysisContext& context);
     std::optional<Bucket::IMAGE_RUNTIME_FUNCTION_ENTRY_KANANLIB> find_function_entry(uintptr_t middle);
 
     namespace detail {
@@ -532,7 +607,9 @@ namespace utility {
         // become zero-width bucket entries in populate_function_buckets_heuristic.
         // Internal implementation detail exposed for deterministic unit testing;
         // not a supported API.
-        void remove_undecodable_starts(std::vector<uint32_t>& starts, uintptr_t module);
+        void remove_undecodable_starts(
+            std::vector<uint32_t>& starts, uintptr_t module,
+            TargetArch arch = host_arch());
     }
 
     struct FunctionBounds {
@@ -582,7 +659,10 @@ namespace utility {
     std::optional<uintptr_t> find_encapsulating_function_disp(uintptr_t start_instruction, uintptr_t disp, bool follow_calls = true);
 
     // Can supply an instrux if we've already decoded this (reduces redundant decoding when we just want to resolve the displacement)
-    std::optional<uintptr_t> resolve_displacement(uintptr_t ip, const INSTRUX* instrux_in = nullptr);
+    std::optional<uintptr_t> resolve_displacement(
+        uintptr_t ip, const INSTRUX* instrux_in = nullptr, TargetArch arch = host_arch());
+    std::optional<uintptr_t> resolve_displacement(
+        uintptr_t ip, const INSTRUX* instrux_in, const AnalysisContext& context);
 
     struct Resolved {
         uintptr_t addr{};
