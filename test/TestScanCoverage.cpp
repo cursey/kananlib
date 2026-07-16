@@ -511,6 +511,79 @@ int test_resolve_displacement_no_displacement() {
     return 0;
 }
 
+// x86 regression: a base/index (frame or stack) memory operand must NOT be
+// reported as an absolute address. Before the fix the x86 `mem.HasDisp &&
+// !mem.IsRipRel` branch (and the instruction-wide fallback) returned the raw
+// displacement, so `mov eax,[ebp-4]` resolved to 0xFFFFFFFC. On x64 `[rbp-4]`
+// is already nullopt (no absolute-displacement path there), so this holds on
+// both arches and is red only on the buggy x86 build.
+int test_resolve_displacement_x86_frame_relative_nullopt() {
+    RWXPage page;
+    TEST_ASSERT(page.data != nullptr);
+    memset(page.data, 0xCC, page.size);
+
+    // mov eax, [ebp-4] = 8B 45 FC (3 bytes); base=ebp, disp8=-4
+    const size_t off = 0x340;
+    page.data[off + 0] = 0x8B;
+    page.data[off + 1] = 0x45;
+    page.data[off + 2] = 0xFC;
+
+    // Pin the fixture shape so a future decode change can't make this pass
+    // vacuously: it must decode to a base+disp memory operand.
+    auto decoded = utility::decode_one(page.data + off, 16);
+    TEST_ASSERT(decoded.has_value());
+    bool saw_base_disp_mem = false;
+    for (uint32_t i = 0; i < decoded->OperandsCount; ++i) {
+        const auto& op = decoded->Operands[i];
+        if (op.Type == ND_OP_MEM) {
+            TEST_ASSERT(op.Info.Memory.HasDisp && op.Info.Memory.HasBase);
+            saw_base_disp_mem = true;
+        }
+    }
+    TEST_ASSERT(saw_base_disp_mem);
+
+    auto result = utility::resolve_displacement((uintptr_t)(page.data + off), &*decoded);
+    TEST_ASSERT(!result.has_value());
+    return 0;
+}
+
+// x86 regression: a segment-relative operand (fs:[disp], e.g. TEB access) must
+// NOT be reported as a flat absolute address. Before the fix `mov eax,fs:[0x18]`
+// resolved to 0x18 because the mem branch ignored the segment override.
+int test_resolve_displacement_x86_segment_relative_nullopt() {
+    RWXPage page;
+    TEST_ASSERT(page.data != nullptr);
+    memset(page.data, 0xCC, page.size);
+
+    // mov eax, fs:[0x18] = 64 A1 18 00 00 00 (x86 moffs32 with FS override)
+    const size_t off = 0x360;
+    page.data[off + 0] = 0x64;
+    page.data[off + 1] = 0xA1;
+    page.data[off + 2] = 0x18;
+    page.data[off + 3] = 0x00;
+    page.data[off + 4] = 0x00;
+    page.data[off + 5] = 0x00;
+
+    // Pin the fixture shape: it must decode with a segment override and a
+    // pure-displacement (no base/index) memory operand.
+    auto decoded = utility::decode_one(page.data + off, 16);
+    TEST_ASSERT(decoded.has_value());
+    TEST_ASSERT(decoded->HasSeg);
+    bool saw_seg_disp_mem = false;
+    for (uint32_t i = 0; i < decoded->OperandsCount; ++i) {
+        const auto& op = decoded->Operands[i];
+        if (op.Type == ND_OP_MEM) {
+            TEST_ASSERT(op.Info.Memory.HasDisp && !op.Info.Memory.HasBase && !op.Info.Memory.HasIndex);
+            saw_seg_disp_mem = true;
+        }
+    }
+    TEST_ASSERT(saw_seg_disp_mem);
+
+    auto result = utility::resolve_displacement((uintptr_t)(page.data + off), &*decoded);
+    TEST_ASSERT(!result.has_value());
+    return 0;
+}
+
 // collect_unicode_string_references — must read in-image UTF-16 (not host
 // wchar_t, which is UTF-32 off Windows). Regression for the CLI
 // `collect_string_references --wide` path.
@@ -782,6 +855,8 @@ int main() try {
     RUN_TEST(test_resolve_displacement_lea_rip);
     RUN_TEST(test_resolve_displacement_call_rel32);
     RUN_TEST(test_resolve_displacement_no_displacement);
+    RUN_TEST(test_resolve_displacement_x86_frame_relative_nullopt);
+    RUN_TEST(test_resolve_displacement_x86_segment_relative_nullopt);
     RUN_TEST(test_collect_unicode_string_refs_finds_wide);
 
     // exhaustive_decode

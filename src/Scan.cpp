@@ -3024,8 +3024,12 @@ namespace utility {
                 }
 #if KANANLIB_ARCH_X86_32
                 // On x86 there is no RIP-relative addressing; references use
-                // absolute [disp32] operands, so the displacement is the address.
-                if (mem.HasDisp && !mem.IsRipRel) {
+                // absolute [disp32] operands. Require a pure displacement --
+                // no base/index register and no segment override -- so that
+                // frame/stack-relative ([ebp-4]) and segment-relative
+                // (fs:[0x18]) operands are NOT mistaken for absolute addresses.
+                if (mem.HasDisp && !mem.IsRipRel
+                        && !mem.HasBase && !mem.HasIndex && !ix->HasSeg) {
                     return (uintptr_t)mem.Disp;
                 }
 #endif
@@ -3057,13 +3061,6 @@ namespace utility {
         if (ix->HasDisp && ix->IsRipRelative) {
             return ip + ix->Length + ix->Displacement;
         }
-
-#if KANANLIB_ARCH_X86_32
-        // x86 absolute displacement embedded directly in the instruction.
-        if (ix->HasDisp && !ix->IsRipRelative) {
-            return (uintptr_t)ix->Displacement;
-        }
-#endif
 
         return std::nullopt;
     }
