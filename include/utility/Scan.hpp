@@ -436,6 +436,15 @@ namespace utility {
     void populate_function_buckets_heuristic(uintptr_t module);
     std::optional<Bucket::IMAGE_RUNTIME_FUNCTION_ENTRY_KANANLIB> find_function_entry(uintptr_t middle);
 
+    namespace detail {
+        // Removes function-start candidate RVAs whose bytes at (module + rva) do
+        // not decode to a valid instruction. Undecodable candidates would otherwise
+        // become zero-width bucket entries in populate_function_buckets_heuristic.
+        // Internal implementation detail exposed for deterministic unit testing;
+        // not a supported API.
+        void remove_undecodable_starts(std::vector<uint32_t>& starts, uintptr_t module);
+    }
+
     struct FunctionBounds {
         uintptr_t start{};
         uintptr_t end{};

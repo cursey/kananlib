@@ -699,6 +699,40 @@ int test_scan_disasm_no_match() {
 }
 
 // ============================================================================
+// detail::remove_undecodable_starts — drops candidates that do not decode
+// (deterministic, layout-independent regression for the x86 zero-width bucket:
+//  an undecodable function-start candidate would otherwise yield get_insn_size
+//  == 0 and a degenerate EndAddress == BeginAddress bucket entry).
+// ============================================================================
+
+int test_remove_undecodable_starts_filters_bad() {
+    RWXPage page;
+    TEST_ASSERT(page.data != nullptr);
+
+    // Fill with 0x66 (operand-size prefix): a run of prefixes with no opcode
+    // exceeds the 15-byte max instruction length and fails to decode.
+    memset(page.data, 0x66, page.size);
+
+    const size_t valid_off = 0x100;   // decodable: RET
+    page.data[valid_off] = 0xC3;
+    const size_t bad_off   = 0x400;   // undecodable: surrounded by 0x66 fill
+
+    // Preconditions: pin the fixture's classification using the SAME 16-byte
+    // decode window the seam uses, so the test cannot silently pass if the
+    // decoder behavior changes.
+    TEST_ASSERT(utility::decode_one(page.data + valid_off, 16).has_value());
+    TEST_ASSERT(!utility::decode_one(page.data + bad_off, 16).has_value());
+
+    std::vector<uint32_t> starts = { (uint32_t)valid_off, (uint32_t)bad_off };
+    utility::detail::remove_undecodable_starts(starts, (uintptr_t)page.data);
+
+    // The undecodable candidate must be dropped; the decodable one retained.
+    TEST_ASSERT(starts.size() == 1);
+    TEST_ASSERT(starts[0] == (uint32_t)valid_off);
+    return 0;
+}
+
+// ============================================================================
 // main
 // ============================================================================
 
@@ -762,6 +796,7 @@ int main() try {
     // scan_disasm
     RUN_TEST(test_scan_disasm_finds_pattern);
     RUN_TEST(test_scan_disasm_no_match);
+    RUN_TEST(test_remove_undecodable_starts_filters_bad);
 
     return test_summary();
 } catch(const std::exception& e) {

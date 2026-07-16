@@ -100,14 +100,18 @@ int test_find_function_start_caller() {
     auto base = reinterpret_cast<uintptr_t>(&cov_bounds_caller);
     auto middle = base + 12;
     auto result = utility::find_function_start(middle);
-    if (result.has_value()) {
-        TEST_ASSERT(*result <= middle);
-        TEST_ASSERT(is_in_exe(*result));
-        std::printf("  find_function_start(caller+12): %p -> %p\n",
-               (void*)middle, (void*)*result);
-    } else {
-        std::printf("  find_function_start(caller+12): nullopt (acceptable)\n");
-    }
+    // A 12-byte interior offset MUST resolve to the function's exact start.
+    // Regression guard for the 32-bit heuristic: populate_function_buckets_heuristic
+    // runs collect_basic_blocks under parallel_for. With an oversized max_size the
+    // per-thread exhaustive_decode table (~96 MiB/worker on x86) exhausts the
+    // 32-bit address space, collect_basic_blocks yields only a zero-length
+    // [start,start] block, and the cached end collapses to ~1 byte -- making this lookup miss
+    // (nullopt) or land on the wrong start. The bounded x86 max_size fixes it.
+    TEST_ASSERT(result.has_value());
+    TEST_ASSERT(*result == base);
+    TEST_ASSERT(is_in_exe(*result));
+    std::printf("  find_function_start(caller+12): %p -> %p\n",
+           (void*)middle, (void*)*result);
     return 0;
 }
 
