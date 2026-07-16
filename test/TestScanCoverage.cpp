@@ -446,8 +446,9 @@ int test_resolve_displacement_lea_rip() {
     TEST_ASSERT(page.data != nullptr);
     memset(page.data, 0xCC, page.size);
 
-    // Place: LEA RAX, [RIP+0x10] = 48 8D 05 10 00 00 00 (7 bytes)
     const size_t off = 0x100;
+#ifdef _WIN64
+    // Place: LEA RAX, [RIP+0x10] = 48 8D 05 10 00 00 00 (7 bytes)
     page.data[off + 0] = 0x48;
     page.data[off + 1] = 0x8D;
     page.data[off + 2] = 0x05;
@@ -460,6 +461,18 @@ int test_resolve_displacement_lea_rip() {
     TEST_ASSERT(result.has_value());
     // Expected: ip + 7 (instruction length) + 0x10 (displacement) = ip + 0x17
     TEST_ASSERT(*result == (uintptr_t)(page.data + off) + 7 + 0x10);
+#else
+    // x86 has no RIP-relative addressing; LEA reg,[disp32] embeds the
+    // absolute target directly. Place: LEA EAX, [0x12345678] = 8D 05 78 56 34 12 (6 bytes)
+    const uint32_t target = 0x12345678;
+    page.data[off + 0] = 0x8D;
+    page.data[off + 1] = 0x05;
+    std::memcpy(page.data + off + 2, &target, sizeof(target));
+
+    auto result = utility::resolve_displacement((uintptr_t)(page.data + off), nullptr);
+    TEST_ASSERT(result.has_value());
+    TEST_ASSERT(*result == (uintptr_t)target);
+#endif
     return 0;
 }
 
@@ -513,14 +526,25 @@ int test_collect_unicode_string_refs_finds_wide() {
     page.data[0x200 + marker_bytes.size() + 0] = 0x00;
     page.data[0x200 + marker_bytes.size() + 1] = 0x00;
 
-    // LEA RAX, [RIP+disp] at 0x100 referencing page+0x200, then RET.
+    // LEA reg, [target] at 0x100 referencing page+0x200, then RET.
     const size_t off = 0x100;
+#ifdef _WIN64
+    // x64: LEA RAX, [RIP+disp] — RIP-relative, disp computed from next IP.
     const int32_t disp = (int32_t)(0x200 - (off + 7));
     page.data[off + 0] = 0x48;
     page.data[off + 1] = 0x8D;
     page.data[off + 2] = 0x05;
     memcpy(page.data + off + 3, &disp, sizeof(disp));
     page.data[off + 7] = 0xC3; // RET
+#else
+    // x86: LEA EAX, [disp32] — no RIP-relative addressing; the disp32 is the
+    // absolute target address directly.
+    const uint32_t target = (uint32_t)(uintptr_t)(page.data + 0x200);
+    page.data[off + 0] = 0x8D;
+    page.data[off + 1] = 0x05;
+    memcpy(page.data + off + 2, &target, sizeof(target));
+    page.data[off + 6] = 0xC3; // RET
+#endif
 
     auto refs = utility::collect_unicode_string_references(
         (uintptr_t)(page.data + off), 0x10,
@@ -573,15 +597,21 @@ int test_linear_decode_simple() {
     TEST_ASSERT(page.data != nullptr);
     memset(page.data, 0xCC, page.size);
 
-    // Place: PUSH RBP; MOV RBP,RSP; POP RBP; RET
-    // 55; 48 89 E5; 5D; C3
+    // Place: PUSH EBP/RBP; MOV EBP/RBP,ESP/RSP; POP EBP/RBP; RET
     const size_t off = 0x100;
-    page.data[off + 0] = 0x55;             // PUSH RBP
+    page.data[off + 0] = 0x55;             // PUSH EBP/RBP — identical on both archs
+#ifdef _WIN64
     page.data[off + 1] = 0x48;             // MOV RBP, RSP (48 89 E5)
     page.data[off + 2] = 0x89;
     page.data[off + 3] = 0xE5;
     page.data[off + 4] = 0x5D;             // POP RBP
     page.data[off + 5] = 0xC3;             // RET
+#else
+    page.data[off + 1] = 0x89;             // MOV EBP, ESP (89 E5) — no REX on x86
+    page.data[off + 2] = 0xE5;
+    page.data[off + 3] = 0x5D;             // POP EBP
+    page.data[off + 4] = 0xC3;             // RET
+#endif
 
     int call_count = 0;
 

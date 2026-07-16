@@ -1410,12 +1410,18 @@ namespace utility {
             }
         }
 
-        const auto total_size = (size_t)(max_vmend - min_vmaddr);
+        // Validate the extent in full 64-bit width BEFORE narrowing to size_t.
+        // On 32-bit builds size_t is 4 bytes, so casting first would truncate a
+        // >4GB extent (e.g. 0x100000010 -> 0x10) and silently pass this guard,
+        // then overflow the undersized allocation in the copy loop below.
+        const uint64_t virtual_extent = max_vmend - min_vmaddr;
 
-        if (total_size == 0 || total_size > 0x100000000ULL) { // sanity check: max 4GB
-            SPDLOG_ERROR("[Mach-O] Invalid virtual extent: 0x{:X}", total_size);
+        if (virtual_extent == 0 || virtual_extent > 0x100000000ULL) { // sanity check: max 4GB
+            SPDLOG_ERROR("[Mach-O] Invalid virtual extent: 0x{:X}", virtual_extent);
             return std::nullopt;
         }
+
+        const auto total_size = (size_t)virtual_extent;
 
         // Allocate memory for the mapped image
         auto* mapped_base = (uint8_t*)VirtualAlloc(nullptr, total_size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);

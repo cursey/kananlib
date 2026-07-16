@@ -24,7 +24,6 @@
 #include <utility/Benchmark.hpp>
 
 using namespace std;
-
 namespace undocumented {
     // https://learn.microsoft.com/en-us/cpp/build/exception-handling-x64?view=msvc-170
     union UNWIND_CODE {
@@ -1150,6 +1149,7 @@ namespace utility {
     std::optional<uintptr_t> scan_displacement_reference(uintptr_t start, size_t length, uintptr_t ptr, std::function<bool(uintptr_t)> filter) {
         KANANLIB_BENCH();
 
+#ifdef _WIN64
         return scan_relative_reference(start, length, ptr, [ptr, filter](uintptr_t candidate_addr) {
             const auto resolved = utility::resolve_instruction(candidate_addr);
 
@@ -1165,6 +1165,59 @@ namespace utility {
 
             return false;
         });
+#else
+        // On x86, strings are referenced via absolute imm32, not rel32.
+        // First try the rel32 scan (for any legacy cases), then fall back to
+        // scanning for absolute pointer values using scan_ptr.
+        {
+            const auto rel = scan_relative_reference(start, length, ptr, [ptr, filter](uintptr_t candidate_addr) {
+                const auto resolved = utility::resolve_instruction(candidate_addr);
+                if (resolved) {
+                    const auto displacement = utility::resolve_displacement(resolved->addr, &resolved->instrux);
+                    if (displacement && *displacement == ptr) {
+                        if (filter == nullptr || filter(candidate_addr)) {
+                            return true;
+                        }
+                    }
+                }
+                return false;
+            });
+            if (rel) {
+                return rel;
+            }
+        }
+
+        // A raw byte match can land in data (e.g. another string's tail
+        // bytes, an unrelated pointer table entry) that coincidentally
+        // shares the same 4 bytes as the target address. Validate every
+        // candidate by resolving it back to a real instruction whose
+        // displacement/immediate equals `ptr`, and keep searching past
+        // rejected candidates instead of accepting the first raw hit.
+        for (auto search_start = start; start + length > search_start && start + length - search_start >= sizeof(uintptr_t);) {
+            const auto remaining = (start + length) - search_start;
+            const auto absRef = scan_ptr_noalign(search_start, remaining, ptr);
+
+            if (!absRef) {
+                break;
+            }
+
+            const auto resolved = utility::resolve_instruction(*absRef);
+
+            if (resolved) {
+                const auto displacement = utility::resolve_displacement(resolved->addr, &resolved->instrux);
+
+                if (displacement && *displacement == ptr) {
+                    if (filter == nullptr || filter(*absRef)) {
+                        return absRef;
+                    }
+                }
+            }
+
+            search_start = *absRef + 1;
+        }
+
+        return std::nullopt;
+#endif
     }
     
     std::optional<uintptr_t> scan_opcode(uintptr_t ip, size_t num_instructions, uint8_t opcode) {
@@ -1172,7 +1225,7 @@ namespace utility {
 
         for (size_t i = 0; i < num_instructions; ++i) {
             INSTRUX ix{};
-            const auto status = NdDecodeEx(&ix, (uint8_t*)ip, 1000, ND_CODE_64, ND_DATA_64);
+            const auto status = NdDecodeEx(&ix, (uint8_t*)ip, 1000, KANANLIB_DECODE_MODE, KANANLIB_DECODE_DATA);
 
             if (!ND_SUCCESS(status)) {
                 break;
@@ -1193,7 +1246,7 @@ namespace utility {
 
         for (size_t i = 0; i < num_instructions; ++i) {
             INSTRUX ix{};
-            const auto status = NdDecodeEx(&ix, (uint8_t*)ip, 1000, ND_CODE_64, ND_DATA_64);
+            const auto status = NdDecodeEx(&ix, (uint8_t*)ip, 1000, KANANLIB_DECODE_MODE, KANANLIB_DECODE_DATA);
 
             if (!ND_SUCCESS(status)) {
                 break;
@@ -1214,7 +1267,7 @@ namespace utility {
 
         for (size_t i = 0; i < num_instructions; ++i) {
             INSTRUX ix{};
-            const auto status = NdDecodeEx(&ix, (uint8_t*)ip, 1000, ND_CODE_64, ND_DATA_64);
+            const auto status = NdDecodeEx(&ix, (uint8_t*)ip, 1000, KANANLIB_DECODE_MODE, KANANLIB_DECODE_DATA);
 
             if (!ND_SUCCESS(status)) {
                 break;
@@ -1232,7 +1285,7 @@ namespace utility {
 
     uint32_t get_insn_size(uintptr_t ip) {
         INSTRUX ix{};
-        const auto status = NdDecodeEx(&ix, (uint8_t*)ip, 1000, ND_CODE_64, ND_DATA_64);
+        const auto status = NdDecodeEx(&ix, (uint8_t*)ip, 1000, KANANLIB_DECODE_MODE, KANANLIB_DECODE_DATA);
 
         if (!ND_SUCCESS(status)) {
             return 0;
@@ -1249,7 +1302,7 @@ namespace utility {
 
     std::optional<INSTRUX> decode_one(uint8_t* ip, size_t max_size) {
         INSTRUX ix{};
-        const auto status = NdDecodeEx(&ix, ip, max_size, ND_CODE_64, ND_DATA_64);
+        const auto status = NdDecodeEx(&ix, ip, max_size, KANANLIB_DECODE_MODE, KANANLIB_DECODE_DATA);
 
         if (!ND_SUCCESS(status)) {
             return {};
@@ -1264,7 +1317,7 @@ namespace utility {
         ctx.addr = (uintptr_t)ip;
 
         for (size_t i = 0; i < max_size;) try {
-            const auto status = NdDecodeEx(&ctx.instrux, (uint8_t*)ctx.addr, 64, ND_CODE_64, ND_DATA_64);
+            const auto status = NdDecodeEx(&ctx.instrux, (uint8_t*)ctx.addr, 64, KANANLIB_DECODE_MODE, KANANLIB_DECODE_DATA);
 
             if (!ND_SUCCESS(status)) {
                 break;
@@ -1437,13 +1490,13 @@ namespace utility {
             // the CFG does not account for, but we can still linearly decode through it.
             if (highest_block_end < blocks.back().end) {
                 INSTRUX ix{};
-                const auto status = NdDecodeEx(&ix, (uint8_t*)highest_block_end, 16, ND_CODE_64, ND_DATA_64);
+                const auto status = NdDecodeEx(&ix, (uint8_t*)highest_block_end, 16, KANANLIB_DECODE_MODE, KANANLIB_DECODE_DATA);
 
                 if (ND_SUCCESS(status)) {
                     // If the disassembly is successful, we can assume it's a valid instruction
                     // and continue sliding the end forward until we hit an invalid instruction
                     while (true && num_decoded < 16) {
-                        const auto next_status = NdDecodeEx(&ix, (uint8_t*)highest_block_end + ix.Length, 16, ND_CODE_64, ND_DATA_64);
+                        const auto next_status = NdDecodeEx(&ix, (uint8_t*)highest_block_end + ix.Length, 16, KANANLIB_DECODE_MODE, KANANLIB_DECODE_DATA);
 
                         if (!ND_SUCCESS(next_status)) {
                             break;
@@ -1706,7 +1759,24 @@ namespace utility {
                 exec_regions.push_back(mbi);
             }
 
-            if ((mbi.Protect & PAGE_READONLY) || (mbi.Protect & PAGE_READWRITE) || (mbi.Protect & PAGE_WRITECOPY) || (mbi.Protect & PAGE_EXECUTE_READ) || (mbi.Protect & PAGE_EXECUTE_READWRITE) || (mbi.Protect & PAGE_EXECUTE_WRITECOPY)) {
+            // Deliberately excludes PAGE_READWRITE / PAGE_EXECUTE_READWRITE
+            // AND PAGE_WRITECOPY / PAGE_EXECUTE_WRITECOPY: this list feeds the
+            // function-pointer scan below, which assumes candidates come from
+            // immutable tables (vtables, function pointer arrays) that live in
+            // .rdata/.text, not mutable .data/.bss. Plain writable pages made
+            // the scan sensitive to runtime-only values (e.g. ASLR-seeded
+            // globals, cached heap pointers). Copy-on-write pages are
+            // WRITABLE-BUT-NOT-YET-WRITTEN: their content is only guaranteed
+            // to match the on-disk image until something (anywhere in the
+            // process, not necessarily this scan's caller) first writes to
+            // that page, at which point the OS materializes a private copy.
+            // Since test execution order determines what has already
+            // triggered a copy, PAGE_WRITECOPY content is execution-order-
+            // dependent -- keeping it reintroduces the exact same
+            // run-to-run non-determinism this restriction is meant to
+            // eliminate. Only PAGE_READONLY / PAGE_EXECUTE_READ pages are
+            // guaranteed immutable for the process lifetime.
+            if ((mbi.Protect & PAGE_READONLY) || (mbi.Protect & PAGE_EXECUTE_READ)) {
                 readable_regions.push_back(mbi);
             }
 
@@ -1825,7 +1895,7 @@ namespace utility {
             const auto absolute = module + rva;
 
             INSTRUX ix{};
-            const auto status = NdDecodeEx(&ix, (uint8_t*)absolute, 16, ND_CODE_64, ND_DATA_64);
+            const auto status = NdDecodeEx(&ix, (uint8_t*)absolute, 16, KANANLIB_DECODE_MODE, KANANLIB_DECODE_DATA);
 
             if (!ND_SUCCESS(status)) {
                 return true;
@@ -1859,14 +1929,108 @@ namespace utility {
 
         const auto function_starts_before = function_starts.size();
 
+        // Shared "compute one function's [start,end) via basic-block collection
+        // + connect-the-dots slide" logic, factored out so both the
+        // high-confidence pre-pass (below) and the final pass use
+        // byte-identical computation.
+        auto compute_function_end = [&](uint32_t start_rva, const std::unordered_set<uint32_t>& known_starts) -> uint32_t {
+            const auto start_absolute = module + start_rva;
+
+            const auto blocks = utility::collect_basic_blocks(start_absolute, BasicBlockCollectOptions{
+                .max_size = 100000, .sort = true, .merge_call_blocks = true, .copy_instructions = false
+            });
+
+            if (blocks.empty()) {
+                return start_rva + utility::get_insn_size(start_absolute); // fallback
+            }
+
+            // Find the highest basic block that is > than the start
+            // and is also reachable contiguously (cur.start == prev.end)
+            uintptr_t highest_block_end = blocks.begin()->end;
+
+            for (size_t bi = 1; bi < blocks.size(); ++bi) {
+                const auto& block = blocks[bi];
+
+                if (block.start != highest_block_end) {
+                    break;
+                }
+
+                highest_block_end = block.end;
+            }
+
+            if (highest_block_end > start_absolute) {
+                // Check if we can linearly connect the "highest" block we found to the
+                // highest block in the actual array of blocks.
+                // this should fix issues where we have dead instructions/padding somewhere
+                // the CFG does not account for, but we can still linearly decode through it.
+                if (highest_block_end < blocks.back().end) {
+                    INSTRUX ix{};
+                    const auto status = NdDecodeEx(&ix, (uint8_t*)highest_block_end, 16, KANANLIB_DECODE_MODE, KANANLIB_DECODE_DATA);
+
+                    if (ND_SUCCESS(status)) {
+                        size_t num_decoded = 0;
+                        while (num_decoded < 16) {
+                            const auto next_status = NdDecodeEx(&ix, (uint8_t*)highest_block_end + ix.Length, 16, KANANLIB_DECODE_MODE, KANANLIB_DECODE_DATA);
+
+                            if (!ND_SUCCESS(next_status)) {
+                                break;
+                            }
+
+                            highest_block_end += ix.Length;
+                            ++num_decoded;
+
+                            if (ix.Instruction == ND_INS_RETN || ix.Instruction == ND_INS_INT3 || ix.BranchInfo.IsBranch) {
+                                break;
+                            }
+
+                            if (known_starts.contains((uint32_t)(highest_block_end - module))) {
+                                break;
+                            }
+
+                            auto it = std::find_if(blocks.begin(), blocks.end(), [highest_block_end](const BasicBlock& b) {
+                                return highest_block_end >= b.start && highest_block_end < b.end;
+                            });
+
+                            if (it != blocks.end()) {
+                                highest_block_end = it->end;
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                return (uint32_t)(highest_block_end - module);
+            }
+
+            return start_rva + utility::get_insn_size(start_absolute); // fallback
+        };
+
+        // High-confidence bounds for the E8/sled-derived starts, computed
+        // BEFORE the pointer scan. The pointer scan below rejects any
+        // candidate that lands strictly inside one of these already-
+        // established function bodies. Without this, a cross-module absolute
+        // pointer living in .rdata (e.g. an import thunk or an exported-data
+        // pointer) that gets relocated by ASLR can coincidentally alias into
+        // THIS module's address range on some process launches but not
+        // others, producing a spurious mid-function "start" that truncates a
+        // real function's bucket -- a run-to-run non-deterministic failure
+        // that a decode-validity check alone cannot catch (the spurious
+        // bytes still decode as *some* instruction).
+        std::vector<std::pair<uint32_t, uint32_t>> high_confidence_intervals(function_starts_before);
+        concurrency::parallel_for(size_t(0), function_starts_before, [&](size_t i) {
+            high_confidence_intervals[i] = { function_starts[i], compute_function_end(function_starts[i], function_starts_set) };
+        });
+        // function_starts (and therefore high_confidence_intervals, built in the
+        // same index order) is already sorted ascending from the dedup above.
+
         // Walk readable regions and look for valid function pointers that aren't in our current list, and add them if they look like they could be valid function pointers (point to executable section, etc)
         for (const auto& region : readable_regions) {
             const auto region_start = (uintptr_t)region.BaseAddress;
             const auto region_size = region.RegionSize;
             const auto region_end = region_start + region_size;
 
-            for (auto addr = region_start; addr + 8 < region_end; addr += 8) {
-                const auto potential_fn_ptr = *(uint64_t*)addr;
+            for (auto addr = region_start; addr + sizeof(uintptr_t) < region_end; addr += sizeof(uintptr_t)) {
+                const auto potential_fn_ptr = *(uintptr_t*)addr;
 
                 // make sure aligned on sizeof(void*)
                 if ((addr & (sizeof(void*) - 1)) != 0) {
@@ -1887,7 +2051,23 @@ namespace utility {
                     });
 
                     if (it != exec_regions.end()) {
-                        function_starts.push_back((uint32_t)(potential_fn_ptr - module));
+                        const auto candidate_rva = (uint32_t)(potential_fn_ptr - module);
+
+                        // Reject candidates that fall strictly inside an
+                        // already-established (high-confidence) function body.
+                        auto ivit = std::upper_bound(high_confidence_intervals.begin(), high_confidence_intervals.end(),
+                            std::make_pair(candidate_rva, std::numeric_limits<uint32_t>::max()));
+                        bool inside_existing = false;
+                        if (ivit != high_confidence_intervals.begin()) {
+                            const auto& prev = *std::prev(ivit);
+                            if (prev.first <= candidate_rva && candidate_rva < prev.second) {
+                                inside_existing = true;
+                            }
+                        }
+
+                        if (!inside_existing) {
+                            function_starts.push_back(candidate_rva);
+                        }
                     }
                 }
             }
@@ -1896,6 +2076,43 @@ namespace utility {
         SPDLOG_INFO("Added {} new function starts from pointer scan in module {:x}", function_starts.size() - function_starts_before, module);
         std::sort(function_starts.begin(), function_starts.end());
         function_starts.erase(std::unique(function_starts.begin(), function_starts.end()), function_starts.end());
+
+        // The pointer-scan pass above appends candidates without running them
+        // through the disassembly/int3 validity filters applied to the E8/sled
+        // candidates. An invalid entry here (one that doesn't decode, e.g. a
+        // pointer into the middle of an instruction) makes the parallel_for
+        // below fall back to `start_rva + get_insn_size(...)`, and
+        // get_insn_size returns 0 on decode failure -- producing a zero-width
+        // [start, start) bucket that violates start < end for every caller of
+        // find_all_function_bounds / find_function_entry. Re-apply the same
+        // two filters to the merged list so every surviving entry is
+        // guaranteed to decode.
+        std::erase_if(function_starts, [module](uint32_t rva) {
+            const auto absolute = module + rva;
+
+            INSTRUX ix{};
+            const auto status = NdDecodeEx(&ix, (uint8_t*)absolute, 16, KANANLIB_DECODE_MODE, KANANLIB_DECODE_DATA);
+
+            if (!ND_SUCCESS(status)) {
+                return true;
+            }
+
+            if (*(uint8_t*)absolute == 0xCC || *(uint8_t*)absolute == 0x00) {
+                return true;
+            }
+
+            if (*(uint8_t*)absolute == 0xFF && (*(uint8_t*)(absolute + 1) == 0xFF)) {
+                return true;
+            }
+
+            return false;
+        });
+
+        // Rebuild the known-starts set to cover the full, final merged list
+        // (E8/sled + surviving pointer-scan entries) so the connect-the-dots
+        // slide below can correctly stop at ANY known function start, not
+        // just the phase-1 subset it was built from originally.
+        function_starts_set = std::unordered_set<uint32_t>(function_starts.begin(), function_starts.end());
 
         // Sort function starts by gap to next function (proxy for complexity)
         std::vector<size_t> indices(function_starts.size());
@@ -1908,12 +2125,6 @@ namespace utility {
             return gap_a > gap_b; // biggest first
         });
 
-        struct BlacklistEntry {
-            std::atomic<uintptr_t> start{0};
-            std::atomic<uintptr_t> end{0};
-        };
-        std::vector<BlacklistEntry> blacklisted(function_starts.size());
-
         std::vector<uint32_t> function_ends(function_starts.size(), 0); // Heuristically determined via basic block
         std::vector<uint8_t> functions_populated(function_starts.size(), 0);
         std::atomic<size_t> populated_count = 0;
@@ -1921,106 +2132,24 @@ namespace utility {
         concurrency::parallel_for(size_t(0), indices.size(), [&](size_t j) {
             const auto i = indices[j];
             const auto& start_rva = function_starts[i];
-            const auto start_absolute = module + start_rva;
 
             auto t0 = std::chrono::high_resolution_clock::now();
 
-            const auto blocks = utility::collect_basic_blocks(start_absolute, BasicBlockCollectOptions{ 
-                .max_size = 100000, .sort = true, .merge_call_blocks = true, .copy_instructions = false
-            });
+            function_ends[i] = compute_function_end(start_rva, function_starts_set);
 
             functions_populated[i] = 1;
 
             auto t1 = std::chrono::high_resolution_clock::now();
             auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count();
-            
+
             if (ms > 1000) {
                 const auto populated_pct = std::count(functions_populated.begin(), functions_populated.end(), 1) * 100 / functions_populated.size();
-                SPDLOG_WARN("collect_basic_blocks took {}ms for function at {:x} (progress: {}%)", ms, start_absolute, populated_pct);
+                SPDLOG_WARN("collect_basic_blocks took {}ms for function at {:x} (progress: {}%)", ms, module + start_rva, populated_pct);
             }
 
             size_t local_populated = ++populated_count;
             if ((local_populated % 1000) == 0 || local_populated == function_starts.size()) {
                 SPDLOG_INFO("Populated function buckets for {}/{} functions ({:.2f}%)", local_populated, function_starts.size(), local_populated * 100.0 / function_starts.size());
-            }
-
-            if (blocks.empty()) {
-                function_ends[i] = start_rva + utility::get_insn_size(start_absolute); // fallback
-                return;
-            }
-
-            // Find the highest basic block that is > than the start
-            // and is also reachable contiguously (cur.start == prev.end)
-            uintptr_t highest_block_end = blocks.begin()->end;
-
-            for (size_t i = 1; i < blocks.size(); ++i) {
-                const auto& block = blocks[i];
-
-                if (block.start != highest_block_end) {
-                    //SPDLOG_INFO("{} contiguous blocks found for function starting at {:x}", i, start_absolute);
-                    break;
-                }
-
-                highest_block_end = block.end;
-            }
-
-            if (highest_block_end > start_absolute) {
-                uintptr_t old_block_end = highest_block_end;
-                size_t num_decoded = 0;
-                // Check if we can linearly connect the "highest" block we found to the
-                // highest block in the actual array of blocks.
-                // this should fix issues where we have dead instructions/padding somewhere
-                // the CFG does not account for, but we can still linearly decode through it.
-                if (highest_block_end < blocks.back().end) {
-                    INSTRUX ix{};
-                    const auto status = NdDecodeEx(&ix, (uint8_t*)highest_block_end, 16, ND_CODE_64, ND_DATA_64);
-
-                    if (ND_SUCCESS(status)) {
-                        // If the disassembly is successful, we can assume it's a valid instruction
-                        // and continue sliding the end forward until we hit an invalid instruction
-                        while (true && num_decoded < 16) {
-                            const auto next_status = NdDecodeEx(&ix, (uint8_t*)highest_block_end + ix.Length, 16, ND_CODE_64, ND_DATA_64);
-
-                            if (!ND_SUCCESS(next_status)) {
-                                break;
-                            }
-
-                            highest_block_end += ix.Length;
-                            ++num_decoded;
-
-                            // If decoded instruction is:
-                            // ret, int3, jmp, or similar, we can assume it's the end of the function and stop sliding
-                            if (ix.Instruction == ND_INS_RETN || ix.Instruction == ND_INS_INT3 || ix.BranchInfo.IsBranch) {
-                                break;
-                            }
-
-                            // If instruction pointer lands on:
-                            // Any known function start,
-                            // a range within our known basic blocks
-                            // then we can assume it's the end of the function and stop sliding
-                            if (function_starts_set.contains((uint32_t)(highest_block_end - module))) {
-                                break;
-                            }
-
-                            auto it = std::find_if(blocks.begin(), blocks.end(), [highest_block_end](const BasicBlock& b) {
-                                return highest_block_end >= b.start && highest_block_end < b.end;
-                            });
-
-                            if (it != blocks.end()) {
-                                highest_block_end = it->end;
-                                break;
-                            }
-                        }
-                    }
-                }
-
-                //if (old_block_end != highest_block_end) {
-                    //SPDLOG_INFO("Slid function end from {:x} to {:x} for function starting at {:x} after decoding {} instructions", old_block_end, highest_block_end, start_absolute, num_decoded);
-                //}
-
-                function_ends[i] = highest_block_end - module;
-            } else {
-                function_ends[i] = start_rva + utility::get_insn_size(start_absolute); // fallback
             }
         });
 
@@ -2061,7 +2190,7 @@ namespace utility {
     void populate_function_buckets(uintptr_t module) {
         KANANLIB_BENCH();
 
-#ifdef _M_X86
+#ifdef _M_IX86
         return populate_function_buckets_heuristic(module);
 #else
 
@@ -2274,6 +2403,64 @@ namespace utility {
         if (entry) {
             SPDLOG_DEBUG("Found function start for {:x} at {:x}", middle, entry->BeginAddress);
             return (uintptr_t)entry->BeginAddress + (uintptr_t)utility::get_module_within(middle).value_or(nullptr);
+        }
+
+        // Fallback: the heuristic function-bucket scan is best-effort (unlike
+        // a real unwind table), and a neighboring entry can occasionally
+        // truncate the bucket that actually covers `middle` (e.g. a
+        // coincidental candidate landing inside a real function's body).
+        // Rather than chase every possible source of that noise, recover
+        // directly: find the nearest KNOWN function start at or before
+        // `middle`, then verify -- via a fresh disassembly independent of
+        // the possibly-stale cached bucket bounds -- that it actually
+        // reaches `middle` contiguously.
+        const auto module = utility::get_module_within(middle).value_or(nullptr);
+
+        if (module == nullptr) {
+            return std::nullopt;
+        }
+
+        populate_function_buckets((uintptr_t)module);
+
+        const auto middle_rva = middle - (uintptr_t)module;
+        std::vector<uint32_t> candidates;
+
+        {
+            std::shared_lock _{bucket_mtx};
+            auto it = module_buckets.find((uintptr_t)module);
+            if (it != module_buckets.end()) {
+                for (const auto& bucket : it->second) {
+                    if (bucket.start_range > middle_rva) {
+                        break;
+                    }
+
+                    for (const auto& e : bucket.entries) {
+                        if (e.BeginAddress <= middle_rva) {
+                            candidates.push_back(e.BeginAddress);
+                        }
+                    }
+                }
+            }
+        }
+
+        if (candidates.empty()) {
+            return std::nullopt;
+        }
+
+        // Try nearest-first. The nearest preceding start can itself be the
+        // spurious entry that truncated the real function's bucket, so a
+        // single-candidate check is not sufficient -- walk backward through
+        // a bounded number of preceding starts until one's fresh bounds
+        // actually contain `middle`.
+        std::sort(candidates.begin(), candidates.end(), std::greater<uint32_t>());
+
+        constexpr size_t MAX_FALLBACK_CANDIDATES = 8;
+        for (size_t i = 0; i < candidates.size() && i < MAX_FALLBACK_CANDIDATES; ++i) {
+            const auto candidate_bounds = determine_function_bounds((uintptr_t)module + candidates[i]);
+
+            if (candidate_bounds && middle >= candidate_bounds->start && middle < candidate_bounds->end) {
+                return candidate_bounds->start;
+            }
         }
 
         return std::nullopt;
@@ -2936,15 +3123,48 @@ namespace utility {
                 if (mem.HasDisp && mem.IsRipRel) {
                     return ip + ix->Length + (intptr_t)mem.Disp;
                 }
+#ifndef _WIN64
+                // On x86 there is no RIP-relative addressing; references use
+                // absolute [disp32] operands, so the displacement is the address.
+                if (mem.HasDisp && !mem.IsRipRel) {
+                    return (uintptr_t)mem.Disp;
+                }
+#endif
             } else if (operand.Type == ND_OP_OFFS) {
                 const auto& offs = operand.Info.RelativeOffset;
                 return ip + ix->Length + (intptr_t)offs.Rel;
             }
         }
 
+#ifndef _WIN64
+        // Handle immediate operands that encode absolute addresses. x86-only:
+        // MSVC frequently loads string/data addresses via push/mov imm32 with
+        // no RIP-relative equivalent. Bounds-check against a loaded module so
+        // small integer immediates (e.g. `add eax, 5`) aren't mistaken for
+        // addresses; this does not run on x64, where absolute imm32 pointers
+        // aren't how references are encoded and RIP-relative handling above
+        // already covers real references.
+        for (auto i = 0; i < ix->OperandsCount; ++i) {
+            const auto& operand = ix->Operands[i];
+            if (operand.Type == ND_OP_IMM) {
+                const auto imm = (uintptr_t)operand.Info.Immediate.Imm;
+                if (imm != 0 && utility::get_module_within(imm).has_value()) {
+                    return imm;
+                }
+            }
+        }
+#endif
+
         if (ix->HasDisp && ix->IsRipRelative) {
             return ip + ix->Length + ix->Displacement;
         }
+
+#ifndef _WIN64
+        // x86 absolute displacement embedded directly in the instruction.
+        if (ix->HasDisp && !ix->IsRipRelative) {
+            return (uintptr_t)ix->Displacement;
+        }
+#endif
 
         return std::nullopt;
     }

@@ -147,11 +147,25 @@ int test_find_function_start_unwind() {
     auto base = reinterpret_cast<uintptr_t>(&cov_bounds_caller);
     auto middle = base + 12;
     auto result = utility::find_function_start_unwind(middle);
+#if defined(_M_AMD64) || defined(__x86_64__)
+    // x64 PE images carry .pdata/RUNTIME_FUNCTION unwind tables that
+    // find_function_start_unwind walks; every function has an entry.
     TEST_ASSERT(result.has_value());
     TEST_ASSERT(*result <= middle);
     TEST_ASSERT(is_in_exe(*result));
     std::printf("  find_function_start_unwind(%p): -> %p\n",
            (void*)middle, (void*)*result);
+#else
+    // x86 PE images have no .pdata/RUNTIME_FUNCTION table (32-bit MSVC uses
+    // the FS:[0] SEH chain instead), so find_function_start_unwind's body is
+    // unconditionally compiled out there (see its own
+    // `#if defined(_M_AMD64) || defined(__x86_64__)` guard in Scan.cpp) and
+    // always returns nullopt. Assert that documented behavior instead of a
+    // resolved address.
+    TEST_ASSERT(!result.has_value());
+    std::printf("  find_function_start_unwind(%p): nullopt (expected on x86, no .pdata)\n",
+           (void*)middle);
+#endif
     return 0;
 }
 

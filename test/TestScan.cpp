@@ -290,20 +290,33 @@ int test_get_insn_size() {
     TEST_ASSERT(ret_size == 1);
     std::cout << "  RET size: " << ret_size << std::endl;
 
-    // Test on push rbp (1 byte) and 2-byte instruction
-    page.data[0x20] = 0x55; // push rbp — 1 byte
+    // Test on push ebp/rbp (1 byte) and a multi-byte MOV [reg+8],reg
+    // instruction. x64 encodes MOV [RSP+8],RCX with a REX.W prefix (5
+    // bytes total); x86 has no REX prefix, so MOV [ESP+8],ECX is 4 bytes.
+    page.data[0x20] = 0x55; // push ebp/rbp — 1 byte, identical on both archs
+#ifdef _WIN64
     page.data[0x21] = 0x48; // REX.W prefix
     page.data[0x22] = 0x89; // mov [rsp+8], rcx
     page.data[0x23] = 0x4C;
     page.data[0x24] = 0x24;
     page.data[0x25] = 0x08;
+#else
+    page.data[0x21] = 0x89; // mov [esp+8], ecx
+    page.data[0x22] = 0x4C;
+    page.data[0x23] = 0x24;
+    page.data[0x24] = 0x08;
+#endif
 
     const uint32_t push_size = utility::get_insn_size((uintptr_t)&page.data[0x20]);
     TEST_ASSERT(push_size == 1);
     std::cout << "  PUSH RBP size: " << push_size << std::endl;
 
     const uint32_t mov_rsp_size = utility::get_insn_size((uintptr_t)&page.data[0x21]);
+#ifdef _WIN64
     TEST_ASSERT(mov_rsp_size == 5); // 48 89 4C 24 08 = 5 bytes
+#else
+    TEST_ASSERT(mov_rsp_size == 4); // 89 4C 24 08 = 4 bytes (no REX on x86)
+#endif
     std::cout << "  MOV [RSP+8], RCX size: " << mov_rsp_size << std::endl;
 
     return 0;

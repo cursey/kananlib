@@ -34,6 +34,18 @@ namespace utility::testing {
 #endif
 
 namespace utility {
+    // Decode mode used for bddisasm calls: x64 processes run in 64-bit code/
+    // data mode, x86 in 32-bit mode. Mixing these (e.g. always decoding in
+    // 64-bit mode on an x86 target) corrupts instruction lengths/operand
+    // kinds for encodings that differ between the two modes.
+#ifdef _WIN64
+    constexpr auto KANANLIB_DECODE_MODE = ND_CODE_64;
+    constexpr auto KANANLIB_DECODE_DATA = ND_DATA_64;
+#else
+    constexpr auto KANANLIB_DECODE_MODE = ND_CODE_32;
+    constexpr auto KANANLIB_DECODE_DATA = ND_DATA_32;
+#endif
+
     std::optional<uintptr_t> scan(const std::string& module, const std::string& pattern);
     std::optional<uintptr_t> scan(const std::wstring& module, const std::string& pattern);
     std::optional<uintptr_t> scan(const std::string& module, uintptr_t start, const std::string& pattern);
@@ -211,7 +223,7 @@ namespace utility {
                     break;
                 }
 #endif
-                const auto status = NdDecodeEx(&ctx.instrux, ip, 64, ND_CODE_64, ND_DATA_64);
+                const auto status = NdDecodeEx(&ctx.instrux, ip, 64, KANANLIB_DECODE_MODE, KANANLIB_DECODE_DATA);
 
                 if (!ND_SUCCESS(status)) {
                     break;

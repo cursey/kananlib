@@ -45,7 +45,11 @@ ShemuContext::ShemuContext(uintptr_t base, size_t buffer_size, size_t stack_size
     ctx->Registers.RegCr0 = 0x0000000080050031;
     ctx->Registers.RegCr4 = 0x0000000000170678;
 
+#ifdef _WIN64
     ctx->Mode = ND_CODE_64;
+#else
+    ctx->Mode = ND_CODE_32;
+#endif
     ctx->Ring = 3;
     ctx->TibBase = ctx->Mode == ND_CODE_32 ? ctx->Segments.Fs.Base : ctx->Segments.Gs.Base;
     ctx->MaxInstructionsCount = 4096;
