@@ -2003,16 +2003,13 @@ namespace utility {
 
             auto t0 = std::chrono::high_resolution_clock::now();
 
-            // x86 caps exploration at max_size 8192 (matching determine_function_bounds).
-            // exhaustive_decode allocates a per-thread seen table sized from max_size;
-            // at 100000 that is ~96 MiB of TLS tables per worker on x86 (calloc'd
-            // slots + dirty indices, 4-byte pointers/size_t). Under parallel_for the
-            // workers together exhaust the 32-bit address space, calloc fails,
-            // exhaustive_decode aborts before decoding, and collect_basic_blocks
-            // yields only a zero-length [start,start] block -> a bogus ~1-byte end.
-            // Retain the existing x64 limit.
+            // exhaustive_decode's seen table (detail::SeenSet) now grows on demand,
+            // so its per-thread footprint tracks the function's actual instruction
+            // count rather than max_size. That removed the earlier x86 32-bit
+            // address-space blowup (which forced an 8192 cap here), so x86 can now
+            // use the same exploration budget as x64.
             const auto blocks = utility::collect_basic_blocks(start_absolute, BasicBlockCollectOptions{ 
-                .max_size = KANANLIB_ARCH_X86_32 ? 8192 : 100000, .sort = true, .merge_call_blocks = true, .copy_instructions = false
+                .max_size = 100000, .sort = true, .merge_call_blocks = true, .copy_instructions = false
             });
 
             functions_populated[i] = 1;

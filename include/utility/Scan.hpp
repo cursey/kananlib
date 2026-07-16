@@ -136,61 +136,173 @@ namespace utility {
     // Forward declaration needed by the template below
     std::optional<uintptr_t> resolve_displacement(uintptr_t ip, const INSTRUX* instrux_in);
 
-    // Thread-local reusable hash table for exhaustive_decode.
-    // Allocated once per thread, grows as needed, never freed until thread exit.
-    struct TlsSeenTable {
-        uint8_t** slots = nullptr;   // hash table slots (power-of-2 sized)
-        size_t* dirty = nullptr;     // indices of occupied slots for fast cleanup
-        size_t capacity = 0;         // current slot count (always power of 2)
-        size_t capacity_bits = 0;    // log2(capacity)
-        ~TlsSeenTable() { free(slots); free(dirty); }
-    };
+    namespace detail {
+        // Grow-on-demand open-addressing address set for exhaustive_decode.
+        // Thread-local and reused across calls; grow-only (never shrinks) so its
+        // footprint tracks the largest function a thread actually decodes, not the
+        // worst-case max_size. Internal implementation detail exposed only for unit
+        // testing; not a supported API. nullptr is the empty-slot sentinel and is
+        // never a valid key.
+        struct SeenSet {
+            uint8_t** slots = nullptr;   // power-of-two sized
+            size_t* dirty = nullptr;     // occupied-slot indices for O(occupied) cleanup
+            size_t cap = 0;              // slot count (power of two; 0 = unallocated)
+            size_t bits = 0;             // log2(cap)
+            size_t count = 0;            // live entries
+            size_t dirty_count = 0;
+            bool oomed = false;          // latched when a grow() allocation fails
+
+            SeenSet() = default;
+            SeenSet(const SeenSet&) = delete;
+            SeenSet& operator=(const SeenSet&) = delete;
+            ~SeenSet() { free(slots); free(dirty); }
+
+            static constexpr uint64_t kFib = 11400714819323198485ULL;
+            size_t hash(uint8_t* p) const { return (size_t)(((uint64_t)(uintptr_t)p * kFib) >> (64 - bits)); }
+
+            // Ensure at least `initial` slots (grow-only) and clear membership for a
+            // fresh decode. Returns false only if no table could be allocated.
+            bool begin(size_t initial) {
+                oomed = false;                              // clear latch for a fresh decode
+                size_t want_bits = 4;                       // minimum 16 slots
+                while ((size_t{1} << want_bits) < initial) ++want_bits;
+                const size_t want = size_t{1} << want_bits;
+                if (want > cap) {
+                    uint8_t** ns = (uint8_t**)calloc(want, sizeof(uint8_t*));
+                    size_t* nd = (size_t*)malloc((want / 2) * sizeof(size_t));
+                    if (!ns || !nd) { free(ns); free(nd); if (cap != 0) { clear(); return true; } return false; }
+                    free(slots); free(dirty);
+                    slots = ns; dirty = nd; cap = want; bits = want_bits;
+                }
+                clear();
+                return true;
+            }
+
+            bool contains(uint8_t* p) const {
+                if (cap == 0 || p == nullptr) return false;
+                const size_t mask = cap - 1;
+                for (size_t si = hash(p);; si = (si + 1) & mask) {
+                    if (slots[si] == p) return true;
+                    if (slots[si] == nullptr) return false;
+                }
+            }
+
+            enum class Insert { Inserted, Present, Full, Oom };
+
+            // Insert p unless present. `budget` caps live entries; `max_cap` caps
+            // growth. nullptr is treated as present (never stored).
+            Insert insert_if_absent(uint8_t* p, size_t budget, size_t max_cap) {
+                if (p == nullptr) return Insert::Present;
+                size_t mask = cap - 1;
+                size_t si = hash(p);
+                for (;; si = (si + 1) & mask) {
+                    if (slots[si] == p) return Insert::Present;
+                    if (slots[si] == nullptr) break;
+                }
+                if (count >= budget) return Insert::Full;
+                if (count >= (cap >> 1)) {              // load factor 0.5 -> grow
+                    if (cap >= max_cap) return Insert::Full;
+                    if (oomed || !grow()) { oomed = true; return Insert::Oom; } // latch: never retry a failed calloc
+                    mask = cap - 1;
+                    for (si = hash(p); slots[si] != nullptr; si = (si + 1) & mask) {}
+                }
+                slots[si] = p;
+                dirty[dirty_count++] = si;
+                ++count;
+                return Insert::Inserted;
+            }
+
+            // Clear membership; retains capacity for reuse.
+            void clear() {
+                if (cap == 0) return;
+                if (dirty_count > cap / 8) {
+                    memset(slots, 0, cap * sizeof(uint8_t*));
+                } else {
+                    for (size_t i = 0; i < dirty_count; ++i) slots[dirty[i]] = nullptr;
+                }
+                count = 0; dirty_count = 0;
+            }
+
+        private:
+            // Double capacity and rehash live entries via the dirty list.
+            bool grow() {
+                const size_t nc = cap << 1;
+                const size_t nb = bits + 1;
+                uint8_t** ns = (uint8_t**)calloc(nc, sizeof(uint8_t*));
+                size_t* nd = (size_t*)malloc((nc / 2) * sizeof(size_t));
+                if (!ns || !nd) { free(ns); free(nd); return false; }
+                const size_t nmask = nc - 1;
+                size_t ndc = 0;
+                for (size_t d = 0; d < dirty_count; ++d) {
+                    uint8_t* q = slots[dirty[d]];
+                    size_t si = (size_t)(((uint64_t)(uintptr_t)q * kFib) >> (64 - nb));
+                    for (; ns[si] != nullptr; si = (si + 1) & nmask) {}
+                    ns[si] = q; nd[ndc++] = si;
+                }
+                free(slots); free(dirty);
+                slots = ns; dirty = nd; cap = nc; bits = nb; dirty_count = ndc;
+                return true;
+            }
+        };
+    }
 
     template<typename F>
     void exhaustive_decode(uint8_t* start, size_t max_size, F&& callback) {
         KANANLIB_BENCH();
         SPDLOG_DEBUG("Running exhaustive_decode on {:x}", (uintptr_t)start);
 
-        // Flat open-addressing hash set for seen addresses.
-        // Thread-local buffer avoids heap alloc/free on every call.
-        // Dirty list avoids zeroing the whole table — only used slots are cleared.
-        const size_t table_capacity = std::max<size_t>(65536, max_size * 64);
-        size_t table_bits = 4; // minimum 16 slots
-        while ((size_t{1} << table_bits) < table_capacity * 2) ++table_bits; // load factor <= 0.5
-        const size_t needed = size_t{1} << table_bits;
-
-        thread_local TlsSeenTable tls{};
-        if (needed > tls.capacity) {
-            free(tls.slots);
-            free(tls.dirty);
-            tls.slots = (uint8_t**)calloc(needed, sizeof(uint8_t*));
-            tls.dirty = (size_t*)malloc((needed / 2) * sizeof(size_t));
-            if (!tls.slots || !tls.dirty) {
-                free(tls.slots); free(tls.dirty);
-                tls.slots = nullptr; tls.dirty = nullptr;
-                tls.capacity = 0; tls.capacity_bits = 0;
-                return;
-            }
-            tls.capacity = needed;
-            tls.capacity_bits = table_bits;
+        // Per-call growth target from max_size (saturating next-power-of-two so a
+        // huge/malformed max_size can't wrap the multiply nor drive the shift to the
+        // size_t width -- both UB).
+        constexpr size_t kMaxBits = sizeof(size_t) * 8 - 1;
+        size_t budget_bits = 4;
+        {
+            const size_t budget_cap = (max_size > (SIZE_MAX / 64)) ? SIZE_MAX
+                                       : std::max<size_t>(65536, max_size * 64);
+            const size_t target = (budget_cap > (SIZE_MAX / 2)) ? SIZE_MAX : budget_cap * 2;
+            while (budget_bits < kMaxBits && (size_t{1} << budget_bits) < target) ++budget_bits;
         }
-        // Use the (possibly larger) TLS table directly
-        auto* seen_table = tls.slots;
-        auto* dirty_slots = tls.dirty;
-        size_t dirty_count = 0;
-        const size_t table_size = tls.capacity;
-        const size_t table_mask = table_size - 1;
-        const size_t tls_bits = tls.capacity_bits;
-        constexpr uint64_t fib_mult = 11400714819323198485ULL;
-        #define SEEN_HASH(p) ((size_t)((uint64_t)(uintptr_t)(p) * fib_mult >> (64 - tls_bits)))
+        const size_t call_ceiling = size_t{1} << budget_bits;
+
+        // Preserve the old work ceiling for all representable inputs. Previously
+        // max_seen derived from the thread's grow-only table (tls.capacity / 2), so a
+        // thread that once ran a large max_size kept that larger ceiling for later
+        // calls. Reproduce that coupling with a thread-local high-water -- but keep it
+        // independent of the (now small, grow-on-demand) table, so table memory
+        // tracks actual usage while the work bound is unchanged for any max_size the
+        // old code didn't overflow on (the new saturating math only differs for
+        // pathological/overflowing max_size, which the old code left as UB).
+        thread_local size_t g_seen_ceiling = 0;
+        if (call_ceiling > g_seen_ceiling) g_seen_ceiling = call_ceiling;
+        const size_t max_cap = g_seen_ceiling;          // table growth ceiling (== old tls.capacity high-water)
+        const size_t seen_budget = max_cap / 2;         // == old max_seen
+        // (Note: no separate branch-work ceiling is needed. Every enqueue below is
+        // preceded by decoding a branch instruction -- hence a seen insert -- so
+        // branches.size() <= 1 + seen.count, and the outer loop stops once
+        // seen.count reaches seen_budget. The work is bounded by seen_budget alone.)
+
+        // Grow-on-demand seen set: start small so the footprint tracks the largest
+        // function a thread actually decodes, growing up to max_cap only if needed.
+        constexpr size_t kInitialSlots = 4096;
+        thread_local detail::SeenSet seen{};
+        if (!seen.begin(kInitialSlots < max_cap ? kInitialSlots : max_cap)) {
+            return; // could not allocate even the initial table
+        }
 
         thread_local std::vector<uint8_t*> branches{};
         branches.clear();
         branches.push_back(start);
 
+        // total_branches_seen is CFG bookkeeping that drives ctx.branch_start for
+        // direct-jump redirects; kept paired with an actual enqueue below, as before.
         uint32_t total_branches_seen = 0;
-        size_t total_seen_count = 0;
-        const size_t max_seen = table_size / 2; // never exceed 50% load factor
+
+        // Enqueue a branch target. Centralized so total_branches_seen stays paired
+        // with an actual enqueue (unchanged from the original inline sites).
+        auto try_enqueue = [&](uint8_t* target) {
+            branches.push_back(target);
+            ++total_branches_seen;
+        };
 
         auto decode_branch = [&](uint8_t* ip) {
             const auto branch_start = (uintptr_t)ip;
@@ -199,23 +311,11 @@ namespace utility {
             ctx.branch_start = branch_start;
 
             for (size_t i = 0; i < max_size; ++i) {
-                // Inline seen_contains
-                {
-                    bool already_seen = false;
-                    for (size_t si = SEEN_HASH(ip);; si = (si + 1) & table_mask) {
-                        if (seen_table[si] == ip) { already_seen = true; break; }
-                        if (seen_table[si] == nullptr) break;
-                    }
-                    if (already_seen) break;
-                }
-                // Table full — stop decoding to prevent infinite probe loops
-                if (total_seen_count >= max_seen) {
+                // Single-probe check-and-insert. Stops this path when the address
+                // was already decoded (Present), the work budget is hit (Full), or
+                // the table could not grow (Oom). Grows the table on demand.
+                if (seen.insert_if_absent(ip, seen_budget, max_cap) != detail::SeenSet::Insert::Inserted) {
                     break;
-                }
-                // Inline seen_insert (track dirty slots for cleanup)
-                for (size_t si = SEEN_HASH(ip);; si = (si + 1) & table_mask) {
-                    if (seen_table[si] == nullptr) { seen_table[si] = ip; dirty_slots[dirty_count++] = si; ++total_seen_count; break; }
-                    if (seen_table[si] == ip) break;
                 }
 
                 // This instead of IsBadReadPtr so we don't branch into kernel32 every time
@@ -277,8 +377,7 @@ namespace utility {
 
                         if (ctx.resolved_target != 0) {
                             if (result != ExhaustionResult::STEP_OVER) {
-                                branches.push_back((uint8_t*)ctx.resolved_target);
-                                ++total_branches_seen;
+                                try_enqueue((uint8_t*)ctx.resolved_target);
                             }
                         } else {
                             SPDLOG_ERROR("Failed to resolve displacement for {:x}", (uintptr_t)ip);
@@ -301,8 +400,7 @@ namespace utility {
                             }
                         } else if (result != ExhaustionResult::STEP_OVER) {
                             if (ctx.resolved_target != 0) {
-                                branches.push_back((uint8_t*)ctx.resolved_target);
-                                ++total_branches_seen;
+                                try_enqueue((uint8_t*)ctx.resolved_target);
                             } else {
                                 SPDLOG_ERROR("Failed to resolve displacement for {:x}", (uintptr_t)ip);
                                 SPDLOG_ERROR(" TODO: Fix this");
@@ -337,8 +435,7 @@ namespace utility {
                         const auto real_dest = *(uintptr_t*)dest;
 
                         if (real_dest != 0 && real_dest != (uintptr_t)ip && !IsBadReadPtr((void*)real_dest, sizeof(void*)) && result != ExhaustionResult::STEP_OVER) {
-                            branches.push_back((uint8_t*)real_dest);
-                            ++total_branches_seen;
+                            try_enqueue((uint8_t*)real_dest);
                             SPDLOG_DEBUG("Indirect call destination: {:x}", (uintptr_t)real_dest);
                         }
                     }
@@ -356,19 +453,12 @@ namespace utility {
             }
         };
 
-        for (size_t branch_idx = 0; branch_idx < branches.size() && total_seen_count < max_seen; ++branch_idx) {
+        for (size_t branch_idx = 0; branch_idx < branches.size() && seen.count < seen_budget && !seen.oomed; ++branch_idx) {
             decode_branch(branches[branch_idx]);
         }
 
         // Dirty list is faster for sparse usage; memset is faster when heavily filled
-        if (dirty_count > table_size / 8) {
-            memset(seen_table, 0, table_size * sizeof(uint8_t*));
-        } else {
-            for (size_t i = 0; i < dirty_count; ++i) {
-                seen_table[dirty_slots[i]] = nullptr;
-            }
-        }
-        #undef SEEN_HASH
+        seen.clear();
     }
 
     void linear_decode(uint8_t* ip, size_t max_size, std::function<bool(ExhaustionContext&)> callback);
