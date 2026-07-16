@@ -342,17 +342,19 @@ int test_loop_correctness(uintptr_t addr) {
     STRESS_ASSERT(blocks.size() >= 2);
     STRESS_ASSERT(blocks.front().start == addr);
 
-    // Check for back-edge: a branch target that lands within the block's own
-    // [start, end) range indicates control flow moving backward relative to
-    // the branching instruction (which sits near the block's end) -- i.e. a
-    // loop. Using `target < b.end` (rather than `target <= b.start`) also
-    // correctly detects a back-edge whose target sits partway into the block
-    // rather than exactly at its start: compilers sometimes emit alignment
-    // padding (e.g. a multi-byte NOP) between a block's start and the actual
-    // loop-body entry the back-edge jumps to, and collect_basic_blocks does
-    // not split a new block there since nothing branches to the padding
-    // itself -- the padding and loop body remain one block, with the
-    // back-edge target landing inside it rather than at its literal start.
+    // Check for a back-edge (loop): a branch whose target moves control flow
+    // backward -- landing before its own terminating branch. `target < b.end`
+    // is the correct, architecture-neutral predicate here, not merely a loose
+    // one: collect_basic_blocks ends a block at its terminating branch, omits
+    // call targets from `branches`, and stores a conditional's fallthrough as a
+    // target equal to b.end -- so `< b.end` excludes fallthrough and forward
+    // edges and matches exactly the backward targets. It also catches a target
+    // landing *inside* a block: MSVC can emit alignment padding between a
+    // block's start and the loop-body entry the back-edge jumps to, and since
+    // nothing branches to the padding the padding+body stay one block, so the
+    // target sits past b.start. The stricter `target <= b.start` misses that
+    // interior case -- empirically it fails on the x86 fixture while passing on
+    // x64 -- so it is wrong, not safer.
     bool found_back_edge = false;
     for (const auto& b : blocks) {
         for (auto target : b.branches) {
