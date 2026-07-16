@@ -1149,7 +1149,7 @@ namespace utility {
     std::optional<uintptr_t> scan_displacement_reference(uintptr_t start, size_t length, uintptr_t ptr, std::function<bool(uintptr_t)> filter) {
         KANANLIB_BENCH();
 
-#ifdef _WIN64
+#if !KANANLIB_ARCH_X86_32
         return scan_relative_reference(start, length, ptr, [ptr, filter](uintptr_t candidate_addr) {
             const auto resolved = utility::resolve_instruction(candidate_addr);
 
@@ -3123,10 +3123,14 @@ namespace utility {
                 if (mem.HasDisp && mem.IsRipRel) {
                     return ip + ix->Length + (intptr_t)mem.Disp;
                 }
-#ifndef _WIN64
+#if KANANLIB_ARCH_X86_32
                 // On x86 there is no RIP-relative addressing; references use
-                // absolute [disp32] operands, so the displacement is the address.
-                if (mem.HasDisp && !mem.IsRipRel) {
+                // absolute [disp32] operands, so the displacement is the
+                // address. Only a *pure* absolute [disp32] (no base/index
+                // register) is an address -- a displacement with a base/index
+                // (e.g. [ebp-4], [eax+8]) is a frame/struct offset, not a
+                // pointer, and must not be reported as a resolved reference.
+                if (mem.HasDisp && !mem.IsRipRel && !mem.HasBase && !mem.HasIndex) {
                     return (uintptr_t)mem.Disp;
                 }
 #endif
@@ -3136,7 +3140,7 @@ namespace utility {
             }
         }
 
-#ifndef _WIN64
+#if KANANLIB_ARCH_X86_32
         // Handle immediate operands that encode absolute addresses. x86-only:
         // MSVC frequently loads string/data addresses via push/mov imm32 with
         // no RIP-relative equivalent. Bounds-check against a loaded module so
@@ -3158,13 +3162,6 @@ namespace utility {
         if (ix->HasDisp && ix->IsRipRelative) {
             return ip + ix->Length + ix->Displacement;
         }
-
-#ifndef _WIN64
-        // x86 absolute displacement embedded directly in the instruction.
-        if (ix->HasDisp && !ix->IsRipRelative) {
-            return (uintptr_t)ix->Displacement;
-        }
-#endif
 
         return std::nullopt;
     }

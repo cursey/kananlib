@@ -34,16 +34,26 @@ namespace utility::testing {
 #endif
 
 namespace utility {
+    // KANANLIB_ARCH_X86_32 is 1 when building for 32-bit x86 (MSVC _M_IX86 or
+    // GCC/Clang __i386__), 0 otherwise (i.e. x64 on any OS). Do NOT use _WIN64
+    // for this: _WIN64 is undefined on non-Windows 64-bit targets (e.g. Linux
+    // x64), which would wrongly select the 32-bit path there and mis-decode.
+#if defined(_M_IX86) || defined(__i386__)
+#define KANANLIB_ARCH_X86_32 1
+#else
+#define KANANLIB_ARCH_X86_32 0
+#endif
+
     // Decode mode used for bddisasm calls: x64 processes run in 64-bit code/
     // data mode, x86 in 32-bit mode. Mixing these (e.g. always decoding in
     // 64-bit mode on an x86 target) corrupts instruction lengths/operand
     // kinds for encodings that differ between the two modes.
-#ifdef _WIN64
-    constexpr auto KANANLIB_DECODE_MODE = ND_CODE_64;
-    constexpr auto KANANLIB_DECODE_DATA = ND_DATA_64;
-#else
+#if KANANLIB_ARCH_X86_32
     constexpr auto KANANLIB_DECODE_MODE = ND_CODE_32;
     constexpr auto KANANLIB_DECODE_DATA = ND_DATA_32;
+#else
+    constexpr auto KANANLIB_DECODE_MODE = ND_CODE_64;
+    constexpr auto KANANLIB_DECODE_DATA = ND_DATA_64;
 #endif
 
     std::optional<uintptr_t> scan(const std::string& module, const std::string& pattern);

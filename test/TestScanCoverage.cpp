@@ -447,7 +447,7 @@ int test_resolve_displacement_lea_rip() {
     memset(page.data, 0xCC, page.size);
 
     const size_t off = 0x100;
-#ifdef _WIN64
+#if !KANANLIB_ARCH_X86_32
     // Place: LEA RAX, [RIP+0x10] = 48 8D 05 10 00 00 00 (7 bytes)
     page.data[off + 0] = 0x48;
     page.data[off + 1] = 0x8D;
@@ -528,7 +528,7 @@ int test_collect_unicode_string_refs_finds_wide() {
 
     // LEA reg, [target] at 0x100 referencing page+0x200, then RET.
     const size_t off = 0x100;
-#ifdef _WIN64
+#if !KANANLIB_ARCH_X86_32
     // x64: LEA RAX, [RIP+disp] — RIP-relative, disp computed from next IP.
     const int32_t disp = (int32_t)(0x200 - (off + 7));
     page.data[off + 0] = 0x48;
@@ -600,7 +600,7 @@ int test_linear_decode_simple() {
     // Place: PUSH EBP/RBP; MOV EBP/RBP,ESP/RSP; POP EBP/RBP; RET
     const size_t off = 0x100;
     page.data[off + 0] = 0x55;             // PUSH EBP/RBP — identical on both archs
-#ifdef _WIN64
+#if !KANANLIB_ARCH_X86_32
     page.data[off + 1] = 0x48;             // MOV RBP, RSP (48 89 E5)
     page.data[off + 2] = 0x89;
     page.data[off + 3] = 0xE5;

@@ -294,7 +294,7 @@ int test_get_insn_size() {
     // instruction. x64 encodes MOV [RSP+8],RCX with a REX.W prefix (5
     // bytes total); x86 has no REX prefix, so MOV [ESP+8],ECX is 4 bytes.
     page.data[0x20] = 0x55; // push ebp/rbp — 1 byte, identical on both archs
-#ifdef _WIN64
+#if !KANANLIB_ARCH_X86_32
     page.data[0x21] = 0x48; // REX.W prefix
     page.data[0x22] = 0x89; // mov [rsp+8], rcx
     page.data[0x23] = 0x4C;
@@ -312,7 +312,7 @@ int test_get_insn_size() {
     std::cout << "  PUSH RBP size: " << push_size << std::endl;
 
     const uint32_t mov_rsp_size = utility::get_insn_size((uintptr_t)&page.data[0x21]);
-#ifdef _WIN64
+#if !KANANLIB_ARCH_X86_32
     TEST_ASSERT(mov_rsp_size == 5); // 48 89 4C 24 08 = 5 bytes
 #else
     TEST_ASSERT(mov_rsp_size == 4); // 89 4C 24 08 = 4 bytes (no REX on x86)
