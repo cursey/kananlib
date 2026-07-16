@@ -1496,7 +1496,7 @@ namespace utility {
                     // If the disassembly is successful, we can assume it's a valid instruction
                     // and continue sliding the end forward until we hit an invalid instruction
                     while (true && num_decoded < 16) {
-                        const auto next_status = NdDecodeEx(&ix, (uint8_t*)highest_block_end + ix.Length, 16, KANANLIB_DECODE_MODE, KANANLIB_DECODE_DATA);
+                        const auto next_status = NdDecodeEx(&ix, (uint8_t*)highest_block_end, 16, KANANLIB_DECODE_MODE, KANANLIB_DECODE_DATA);
 
                         if (!ND_SUCCESS(next_status)) {
                             break;
@@ -1970,7 +1970,7 @@ namespace utility {
                     if (ND_SUCCESS(status)) {
                         size_t num_decoded = 0;
                         while (num_decoded < 16) {
-                            const auto next_status = NdDecodeEx(&ix, (uint8_t*)highest_block_end + ix.Length, 16, KANANLIB_DECODE_MODE, KANANLIB_DECODE_DATA);
+                            const auto next_status = NdDecodeEx(&ix, (uint8_t*)highest_block_end, 16, KANANLIB_DECODE_MODE, KANANLIB_DECODE_DATA);
 
                             if (!ND_SUCCESS(next_status)) {
                                 break;
@@ -2029,7 +2029,7 @@ namespace utility {
             const auto region_size = region.RegionSize;
             const auto region_end = region_start + region_size;
 
-            for (auto addr = region_start; addr + sizeof(uintptr_t) < region_end; addr += sizeof(uintptr_t)) {
+            for (auto addr = region_start; addr + sizeof(uintptr_t) <= region_end; addr += sizeof(uintptr_t)) {
                 const auto potential_fn_ptr = *(uintptr_t*)addr;
 
                 // make sure aligned on sizeof(void*)
