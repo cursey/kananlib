@@ -287,101 +287,75 @@ namespace utility {
         return {};
     }
 
-    optional<uintptr_t> scan_ptr(HMODULE module, uintptr_t ptr) {
-        KANANLIB_BENCH();
-        const auto context = get_analysis_context(module);
-        if (!context) {
-            return std::nullopt;
-        }
-        return scan_ptr(
-            (uintptr_t)module, context->image_size, ptr, *context);
-    }
-
-    std::optional<uintptr_t> scan_ptr(
-        uintptr_t start, size_t length, uintptr_t ptr, TargetArch arch) {
-        return scan_ptr(start, length, ptr, AnalysisContext::raw(arch));
-    }
-
-    std::optional<uintptr_t> scan_ptr(
-        uintptr_t start, size_t length, uintptr_t ptr,
-        const AnalysisContext& context) {
-        KANANLIB_BENCH();
-        if (start == 0 || length < context.pointer_width() ||
-            length > std::numeric_limits<uintptr_t>::max() - start) {
-            return std::nullopt;
-        }
-        const auto stored = context.host_address_to_stored(ptr);
-        if (!stored) {
-            return std::nullopt;
-        }
-
-        const auto scan_typed = [&]<typename T>() -> std::optional<uintptr_t> {
-            if (*stored > std::numeric_limits<T>::max()) {
-                return std::nullopt;
-            }
-            auto* it = reinterpret_cast<T*>(start);
-            auto* const end = reinterpret_cast<T*>(
-                start + (length / sizeof(T)) * sizeof(T));
-            const auto value = (T)*stored;
+    namespace {
+        // Aligned search for a `value` of the target's pointer width. The
+        // try/catch skips unreadable pages exactly as the original scan_ptr did.
+        template<typename T>
+        std::optional<uintptr_t> scan_value_aligned(uintptr_t start, size_t length, T value) {
+            auto end = (T*)(start + length);
+            auto it = (T*)start;
             while (it < end) try {
                 it = std::find(it, end, value);
                 if (it != end) {
                     return (uintptr_t)it;
                 }
-                break;
-            } catch (...) {
+                ++it;
+            } catch(...) {
                 MEMORY_BASIC_INFORMATION mbi{};
                 if (VirtualQuery(it, &mbi, sizeof(mbi)) != 0) {
-                    const auto next =
-                        (uintptr_t)mbi.BaseAddress + mbi.RegionSize;
-                    it = reinterpret_cast<T*>(
-                        next > (uintptr_t)it ? next : (uintptr_t)(it + 1));
+                    it = (T*)((uintptr_t)mbi.BaseAddress + mbi.RegionSize);
                 } else {
                     ++it;
                 }
+                continue;
             }
             return std::nullopt;
-        };
+        }
+    }
 
-        return context.arch == TargetArch::X86
-            ? scan_typed.template operator()<uint32_t>()
-            : scan_typed.template operator()<uint64_t>();
+    optional<uintptr_t> scan_ptr(HMODULE module, uintptr_t ptr) {
+        KANANLIB_BENCH();
+
+        const auto module_size = get_module_size(module).value_or(0);
+        return scan_ptr((uintptr_t)module, module_size, ptr, get_module_arch(module));
+    }
+
+    std::optional<uintptr_t> scan_ptr(uintptr_t start, size_t length, uintptr_t ptr, TargetArch arch) {
+        KANANLIB_BENCH();
+
+        if (start == 0 || length == 0) {
+            return {};
+        }
+
+        // A 32-bit target stores 4-byte pointers; an address that does not fit in
+        // 4 bytes cannot appear in it.
+        if (arch == TargetArch::X86) {
+            if (ptr > 0xFFFFFFFFull) {
+                return std::nullopt;
+            }
+            return scan_value_aligned<uint32_t>(start, length, (uint32_t)ptr);
+        }
+        return scan_value_aligned<uint64_t>(start, length, (uint64_t)ptr);
     }
 
     std::optional<uintptr_t> scan_ptr_noalign(HMODULE module, uintptr_t ptr) {
         KANANLIB_BENCH();
-        const auto context = get_analysis_context(module);
-        if (!context) {
-            return std::nullopt;
-        }
-        return scan_ptr_noalign(
-            (uintptr_t)module, context->image_size, ptr, *context);
+
+        const auto module_size = get_module_size(module).value_or(0);
+        return scan_ptr_noalign((uintptr_t)module, module_size, ptr, get_module_arch(module));
     }
 
-    std::optional<uintptr_t> scan_ptr_noalign(
-        uintptr_t start, size_t length, uintptr_t ptr, TargetArch arch) {
-        return scan_ptr_noalign(
-            start, length, ptr, AnalysisContext::raw(arch));
-    }
-
-    std::optional<uintptr_t> scan_ptr_noalign(
-        uintptr_t start, size_t length, uintptr_t ptr,
-        const AnalysisContext& context) {
+    std::optional<uintptr_t> scan_ptr_noalign(uintptr_t start, size_t length, uintptr_t ptr, TargetArch arch) {
         KANANLIB_BENCH();
-        const auto stored = context.host_address_to_stored(ptr);
-        if (!stored) {
-            return std::nullopt;
+
+        if (arch == TargetArch::X86) {
+            if (ptr > 0xFFFFFFFFull) {
+                return std::nullopt;
+            }
+            const uint32_t value = (uint32_t)ptr;
+            return utility::scan_data(start, length, (uint8_t*)&value, sizeof(value));
         }
-        if (context.arch == TargetArch::X86) {
-            const auto value = (uint32_t)*stored;
-            return scan_data(
-                start, length, reinterpret_cast<const uint8_t*>(&value),
-                sizeof(value));
-        }
-        const auto value = (uint64_t)*stored;
-        return scan_data(
-            start, length, reinterpret_cast<const uint8_t*>(&value),
-            sizeof(value));
+        return utility::scan_data(start, length, (uint8_t*)&ptr, sizeof(uintptr_t));
     }
 
     optional<uintptr_t> scan_string(HMODULE module, const string& str, bool zero_terminated) {
@@ -1243,88 +1217,78 @@ namespace utility {
 #endif
     }
     
-    std::optional<uintptr_t> scan_opcode(
-        uintptr_t ip, size_t num_instructions, uint8_t opcode,
-        TargetArch arch) {
-        return scan_opcode(
-            ip, num_instructions, opcode, AnalysisContext::raw(arch));
-    }
-
-    std::optional<uintptr_t> scan_opcode(
-        uintptr_t ip, size_t num_instructions, uint8_t opcode,
-        const AnalysisContext& context) {
+    std::optional<uintptr_t> scan_opcode(uintptr_t ip, size_t num_instructions, uint8_t opcode, TargetArch arch) {
         KANANLIB_BENCH();
+
         for (size_t i = 0; i < num_instructions; ++i) {
-            const auto decoded = decode_one((uint8_t*)ip, 1000, context);
-            if (!decoded) {
+            INSTRUX ix{};
+            const auto status = NdDecodeEx(&ix, (uint8_t*)ip, 1000, decode_mode(arch), decode_data(arch));
+
+            if (!ND_SUCCESS(status)) {
                 break;
             }
-            if (decoded->PrimaryOpCode == opcode) {
+
+            if (ix.PrimaryOpCode == opcode) {
                 return ip;
             }
-            ip += decoded->Length;
+
+            ip += ix.Length;
         }
+
         return std::nullopt;
     }
 
-    std::optional<uintptr_t> scan_disasm(
-        uintptr_t ip, size_t num_instructions, const string& pattern,
-        TargetArch arch) {
-        return scan_disasm(
-            ip, num_instructions, pattern, AnalysisContext::raw(arch));
-    }
-
-    std::optional<uintptr_t> scan_disasm(
-        uintptr_t ip, size_t num_instructions, const string& pattern,
-        const AnalysisContext& context) {
+    std::optional<uintptr_t> scan_disasm(uintptr_t ip, size_t num_instructions, const string& pattern, TargetArch arch) {
         KANANLIB_BENCH();
+
         for (size_t i = 0; i < num_instructions; ++i) {
-            const auto decoded = decode_one((uint8_t*)ip, 1000, context);
-            if (!decoded) {
+            INSTRUX ix{};
+            const auto status = NdDecodeEx(&ix, (uint8_t*)ip, 1000, decode_mode(arch), decode_data(arch));
+
+            if (!ND_SUCCESS(status)) {
                 break;
             }
-            if (auto result = scan(ip, decoded->Length, pattern);
-                result && *result == ip) {
+
+            if (auto result = scan(ip, ix.Length, pattern); result && *result == ip) {
                 return ip;
             }
-            ip += decoded->Length;
+
+            ip += ix.Length;
         }
+
         return std::nullopt;
     }
 
-    std::optional<uintptr_t> scan_mnemonic(
-        uintptr_t ip, size_t num_instructions, const string& mnemonic,
-        TargetArch arch) {
-        return scan_mnemonic(
-            ip, num_instructions, mnemonic, AnalysisContext::raw(arch));
-    }
-
-    std::optional<uintptr_t> scan_mnemonic(
-        uintptr_t ip, size_t num_instructions, const string& mnemonic,
-        const AnalysisContext& context) {
+    std::optional<uintptr_t> scan_mnemonic(uintptr_t ip, size_t num_instructions, const string& mnemonic, TargetArch arch) {
         KANANLIB_BENCH();
+
         for (size_t i = 0; i < num_instructions; ++i) {
-            const auto decoded = decode_one((uint8_t*)ip, 1000, context);
-            if (!decoded) {
+            INSTRUX ix{};
+            const auto status = NdDecodeEx(&ix, (uint8_t*)ip, 1000, decode_mode(arch), decode_data(arch));
+
+            if (!ND_SUCCESS(status)) {
                 break;
             }
-            if (std::string_view{decoded->Mnemonic} == mnemonic) {
+
+            if (std::string_view{ix.Mnemonic} == mnemonic) {
                 return ip;
             }
-            ip += decoded->Length;
+
+            ip += ix.Length;
         }
+
         return std::nullopt;
     }
 
     uint32_t get_insn_size(uintptr_t ip, TargetArch arch) {
-        return get_insn_size(ip, AnalysisContext::raw(arch));
-    }
-
-    uint32_t get_insn_size(uintptr_t ip, const AnalysisContext& context) {
         INSTRUX ix{};
-        const auto status = NdDecodeEx(
-            &ix, (uint8_t*)ip, 1000, decode_mode(context.arch), decode_data(context.arch));
-        return ND_SUCCESS(status) ? ix.Length : 0;
+        const auto status = NdDecodeEx(&ix, (uint8_t*)ip, 1000, decode_mode(arch), decode_data(arch));
+
+        if (!ND_SUCCESS(status)) {
+            return 0;
+        }
+
+        return ix.Length;
     }
 
     uintptr_t calculate_absolute(uintptr_t address, uint8_t customOffset /*= 4*/) {
@@ -1334,34 +1298,23 @@ namespace utility {
     }
 
     std::optional<INSTRUX> decode_one(uint8_t* ip, size_t max_size, TargetArch arch) {
-        return decode_one(ip, max_size, AnalysisContext::raw(arch));
-    }
-
-    std::optional<INSTRUX> decode_one(
-        uint8_t* ip, size_t max_size, const AnalysisContext& context) {
         INSTRUX ix{};
-        const auto status = NdDecodeEx(
-            &ix, ip, max_size, decode_mode(context.arch), decode_data(context.arch));
-        return ND_SUCCESS(status) ? std::optional<INSTRUX>{ix} : std::nullopt;
+        const auto status = NdDecodeEx(&ix, ip, max_size, decode_mode(arch), decode_data(arch));
+
+        if (!ND_SUCCESS(status)) {
+            return {};
+        }
+
+        return ix;
     }
 
-    void linear_decode(
-        uint8_t* ip, size_t max_size,
-        std::function<bool(ExhaustionContext&)> callback, TargetArch arch) {
-        linear_decode(ip, max_size, std::move(callback), AnalysisContext::raw(arch));
-    }
-
-    void linear_decode(
-        uint8_t* ip, size_t max_size,
-        std::function<bool(ExhaustionContext&)> callback, const AnalysisContext& context) {
+    void linear_decode(uint8_t* ip, size_t max_size, std::function<bool(ExhaustionContext&)> callback, TargetArch arch) {
         ExhaustionContext ctx{};
         ctx.branch_start = (uintptr_t)ip;
         ctx.addr = (uintptr_t)ip;
 
         for (size_t i = 0; i < max_size;) try {
-            const auto status = NdDecodeEx(
-                &ctx.instrux, (uint8_t*)ctx.addr, 64,
-                decode_mode(context.arch), decode_data(context.arch));
+            const auto status = NdDecodeEx(&ctx.instrux, (uint8_t*)ctx.addr, 64, decode_mode(arch), decode_data(arch));
 
             if (!ND_SUCCESS(status)) {
                 break;
@@ -1381,15 +1334,7 @@ namespace utility {
         }
     }
 
-    void collect_basic_blocks_into(
-        uintptr_t start, const BasicBlockCollectOptions& options,
-        std::vector<BasicBlock>& blocks, TargetArch arch) {
-        collect_basic_blocks_into(start, options, blocks, AnalysisContext::raw(arch));
-    }
-
-    void collect_basic_blocks_into(
-        uintptr_t start, const BasicBlockCollectOptions& options,
-        std::vector<BasicBlock>& blocks, const AnalysisContext& context) {
+    void collect_basic_blocks_into(uintptr_t start, const BasicBlockCollectOptions& options, std::vector<BasicBlock>& blocks, TargetArch arch) {
         uintptr_t previous_branch_start = start;
 
         BasicBlock last_block{};
@@ -1461,7 +1406,7 @@ namespace utility {
             }
 
             return ExhaustionResult::CONTINUE;
-        }, context);
+        }, arch);
 
         // Emit the last block if it differs from the one we last emitted (can happen
         // if the final instruction is a ret/int3/etc).
@@ -1506,28 +1451,13 @@ namespace utility {
         }
     }
 
-    std::vector<BasicBlock> collect_basic_blocks(
-        uintptr_t start, const BasicBlockCollectOptions& options, TargetArch arch) {
-        return collect_basic_blocks(start, options, AnalysisContext::raw(arch));
-    }
-
-    std::vector<BasicBlock> collect_basic_blocks(
-        uintptr_t start, const BasicBlockCollectOptions& options,
-        const AnalysisContext& context) {
+    std::vector<BasicBlock> collect_basic_blocks(uintptr_t start, const BasicBlockCollectOptions& options, TargetArch arch) {
         std::vector<BasicBlock> blocks{};
-        collect_basic_blocks_into(start, options, blocks, context);
+        collect_basic_blocks_into(start, options, blocks, arch);
         return blocks;
     }
 
-    std::vector<BasicBlock>::const_iterator get_highest_contiguous_block(
-        const std::vector<BasicBlock>& blocks, TargetArch arch) {
-        return get_highest_contiguous_block(
-            blocks, AnalysisContext::raw(arch));
-    }
-
-    std::vector<BasicBlock>::const_iterator get_highest_contiguous_block(
-        const std::vector<BasicBlock>& blocks,
-        const AnalysisContext& context) {
+    std::vector<BasicBlock>::const_iterator get_highest_contiguous_block(const std::vector<BasicBlock>& blocks, TargetArch arch) {
         if (blocks.empty()) {
             return blocks.end();
         }
@@ -1557,17 +1487,13 @@ namespace utility {
             // the CFG does not account for, but we can still linearly decode through it.
             if (highest_block_end < blocks.back().end) {
                 INSTRUX ix{};
-                const auto status = NdDecodeEx(
-                    &ix, (uint8_t*)highest_block_end, 16,
-                    decode_mode(context.arch), decode_data(context.arch));
+                const auto status = NdDecodeEx(&ix, (uint8_t*)highest_block_end, 16, decode_mode(arch), decode_data(arch));
 
                 if (ND_SUCCESS(status)) {
                     // If the disassembly is successful, we can assume it's a valid instruction
                     // and continue sliding the end forward until we hit an invalid instruction
                     while (true && num_decoded < 16) {
-                        const auto next_status = NdDecodeEx(
-                            &ix, (uint8_t*)highest_block_end + ix.Length, 16,
-                            decode_mode(context.arch), decode_data(context.arch));
+                        const auto next_status = NdDecodeEx(&ix, (uint8_t*)highest_block_end + ix.Length, 16, decode_mode(arch), decode_data(arch));
 
                         if (!ND_SUCCESS(next_status)) {
                             break;
@@ -1790,23 +1716,18 @@ namespace utility {
     }
 
     namespace detail {
-        void remove_undecodable_starts(
-            std::vector<uint32_t>& starts, uintptr_t module, TargetArch arch) {
+        void remove_undecodable_starts(std::vector<uint32_t>& starts, uintptr_t module, TargetArch arch) {
             std::erase_if(starts, [module, arch](uint32_t rva) {
-                return utility::get_insn_size(module + rva, arch) == 0;
+                INSTRUX ix{};
+                const auto status = NdDecodeEx(&ix, (uint8_t*)(module + rva), 16, decode_mode(arch), decode_data(arch));
+                return !ND_SUCCESS(status);
             });
         }
     }
 
-    void populate_function_buckets_heuristic(uintptr_t module, TargetArch arch) {
-        const auto registered = get_analysis_context((HMODULE)module);
-        populate_function_buckets_heuristic(
-            module, registered ? *registered : AnalysisContext::raw(arch));
-    }
-
-    void populate_function_buckets_heuristic(
-        uintptr_t module, const AnalysisContext& context) {
+    void populate_function_buckets_heuristic(uintptr_t module) {
         KANANLIB_BENCH();
+        const auto arch = get_module_arch((HMODULE)module);
 
         const auto module_size = utility::get_module_size((HMODULE)module).value_or(0xDEADBEEF);
         const auto module_end = module + module_size;
@@ -1961,13 +1882,11 @@ namespace utility {
 
         // Quickly disassemble to make sure they look like function starts
         // Remove any that don't
-        std::erase_if(function_starts, [module, &context](uint32_t rva) {
+        std::erase_if(function_starts, [module, arch](uint32_t rva) {
             const auto absolute = module + rva;
 
             INSTRUX ix{};
-            const auto status = NdDecodeEx(
-                &ix, (uint8_t*)absolute, 16,
-                decode_mode(context.arch), decode_data(context.arch));
+            const auto status = NdDecodeEx(&ix, (uint8_t*)absolute, 16, decode_mode(arch), decode_data(arch));
 
             if (!ND_SUCCESS(status)) {
                 return true;
@@ -2007,15 +1926,13 @@ namespace utility {
             const auto region_size = region.RegionSize;
             const auto region_end = region_start + region_size;
 
-            const auto stride = context.pointer_width();
-            for (auto addr = region_start; addr + stride <= region_end; addr += stride) {
-                const uint64_t stored_fn =
-                    stride == sizeof(uint32_t) ? *(uint32_t*)addr : *(uint64_t*)addr;
-                const auto translated = context.stored_address_to_host(stored_fn);
-                const auto potential_fn_ptr = translated.value_or(0);
+            const auto ptr_width = pointer_width(arch);
+            for (auto addr = region_start; addr + ptr_width < region_end; addr += ptr_width) {
+                const uintptr_t potential_fn_ptr =
+                    ptr_width == 4 ? (uintptr_t)*(uint32_t*)addr : (uintptr_t)*(uint64_t*)addr;
 
-                // The loop starts and advances at the target pointer width.
-                if ((addr & (stride - 1)) != 0) {
+                // make sure aligned on the target pointer width
+                if ((addr & (ptr_width - 1)) != 0) {
                     continue;
                 }
 
@@ -2043,12 +1960,14 @@ namespace utility {
         std::sort(function_starts.begin(), function_starts.end());
         function_starts.erase(std::unique(function_starts.begin(), function_starts.end()), function_starts.end());
 
-        if (context.arch == TargetArch::X86) {
-            // Pointer-scan candidates bypass the earlier decode check. x86 data
-            // has enough dense 32-bit values that false executable pointers are
-            // common; reject candidates that do not begin a valid x86 instruction.
-            detail::remove_undecodable_starts(
-                function_starts, module, context.arch);
+        // The readable-region pointer scan above appends candidates that bypass
+        // the earlier decode check. For a 32-bit target a value that merely
+        // happens to point into an executable region need not sit on an
+        // instruction boundary; when it fails to decode, the heuristic end
+        // becomes a degenerate zero-width bucket entry. Drop such candidates.
+        // Only needed for x86 targets; x64 behavior is unchanged.
+        if (arch == TargetArch::X86) {
+            detail::remove_undecodable_starts(function_starts, module, arch);
         }
 
         // Sort function starts by gap to next function (proxy for complexity)
@@ -2084,13 +2003,9 @@ namespace utility {
             // count rather than max_size. That removed the earlier x86 32-bit
             // address-space blowup (which forced an 8192 cap here), so x86 can now
             // use the same exploration budget as x64.
-            const auto blocks = utility::collect_basic_blocks(
-                start_absolute,
-                BasicBlockCollectOptions{
-                    .max_size = 100000, .sort = true,
-                    .merge_call_blocks = true, .copy_instructions = false
-                },
-                context);
+            const auto blocks = utility::collect_basic_blocks(start_absolute, BasicBlockCollectOptions{ 
+                .max_size = 100000, .sort = true, .merge_call_blocks = true, .copy_instructions = false
+            }, arch);
 
             functions_populated[i] = 1;
 
@@ -2108,8 +2023,7 @@ namespace utility {
             }
 
             if (blocks.empty()) {
-                function_ends[i] =
-                    start_rva + utility::get_insn_size(start_absolute, context);
+                function_ends[i] = start_rva + utility::get_insn_size(start_absolute, arch); // fallback
                 return;
             }
 
@@ -2137,17 +2051,13 @@ namespace utility {
                 // the CFG does not account for, but we can still linearly decode through it.
                 if (highest_block_end < blocks.back().end) {
                     INSTRUX ix{};
-                    const auto status = NdDecodeEx(
-                        &ix, (uint8_t*)highest_block_end, 16,
-                        decode_mode(context.arch), decode_data(context.arch));
+                    const auto status = NdDecodeEx(&ix, (uint8_t*)highest_block_end, 16, decode_mode(arch), decode_data(arch));
 
                     if (ND_SUCCESS(status)) {
                         // If the disassembly is successful, we can assume it's a valid instruction
                         // and continue sliding the end forward until we hit an invalid instruction
                         while (true && num_decoded < 16) {
-                            const auto next_status = NdDecodeEx(
-                                &ix, (uint8_t*)highest_block_end + ix.Length, 16,
-                                decode_mode(context.arch), decode_data(context.arch));
+                            const auto next_status = NdDecodeEx(&ix, (uint8_t*)highest_block_end + ix.Length, 16, decode_mode(arch), decode_data(arch));
 
                             if (!ND_SUCCESS(next_status)) {
                                 break;
@@ -2188,8 +2098,7 @@ namespace utility {
 
                 function_ends[i] = highest_block_end - module;
             } else {
-                function_ends[i] =
-                    start_rva + utility::get_insn_size(start_absolute, context);
+                function_ends[i] = start_rva + utility::get_insn_size(start_absolute, arch); // fallback
             }
         });
 
@@ -2227,13 +2136,19 @@ namespace utility {
         return;
     }
 
-    void populate_function_buckets(
-        uintptr_t module, const AnalysisContext& context) {
+    void populate_function_buckets(uintptr_t module) {
         KANANLIB_BENCH();
 
-        if (context.arch == TargetArch::X86) {
-            return populate_function_buckets_heuristic(module, context);
+        // A mapped 32-bit target uses SEH, not .pdata, so it has no usable
+        // exception directory; fall back to the heuristic scan for it. Native
+        // x64 modules keep using the exception directory below.
+        if (get_module_arch((HMODULE)module) == TargetArch::X86) {
+            return populate_function_buckets_heuristic(module);
         }
+
+#if KANANLIB_ARCH_X86_32
+        return populate_function_buckets_heuristic(module);
+#else
 
         const auto module_size = utility::get_module_size((HMODULE)module).value_or(0xDEADBEEF);
         const auto module_end = module + module_size;
@@ -2260,12 +2175,12 @@ namespace utility {
         // Non-PE modules (e.g. Mach-O) fall back to heuristic scanning.
         const auto dos_header = (PIMAGE_DOS_HEADER)module;
         if (dos_header->e_magic != IMAGE_DOS_SIGNATURE) {
-            return populate_function_buckets_heuristic(module, context);
+            return populate_function_buckets_heuristic(module);
         }
 
         const auto nt_header = (PIMAGE_NT_HEADERS)((uintptr_t)dos_header + dos_header->e_lfanew);
         if (nt_header->Signature != IMAGE_NT_SIGNATURE) {
-            return populate_function_buckets_heuristic(module, context);
+            return populate_function_buckets_heuristic(module);
         }
 
         // This function abuses the fact that most non-obfuscated binaries have
@@ -2314,6 +2229,7 @@ namespace utility {
                 }
             );
         }
+#endif
     }
 
     std::optional<Bucket::IMAGE_RUNTIME_FUNCTION_ENTRY_KANANLIB> find_function_entry(uintptr_t middle) {
@@ -2325,11 +2241,7 @@ namespace utility {
             return {};
         }
 
-        const auto context = get_analysis_context((HMODULE)module);
-        if (!context) {
-            return std::nullopt;
-        }
-        populate_function_buckets(module, *context);
+        populate_function_buckets(module);
 
         const auto middle_rva = middle - module;
 
@@ -2398,11 +2310,7 @@ namespace utility {
     }
 
     std::vector<FunctionBounds> find_all_function_bounds(HMODULE module) {
-        const auto context = get_analysis_context(module);
-        if (!context) {
-            return {};
-        }
-        populate_function_buckets((uintptr_t)module, *context);
+        populate_function_buckets((uintptr_t)module);
         
         std::vector<FunctionBounds> functions{};
 
@@ -2426,30 +2334,23 @@ namespace utility {
     }
 
     std::optional<FunctionBounds> determine_function_bounds(uintptr_t addr) {
-        const auto module = utility::get_module_within(addr);
-        const auto registered =
-            module ? utility::get_analysis_context(*module) : std::nullopt;
-        const auto context =
-            registered.value_or(AnalysisContext::raw());
-        const auto blocks = utility::collect_basic_blocks(
-            addr,
-            BasicBlockCollectOptions{
-                .max_size = 8192, .sort = true,
-                .merge_call_blocks = true, .copy_instructions = false
-            },
-            context);
+        const auto arch = get_module_arch(get_module_within(addr).value_or(nullptr));
+        const auto blocks = utility::collect_basic_blocks(addr, BasicBlockCollectOptions{ .max_size = 8192, .sort = true, .merge_call_blocks = true, .copy_instructions = false }, arch);
+
         if (blocks.empty()) {
             return std::nullopt;
         }
 
-        const auto it = get_highest_contiguous_block(blocks, context);
+        auto it = get_highest_contiguous_block(blocks, arch);
+
         if (it == blocks.end()) {
             return std::nullopt;
         }
+
         return FunctionBounds{
             .start = blocks.front().start,
             .end = it->end,
-            .instruction_count = 1,
+            .instruction_count = 1
         };
     }
 
@@ -3099,17 +3000,14 @@ namespace utility {
         return result;
     }
 
-    std::optional<uintptr_t> resolve_displacement(
-        uintptr_t ip, const INSTRUX* ix_in, TargetArch arch) {
-        return resolve_displacement(ip, ix_in, AnalysisContext::raw(arch));
-    }
-
-    std::optional<uintptr_t> resolve_displacement(
-        uintptr_t ip, const INSTRUX* ix_in, const AnalysisContext& context) {
+    std::optional<uintptr_t> resolve_displacement(uintptr_t ip, const INSTRUX* ix_in, TargetArch arch) {
         INSTRUX ix_local{};
-        const INSTRUX* ix = ix_in;
-        if (!ix) {
-            const auto decoded = decode_one((uint8_t*)ip, 1000, context);
+        const INSTRUX* ix;
+        
+        if (ix_in) {
+            ix = ix_in;
+        } else {
+            auto decoded = decode_one((uint8_t*)ip, 1000, arch);
             if (!decoded) {
                 return std::nullopt;
             }
@@ -3117,19 +3015,21 @@ namespace utility {
             ix = &ix_local;
         }
 
-        for (uint32_t i = 0; i < ix->OperandsCount; ++i) {
+        for (auto i = 0; i < ix->OperandsCount; ++i) {
             const auto& operand = ix->Operands[i];
             if (operand.Type == ND_OP_MEM) {
                 const auto& mem = operand.Info.Memory;
                 if (mem.HasDisp && mem.IsRipRel) {
                     return ip + ix->Length + (intptr_t)mem.Disp;
                 }
-                if (context.arch == TargetArch::X86 && mem.HasDisp &&
-                    !mem.IsRipRel && !mem.HasBase && !mem.HasIndex && !ix->HasSeg) {
-                    const auto stored = (uint32_t)mem.Disp;
-                    return context.mapped_image
-                        ? context.stored_address_to_host(stored)
-                        : std::optional<uintptr_t>{(uintptr_t)stored};
+                // On x86 there is no RIP-relative addressing; references use
+                // absolute [disp32] operands. Require a pure displacement --
+                // no base/index register and no segment override -- so that
+                // frame/stack-relative ([ebp-4]) and segment-relative
+                // (fs:[0x18]) operands are NOT mistaken for absolute addresses.
+                if (arch == TargetArch::X86 && mem.HasDisp && !mem.IsRipRel
+                        && !mem.HasBase && !mem.HasIndex && !ix->HasSeg) {
+                    return (uintptr_t)mem.Disp;
                 }
             } else if (operand.Type == ND_OP_OFFS) {
                 const auto& offs = operand.Info.RelativeOffset;
@@ -3137,24 +3037,21 @@ namespace utility {
             }
         }
 
-        if (context.arch == TargetArch::X86) {
-            // x86 uses absolute imm32 for many string/data references. For a
-            // mapped image the context's exact relocation mode validates and
-            // translates it. Raw buffers preserve the historical loaded-module
-            // bounds check so small integer immediates are not returned.
-            for (uint32_t i = 0; i < ix->OperandsCount; ++i) {
+        // Handle immediate operands that encode absolute addresses. x86-only:
+        // MSVC frequently loads string/data addresses via push/mov imm32 with
+        // no RIP-relative equivalent. Bounds-check against a loaded module so
+        // small integer immediates (e.g. `add eax, 5`) aren't mistaken for
+        // addresses; this does not apply on x64, where absolute imm32 pointers
+        // aren't how references are encoded and RIP-relative handling above
+        // already covers real references.
+        if (arch == TargetArch::X86) {
+            for (auto i = 0; i < ix->OperandsCount; ++i) {
                 const auto& operand = ix->Operands[i];
-                if (operand.Type != ND_OP_IMM) {
-                    continue;
-                }
-                const auto stored = (uint32_t)operand.Info.Immediate.Imm;
-                if (stored == 0) {
-                    continue;
-                }
-                const auto candidate = context.stored_address_to_host(stored);
-                if (candidate && (context.mapped_image ||
-                                  utility::get_module_within(*candidate).has_value())) {
-                    return candidate;
+                if (operand.Type == ND_OP_IMM) {
+                    const auto imm = (uintptr_t)operand.Info.Immediate.Imm;
+                    if (imm != 0 && utility::get_module_within(imm).has_value()) {
+                        return imm;
+                    }
                 }
             }
         }
@@ -3162,6 +3059,7 @@ namespace utility {
         if (ix->HasDisp && ix->IsRipRelative) {
             return ip + ix->Length + ix->Displacement;
         }
+
         return std::nullopt;
     }
 

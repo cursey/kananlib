@@ -369,21 +369,6 @@ int test_map_view_of_pe() {
     auto nt = (PIMAGE_NT_HEADERS)((uintptr_t)dos + dos->e_lfanew);
     TEST_ASSERT(nt->Signature == IMAGE_NT_SIGNATURE);
 
-    // SEC_IMAGE may share pages relocated for another view, so stored pointers
-    // can use an ImageBase distinct from both the file preference and this view.
-    const auto context = utility::get_analysis_context(mapped->module);
-    TEST_ASSERT(context.has_value());
-    TEST_ASSERT(context->stored_image_base ==
-                (uint64_t)nt->OptionalHeader.ImageBase);
-    const auto stored_base =
-        context->host_address_to_stored((uintptr_t)mapped->module);
-    TEST_ASSERT(stored_base.has_value());
-    TEST_ASSERT(*stored_base == context->stored_image_base);
-    const auto translated_base =
-        context->stored_address_to_host(context->stored_image_base);
-    TEST_ASSERT(translated_base.has_value());
-    TEST_ASSERT(*translated_base == (uintptr_t)mapped->module);
-
     // get_module_size should work on the mapped module.
     auto size = utility::get_module_size(mapped->module);
     TEST_ASSERT(size.has_value());

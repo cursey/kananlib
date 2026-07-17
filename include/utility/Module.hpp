@@ -8,7 +8,6 @@
 #include <string_view>
 #include <functional>
 #include <unordered_map>
-#include <limits>
 
 #include <windows.h>
 #include <winternl.h>
@@ -23,8 +22,11 @@ struct _LDR_DATA_TABLE_ENTRY;
 typedef NTSTATUS (WINAPI* PFN_LdrLockLoaderLock)(ULONG Flags, ULONG *State, ULONG_PTR *Cookie);
 typedef NTSTATUS (WINAPI* PFN_LdrUnlockLoaderLock)(ULONG Flags, ULONG_PTR Cookie);
 
-
 namespace utility {
+    // Target architecture of an analyzed module. Almost always the host
+    // architecture, but a 64-bit process can map and analyze a 32-bit PE
+    // (see map_view_of_pe), in which case decode/scan must use the target's
+    // instruction mode and pointer width rather than the host's.
     enum class TargetArch : uint8_t {
         X86,
         X64,
@@ -38,40 +40,20 @@ namespace utility {
 #endif
     }
 
-    // Describes how target addresses embedded in an analyzed image relate to
-    // addresses in this process. A context is resolved once per top-level
-    // operation and passed through decode/scan loops.
-    struct AnalysisContext {
-        TargetArch arch{host_arch()};
-        uintptr_t host_base{};
-        uint64_t preferred_image_base{};
-        uint64_t stored_image_base{};
-        size_t image_size{};
-        bool mapped_image{};
-        bool relocations_applied{};
+    constexpr size_t pointer_width(TargetArch arch) noexcept {
+        return arch == TargetArch::X86 ? 4 : 8;
+    }
 
-        static constexpr AnalysisContext raw(TargetArch target = host_arch()) noexcept {
-            return AnalysisContext{target};
-        }
+    // Architecture of a mapped/loaded module, detected from its PE optional
+    // header magic. Falls back to the host architecture for non-PE modules.
+    TargetArch get_module_arch(HMODULE module);
 
-        constexpr size_t pointer_width() const noexcept {
-            return arch == TargetArch::X86 ? sizeof(uint32_t) : sizeof(uint64_t);
-        }
+    // True if `module` is a fake module we mapped ourselves (map_view_of_pe /
+    // map_view_of_macho) rather than one the OS loader loaded. Mapped modules
+    // are not in the loader's module list, so RTTI/scan paths that rely on it
+    // must fall back to walking the module directly.
+    bool is_mapped_module(HMODULE module);
 
-        bool contains_host(uintptr_t address, size_t size = 1) const noexcept;
-        std::optional<uintptr_t> target_va_to_host(uint64_t address) const noexcept;
-        std::optional<uint64_t> host_to_target_va(uintptr_t address) const noexcept;
-        std::optional<uint64_t> host_address_to_stored(uintptr_t address) const noexcept;
-        std::optional<uintptr_t> stored_address_to_host(uint64_t address) const noexcept;
-    };
-}
-
-namespace utility {
-    std::optional<AnalysisContext> get_analysis_context(HMODULE module);
-    std::optional<AnalysisContext> get_analysis_context_within(Address address);
-}
-
-namespace utility {
     //
     // Module utilities.
     //

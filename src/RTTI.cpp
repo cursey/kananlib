@@ -11,7 +11,6 @@
 #include <regex>
 #include <mutex>
 #include <unordered_map>
-#include <cstring>
 
 #include <utility/Logging.hpp>
 
@@ -46,71 +45,30 @@ namespace utility {
 namespace rtti {
 namespace detail {
 struct Vtable {
-    uintptr_t type_descriptor{};
+    KANANLIB_RTTI_TI* ti{nullptr};
     uintptr_t vtable{};
     TargetArch arch{host_arch()};
-    std::string cross_name{};
+    bool loaded{true};  // false for images we mapped ourselves (map_view_of_pe)
 
-    const char* raw_name() const {
+    // Decorated RTTI name (".?AV..."). It sits 2 * the target pointer width into
+    // the TypeDescriptor (past the vfptr and undecorated-name cache slot), which
+    // is exactly where a host type_info's raw_name() points -- so computing the
+    // offset works for both loaded and mapped (possibly foreign-arch) modules.
+    std::string_view raw_name() const {
         return reinterpret_cast<const char*>(
-            type_descriptor + (arch == TargetArch::X86 ? 8 : 16));
+            reinterpret_cast<uintptr_t>(ti) + 2 * pointer_width(arch));
     }
 
+    // Undecorated name ("class Foo"). Only a genuinely loaded, host-arch module
+    // exposes a usable host type_info; undecorating a foreign or mapped-image
+    // type_info is unsafe (wrong layout / read-only pages), so those match on
+    // the decorated name instead.
     std::string_view name() const {
-        if (arch == host_arch()) {
-            return reinterpret_cast<KANANLIB_RTTI_TI*>(
-                type_descriptor)->name();
-        }
-        return cross_name;
+        return (loaded && arch == host_arch())
+            ? std::string_view{ti->name()}
+            : raw_name();
     }
 };
-
-std::string cross_type_name(std::string_view raw) {
-    const char* kind = nullptr;
-    if (raw.starts_with(".?AV")) {
-        kind = "class ";
-    } else if (raw.starts_with(".?AU")) {
-        kind = "struct ";
-    } else {
-        return std::string{raw};
-    }
-
-    raw.remove_prefix(4);
-    const auto terminator = raw.find("@@");
-    if (terminator == std::string_view::npos) {
-        return std::string{raw};
-    }
-    raw = raw.substr(0, terminator);
-
-    std::vector<std::string_view> components{};
-    for (size_t offset = 0; offset <= raw.size();) {
-        const auto separator = raw.find('@', offset);
-        components.push_back(raw.substr(
-            offset, separator == std::string_view::npos
-                ? raw.size() - offset : separator - offset));
-        if (separator == std::string_view::npos) {
-            break;
-        }
-        offset = separator + 1;
-    }
-
-    std::string result{kind};
-    for (auto it = components.rbegin(); it != components.rend(); ++it) {
-        if (it != components.rbegin()) {
-            result += "::";
-        }
-        result.append(it->data(), it->size());
-    }
-    return result;
-}
-
-std::optional<uintptr_t> read_target_pointer(
-    uintptr_t address, const AnalysisContext& context) {
-    const uint64_t stored = context.arch == TargetArch::X86
-        ? (uint64_t)*reinterpret_cast<const uint32_t*>(address)
-        : *reinterpret_cast<const uint64_t*>(address);
-    return context.stored_address_to_host(stored);
-}
 
 std::recursive_mutex s_vtable_cache_mutex{};
 std::unordered_map<HMODULE, std::vector<Vtable>> s_vtable_cache{};
@@ -118,60 +76,89 @@ std::unordered_map<HMODULE, std::vector<Vtable>> s_vtable_cache{};
 void for_each_uncached(HMODULE m, std::function<void(const Vtable&)> predicate) {
     KANANLIB_BENCH();
 
-    const auto context = utility::get_analysis_context(m);
-    if (!context || context->image_size < context->pointer_width() * 3) {
+    const auto begin = (uintptr_t)m;
+    const auto module_size = utility::get_module_size(m);
+    if (!module_size) {
         return;
     }
-    const auto begin = reinterpret_cast<uintptr_t>(m);
-    const auto end = begin + context->image_size;
-    const auto width = context->pointer_width();
 
-    for (auto vtable = begin + width; vtable + width <= end;
-         vtable += width) KANANLIB_AV_TRY {
-        const auto locator_address =
-            read_target_pointer(vtable - width, *context);
-        if (!locator_address ||
-            !context->contains_host(
-                *locator_address, sizeof(_s_RTTICompleteObjectLocator))) {
+    const auto arch = utility::get_module_arch(m);
+    const auto width = utility::pointer_width(arch);
+    if (*module_size < width) {
+        return;
+    }
+    const auto end = begin + *module_size;
+
+    // Mapped modules (any arch) are not in the loader list, so the
+    // get_type_info path below can't resolve them; walk them directly at the
+    // target's pointer width. Loaded modules keep the original host path.
+    if (utility::is_mapped_module(m)) {
+        // Parse the complete-object-locator / TypeDescriptor by hand at the
+        // target pointer width (a mapped image can be a foreign arch, e.g. a
+        // 32-bit PE in a 64-bit process). Mapped absolute pointers are already
+        // real host addresses (SEC_IMAGE relocated them), so no translation.
+        for (auto i = begin + width; i < end; i += width) KANANLIB_AV_TRY {
+            const auto col = width == 4
+                ? (uintptr_t)*(uint32_t*)(i - width)
+                : (uintptr_t)*(uint64_t*)(i - width);
+            if (col == 0 || IsBadReadPtr((void*)col, sizeof(_s_RTTICompleteObjectLocator))) {
+                continue;
+            }
+
+            const auto locator = (_s_RTTICompleteObjectLocator*)col;
+            // pTypeDescriptor is an image-relative RVA on x64 and an absolute
+            // pointer on x86; normalize to a 32-bit field either way.
+            const uint32_t td_field = (uint32_t)(uintptr_t)locator->pTypeDescriptor;
+            const auto td = locator->signature == 1 ? begin + td_field : (uintptr_t)td_field;
+            const auto ti = (KANANLIB_RTTI_TI*)td;
+            if (td == 0 || IsBadReadPtr(ti, width * 2 + 4)) {
+                continue;
+            }
+
+            const auto rn = (const char*)(td + width * 2);
+            if (rn[0] != '.' || rn[1] != '?') {
+                continue;
+            }
+            if (std::string_view{rn}.find("@") == std::string_view::npos) {
+                continue;
+            }
+
+            predicate(Vtable{ti, i, arch, /*loaded=*/false});
+        } KANANLIB_AV_EXCEPT {
+            continue;
+        }
+        return;
+    }
+
+    for (auto i = begin; i < end - sizeof(void*); i += sizeof(void*)) KANANLIB_AV_TRY {
+        const auto fake_obj = (void*)i;
+        const auto ti = (KANANLIB_RTTI_TI*)get_type_info(&fake_obj);
+
+        if (ti == nullptr) {
             continue;
         }
 
-        const auto* locator =
-            reinterpret_cast<const _s_RTTICompleteObjectLocator*>(
-                *locator_address);
-        const auto type_descriptor =
-            locator->signature == 1
-                ? std::optional<uintptr_t>{
-                      begin + (uint32_t)(uintptr_t)locator->pTypeDescriptor}
-                : context->stored_address_to_host(
-                      (uint32_t)(uintptr_t)locator->pTypeDescriptor);
-        if (!type_descriptor ||
-            !context->contains_host(*type_descriptor, width * 2 + 3)) {
+        // Using IsBadReadPtr helps us stop accidentally triggering some Vectored Exception Handlers
+        // if those get triggered, it MASSIVELY slows down this function, especially if they write mini dumps.
+        if (IsBadReadPtr(ti, sizeof(void*))) {
             continue;
         }
 
-        const auto* raw_name = reinterpret_cast<const char*>(
-            *type_descriptor + width * 2);
-        const auto max_name = end - reinterpret_cast<uintptr_t>(raw_name);
-        const auto* terminator =
-            reinterpret_cast<const char*>(std::memchr(raw_name, '\0', max_name));
-        if (!terminator) {
-            continue;
-        }
-        const std::string_view raw{raw_name, (size_t)(terminator - raw_name)};
-        if (!raw.starts_with(".?") || raw.find('@') == std::string_view::npos) {
+        const auto rn = ti->raw_name();
+
+        if (IsBadReadPtr(rn, sizeof(void*))) {
             continue;
         }
 
-        Vtable result{
-            .type_descriptor = *type_descriptor,
-            .vtable = vtable,
-            .arch = context->arch,
-        };
-        if (context->arch != host_arch()) {
-            result.cross_name = cross_type_name(raw);
+        if (rn[0] != '.' || rn[1] != '?') {
+            continue;
         }
-        predicate(result);
+
+        if (std::string_view{rn}.find("@") == std::string_view::npos) {
+            continue;
+        }
+
+        predicate(Vtable{ti, i, arch});
     } KANANLIB_AV_EXCEPT {
         continue;
     }
@@ -313,11 +300,11 @@ std::type_info* get_type_info(const void* obj) {
 
 std::type_info* get_type_info(HMODULE m, std::string_view type_name) {
     const auto result = detail::find(m, [&](const detail::Vtable& vtable) {
-        return vtable.name() == type_name;
+        return vtable.name() == type_name || vtable.raw_name() == type_name;
     });
 
     if (result) {
-        return reinterpret_cast<std::type_info*>(result->type_descriptor);
+        return (std::type_info*)result->ti;
     }
 
     return nullptr;
@@ -447,8 +434,7 @@ std::optional<uintptr_t> find_vtable(HMODULE m, std::string_view type_name) try 
     KANANLIB_BENCH();
 
     const auto result = detail::find(m, [&](const detail::Vtable& vtable) {
-        return std::string_view{vtable.raw_name()} == type_name ||
-               vtable.name() == type_name;
+        return vtable.name() == type_name || vtable.raw_name() == type_name;
     });
     
     if (result) {
@@ -467,31 +453,18 @@ std::vector<uintptr_t> find_vtables(HMODULE m, std::string_view type_name) {
     std::vector<uintptr_t> result{};
 
     detail::for_each(m, [&](const detail::Vtable& vtable) {
-        if (std::string_view{vtable.raw_name()} == type_name ||
-            vtable.name() == type_name) {
+        if (vtable.name() == type_name || vtable.raw_name() == type_name) {
             result.push_back(vtable.vtable);
         }
     });
 
-    // Sort by the locator's subobject offset using the target pointer width.
-    const auto context = utility::get_analysis_context(m);
-    if (context) {
-        std::sort(result.begin(), result.end(), [&](uintptr_t a, uintptr_t b) {
-            const auto locator_a =
-                detail::read_target_pointer(a - context->pointer_width(), *context);
-            const auto locator_b =
-                detail::read_target_pointer(b - context->pointer_width(), *context);
-            const auto offset_a = locator_a
-                ? reinterpret_cast<const _s_RTTICompleteObjectLocator*>(
-                      *locator_a)->offset
-                : UINT32_MAX;
-            const auto offset_b = locator_b
-                ? reinterpret_cast<const _s_RTTICompleteObjectLocator*>(
-                      *locator_b)->offset
-                : UINT32_MAX;
-            return offset_a < offset_b;
-        });
-    }
+    // Sort the vtables by the offset into each vtable (_s_RTTICompleteObjectLocator)
+    std::sort(result.begin(), result.end(), [](uintptr_t a, uintptr_t b) {
+        const auto locator_a = *(_s_RTTICompleteObjectLocator**)(a - sizeof(void*));
+        const auto locator_b = *(_s_RTTICompleteObjectLocator**)(b - sizeof(void*));
+
+        return locator_a->offset < locator_b->offset;
+    });
 
     return result;
 }
