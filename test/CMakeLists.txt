@@ -1268,6 +1268,7 @@ if(WIN32) # windows-only
 
 endif()
 # Target: kananlib-cross-arch-test
+if(WIN32) # windows-only
 set(CMKR_TARGET kananlib-cross-arch-test)
 if(NOT TARGET kananlib)
     add_subdirectory(kananlib)
@@ -1314,6 +1315,7 @@ if (CMKR_TARGET STREQUAL "kananlib-linux-pe-test" OR CMKR_TARGET STREQUAL "kanan
     target_compile_definitions(${CMKR_TARGET} PRIVATE KANANLIB_SAMPLE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/samples)
 endif()
 add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
+endif()
 
 # Target: kananlib-linux-pe-test
 if(NOT WIN32) # non-windows

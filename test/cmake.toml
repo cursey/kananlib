@@ -223,6 +223,7 @@ condition = "windows-only"
 [target.kananlib-cross-arch-test]
 type = "kananlib-test-template"
 sources = ["TestCrossArch.cpp"]
+condition = "windows-only"
 
 # Linux PE-mapping + scanning proof: maps the committed sample PE image from
 # disk via map_view_of_file and asserts scan/module behavior on the mapped image.

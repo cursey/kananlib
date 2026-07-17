@@ -66,7 +66,7 @@ std::vector<uint8_t> make_relocatable_pe32() {
     optional.SizeOfHeapReserve = 0x100000;
     optional.SizeOfHeapCommit = 0x1000;
     optional.NumberOfRvaAndSizes = IMAGE_NUMBEROF_DIRECTORY_ENTRIES;
-    optional.DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC] = {0x3000, 28};
+    optional.DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC] = {0x3000, 34};
 
     auto* sections = IMAGE_FIRST_SECTION(nt);
     std::memcpy(sections[0].Name, ".text", 5);
@@ -86,7 +86,7 @@ std::vector<uint8_t> make_relocatable_pe32() {
         IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ;
 
     std::memcpy(sections[2].Name, ".reloc", 6);
-    sections[2].Misc.VirtualSize = 28;
+    sections[2].Misc.VirtualSize = 34;
     sections[2].VirtualAddress = 0x3000;
     sections[2].SizeOfRawData = 0x200;
     sections[2].PointerToRawData = 0x600;
@@ -117,6 +117,18 @@ std::vector<uint8_t> make_relocatable_pe32() {
     *reinterpret_cast<uint32_t*>(bytes.data() + 0x57C) = kImageBase + 0x2100;  // COL slot
     *reinterpret_cast<uint32_t*>(bytes.data() + 0x580) = kImageBase + 0x1000;  // vtable[0]
 
+    // A second vtable of the same type at a different subobject offset, sharing
+    // the TypeDescriptor. find_vtables() must return both, ordered by the COL's
+    // offset -- exercising the target-pointer-width COL read in its sort.
+    auto* locator2 = reinterpret_cast<uint32_t*>(bytes.data() + 0x520);
+    locator2[0] = 0;                    // signature
+    locator2[1] = 8;                    // offset (subobject; sorts after 0)
+    locator2[2] = 0;                    // cdOffset
+    locator2[3] = kImageBase + 0x2140;  // pTypeDescriptor (same type)
+    locator2[4] = 0;                    // pClassDescriptor
+    *reinterpret_cast<uint32_t*>(bytes.data() + 0x59C) = kImageBase + 0x2120;  // COL2 slot
+    *reinterpret_cast<uint32_t*>(bytes.data() + 0x5A0) = kImageBase + 0x1000;  // vtable2[0]
+
     // .reloc: HIGHLOW entries for the absolute fields.
     auto* code_reloc = reinterpret_cast<IMAGE_BASE_RELOCATION*>(bytes.data() + 0x600);
     code_reloc->VirtualAddress = 0x1000;
@@ -127,12 +139,15 @@ std::vector<uint8_t> make_relocatable_pe32() {
 
     auto* pointer_reloc = reinterpret_cast<IMAGE_BASE_RELOCATION*>(bytes.data() + 0x60C);
     pointer_reloc->VirtualAddress = 0x2000;
-    pointer_reloc->SizeOfBlock = 16;
+    pointer_reloc->SizeOfBlock = 22;
     auto* pointer_entries = reinterpret_cast<uint16_t*>(pointer_reloc + 1);
     pointer_entries[0] = IMAGE_REL_BASED_HIGHLOW << 12;             // ptr @ 0x2000
     pointer_entries[1] = (IMAGE_REL_BASED_HIGHLOW << 12) | 0x10C;   // COL.pTypeDescriptor
     pointer_entries[2] = (IMAGE_REL_BASED_HIGHLOW << 12) | 0x17C;   // COL slot
     pointer_entries[3] = (IMAGE_REL_BASED_HIGHLOW << 12) | 0x180;   // vtable[0]
+    pointer_entries[4] = (IMAGE_REL_BASED_HIGHLOW << 12) | 0x12C;   // COL2.pTypeDescriptor
+    pointer_entries[5] = (IMAGE_REL_BASED_HIGHLOW << 12) | 0x19C;   // COL2 slot
+    pointer_entries[6] = (IMAGE_REL_BASED_HIGHLOW << 12) | 0x1A0;   // vtable2[0]
     return bytes;
 }
 
@@ -289,12 +304,16 @@ int test_rtti_uses_target_width() {
     TEST_ASSERT(vtable.has_value());
     TEST_ASSERT(*vtable == base + 0x2180);
 
+    // Two vtables share this type at subobject offsets 0 and 8; find_vtables
+    // must return both, ordered by the COL offset it reads at 4-byte width.
     const auto matching = utility::rtti::find_vtables(module, raw_name);
-    TEST_ASSERT(matching.size() == 1);
-    TEST_ASSERT(matching.front() == base + 0x2180);
+    TEST_ASSERT(matching.size() == 2);
+    TEST_ASSERT(matching[0] == base + 0x2180);
+    TEST_ASSERT(matching[1] == base + 0x21a0);
 
     const auto all = utility::rtti::find_all_vtables(module);
     TEST_ASSERT(std::find(all.begin(), all.end(), base + 0x2180) != all.end());
+    TEST_ASSERT(std::find(all.begin(), all.end(), base + 0x21a0) != all.end());
 
     const auto ti = utility::rtti::get_type_info(module, raw_name);
     TEST_ASSERT(ti == reinterpret_cast<std::type_info*>(base + 0x2140));

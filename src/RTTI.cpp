@@ -458,12 +458,17 @@ std::vector<uintptr_t> find_vtables(HMODULE m, std::string_view type_name) {
         }
     });
 
-    // Sort the vtables by the offset into each vtable (_s_RTTICompleteObjectLocator)
-    std::sort(result.begin(), result.end(), [](uintptr_t a, uintptr_t b) {
-        const auto locator_a = *(_s_RTTICompleteObjectLocator**)(a - sizeof(void*));
-        const auto locator_b = *(_s_RTTICompleteObjectLocator**)(b - sizeof(void*));
-
-        return locator_a->offset < locator_b->offset;
+    // Sort the vtables by the complete-object-locator's subobject offset. The
+    // locator pointer sits one slot (target pointer width) before the vtable;
+    // read it at that width so a foreign (e.g. 32-bit) module isn't mis-read.
+    const auto width = utility::pointer_width(utility::get_module_arch(m));
+    const auto locator_offset = [width](uintptr_t vtable) -> uint32_t {
+        const auto slot = vtable - width;
+        const uintptr_t col = width == 4 ? *(uint32_t*)slot : *(uint64_t*)slot;
+        return col == 0 ? 0 : ((_s_RTTICompleteObjectLocator*)col)->offset;
+    };
+    std::sort(result.begin(), result.end(), [&](uintptr_t a, uintptr_t b) {
+        return locator_offset(a) < locator_offset(b);
     });
 
     return result;
