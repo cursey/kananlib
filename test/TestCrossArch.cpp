@@ -354,6 +354,49 @@ int test_module_arch_falls_back_on_unknown_magic() {
     return 0;
 }
 
+// get_dll_imagebase must read ImageBase by the optional-header magic: it lives
+// at a different offset and width in PE32 (28, 4 bytes) vs PE32+ (24, 8 bytes).
+// An unrecognized magic identifies neither layout, so there is nothing valid to
+// read -- report failure rather than reading whichever layout we guessed.
+int test_dll_imagebase_reads_by_magic() {
+    std::vector<uint8_t> bytes(0x400);
+    auto* dos = reinterpret_cast<IMAGE_DOS_HEADER*>(bytes.data());
+    dos->e_magic = IMAGE_DOS_SIGNATURE;
+    dos->e_lfanew = 0x80;
+    auto* nt32 = reinterpret_cast<IMAGE_NT_HEADERS32*>(bytes.data() + dos->e_lfanew);
+    auto* nt64 = reinterpret_cast<IMAGE_NT_HEADERS64*>(bytes.data() + dos->e_lfanew);
+    const auto reset = [&] {
+        std::memset(bytes.data() + dos->e_lfanew, 0, 0x100);
+        nt32->Signature = IMAGE_NT_SIGNATURE;
+    };
+
+    // PE32: the 4-byte field at optional-header offset 28.
+    reset();
+    nt32->OptionalHeader.Magic = IMAGE_NT_OPTIONAL_HDR32_MAGIC;
+    nt32->OptionalHeader.ImageBase = 0x11223344;
+    auto ib = utility::get_dll_imagebase(Address{bytes.data()});
+    TEST_ASSERT(ib.has_value());
+    TEST_ASSERT(*ib == 0x11223344);
+
+    // PE32+: the 8-byte field at optional-header offset 24. Reading the PE32
+    // offset instead would land on the zeroed upper half.
+    reset();
+    nt64->OptionalHeader.Magic = IMAGE_NT_OPTIONAL_HDR64_MAGIC;
+    nt64->OptionalHeader.ImageBase = 0x55667788;
+    ib = utility::get_dll_imagebase(Address{bytes.data()});
+    TEST_ASSERT(ib.has_value());
+    TEST_ASSERT(*ib == 0x55667788);
+
+    // Neither layout: no valid ImageBase to report.
+    reset();
+    nt32->OptionalHeader.Magic = 0x107;  // IMAGE_ROM_OPTIONAL_HDR_MAGIC
+    TEST_ASSERT(!utility::get_dll_imagebase(Address{bytes.data()}).has_value());
+    reset();
+    nt32->OptionalHeader.Magic = 0xDEAD;
+    TEST_ASSERT(!utility::get_dll_imagebase(Address{bytes.data()}).has_value());
+    return 0;
+}
+
 // scan_ptr_noalign must search a pattern of the *target's* pointer width, not
 // the host's. The buffer below holds a 4-byte-matching decoy first and the real
 // 8-byte value second, so a host-width search on a 32-bit host picks the decoy.
@@ -385,6 +428,7 @@ int main() try {
     RUN_TEST(test_scan_and_bounds_use_target_width);
     RUN_TEST(test_rtti_uses_target_width);
     RUN_TEST(test_module_arch_falls_back_on_unknown_magic);
+    RUN_TEST(test_dll_imagebase_reads_by_magic);
     RUN_TEST(test_scan_ptr_noalign_uses_target_width);
     return test_summary();
 } catch (const std::exception& e) {

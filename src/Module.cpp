@@ -114,11 +114,17 @@ namespace utility {
         // ImageBase lives at a different offset/width in PE32 vs PE32+, so read
         // it by the optional header magic rather than the host's compile-time
         // IMAGE_NT_HEADERS layout (which would mis-read a 32-bit image on x64).
-        const auto magic = ntHeaders->OptionalHeader.Magic;
-        if (magic == IMAGE_NT_OPTIONAL_HDR32_MAGIC) {
+        // An unrecognized magic identifies neither layout, so there is no valid
+        // field to read -- fail rather than guessing one, matching the DOS/NT
+        // signature checks above.
+        switch (ntHeaders->OptionalHeader.Magic) {
+        case IMAGE_NT_OPTIONAL_HDR32_MAGIC:
             return ((PIMAGE_NT_HEADERS32)ntHeaders)->OptionalHeader.ImageBase;
+        case IMAGE_NT_OPTIONAL_HDR64_MAGIC:
+            return ((PIMAGE_NT_HEADERS64)ntHeaders)->OptionalHeader.ImageBase;
+        default:
+            return {};
         }
-        return ((PIMAGE_NT_HEADERS64)ntHeaders)->OptionalHeader.ImageBase;
     }
 
     TargetArch get_module_arch(HMODULE module) {
