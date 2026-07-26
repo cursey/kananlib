@@ -85,12 +85,12 @@ if(KANANLIB_FETCH_BDDISASM OR KANANLIB_STANDALONE_BUILD) # fetch-bddisasm
 
 endif()
 if(KANANLIB_FETCH_SPDLOG OR KANANLIB_STANDALONE_BUILD) # fetch-spdlog
-	message(STATUS "Fetching spdlog (v1.12.0)...")
+	message(STATUS "Fetching spdlog (v1.17.0)...")
 	FetchContent_Declare(spdlog
 		GIT_REPOSITORY
 			"https://github.com/gabime/spdlog"
 		GIT_TAG
-			v1.12.0
+			v1.17.0
 		GIT_SHALLOW
 			ON
 	)

@@ -56,7 +56,7 @@ shallow = true
 [fetch-content.spdlog]
 condition = "fetch-spdlog"
 git = "https://github.com/gabime/spdlog"
-tag = "v1.12.0"
+tag = "v1.17.0"
 shallow = true
 
 [template.kananlib-template]
