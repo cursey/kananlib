@@ -299,7 +299,9 @@ namespace utility {
                 if (it != end) {
                     return (uintptr_t)it;
                 }
-                ++it;
+                // find() exhausted the range; incrementing here would form a
+                // pointer past one-past-the-end (UB).
+                break;
             } catch(...) {
                 MEMORY_BASIC_INFORMATION mbi{};
                 if (VirtualQuery(it, &mbi, sizeof(mbi)) != 0) {
@@ -355,7 +357,11 @@ namespace utility {
             const uint32_t value = (uint32_t)ptr;
             return utility::scan_data(start, length, (uint8_t*)&value, sizeof(value));
         }
-        return utility::scan_data(start, length, (uint8_t*)&ptr, sizeof(uintptr_t));
+        // Match the target's pointer width explicitly -- sizeof(uintptr_t) is the
+        // *host's* width and would search only 4 bytes for an X64 target on a
+        // 32-bit host.
+        const uint64_t value = (uint64_t)ptr;
+        return utility::scan_data(start, length, (uint8_t*)&value, sizeof(value));
     }
 
     optional<uintptr_t> scan_string(HMODULE module, const string& str, bool zero_terminated) {

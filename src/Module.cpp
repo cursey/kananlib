@@ -133,9 +133,18 @@ namespace utility {
         if (ntHeaders->Signature != IMAGE_NT_SIGNATURE) {
             return host_arch();
         }
-        return ntHeaders->OptionalHeader.Magic == IMAGE_NT_OPTIONAL_HDR32_MAGIC
-            ? TargetArch::X86
-            : TargetArch::X64;
+        // Only the two defined optional-header magics identify an architecture.
+        // Anything else (ROM images, malformed headers) must degrade to the host
+        // arch rather than being assumed 64-bit, which would otherwise flip
+        // decode mode and pointer width on an x86 host.
+        switch (ntHeaders->OptionalHeader.Magic) {
+        case IMAGE_NT_OPTIONAL_HDR32_MAGIC:
+            return TargetArch::X86;
+        case IMAGE_NT_OPTIONAL_HDR64_MAGIC:
+            return TargetArch::X64;
+        default:
+            return host_arch();
+        }
     }
 
     bool is_mapped_module(HMODULE module) {

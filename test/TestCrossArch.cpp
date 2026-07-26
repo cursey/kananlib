@@ -66,7 +66,7 @@ std::vector<uint8_t> make_relocatable_pe32() {
     optional.SizeOfHeapReserve = 0x100000;
     optional.SizeOfHeapCommit = 0x1000;
     optional.NumberOfRvaAndSizes = IMAGE_NUMBEROF_DIRECTORY_ENTRIES;
-    optional.DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC] = {0x3000, 34};
+    optional.DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC] = {0x3000, 36};  // 12 + 24
 
     auto* sections = IMAGE_FIRST_SECTION(nt);
     std::memcpy(sections[0].Name, ".text", 5);
@@ -86,7 +86,7 @@ std::vector<uint8_t> make_relocatable_pe32() {
         IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ;
 
     std::memcpy(sections[2].Name, ".reloc", 6);
-    sections[2].Misc.VirtualSize = 34;
+    sections[2].Misc.VirtualSize = 36;
     sections[2].VirtualAddress = 0x3000;
     sections[2].SizeOfRawData = 0x200;
     sections[2].PointerToRawData = 0x600;
@@ -139,7 +139,9 @@ std::vector<uint8_t> make_relocatable_pe32() {
 
     auto* pointer_reloc = reinterpret_cast<IMAGE_BASE_RELOCATION*>(bytes.data() + 0x60C);
     pointer_reloc->VirtualAddress = 0x2000;
-    pointer_reloc->SizeOfBlock = 22;
+    // 8-byte header + 7 entries = 22; pad with a trailing ABSOLUTE (no-op) entry
+    // so SizeOfBlock stays DWORD-aligned as the PE spec requires.
+    pointer_reloc->SizeOfBlock = 24;
     auto* pointer_entries = reinterpret_cast<uint16_t*>(pointer_reloc + 1);
     pointer_entries[0] = IMAGE_REL_BASED_HIGHLOW << 12;             // ptr @ 0x2000
     pointer_entries[1] = (IMAGE_REL_BASED_HIGHLOW << 12) | 0x10C;   // COL.pTypeDescriptor
@@ -148,6 +150,7 @@ std::vector<uint8_t> make_relocatable_pe32() {
     pointer_entries[4] = (IMAGE_REL_BASED_HIGHLOW << 12) | 0x12C;   // COL2.pTypeDescriptor
     pointer_entries[5] = (IMAGE_REL_BASED_HIGHLOW << 12) | 0x19C;   // COL2 slot
     pointer_entries[6] = (IMAGE_REL_BASED_HIGHLOW << 12) | 0x1A0;   // vtable2[0]
+    pointer_entries[7] = IMAGE_REL_BASED_ABSOLUTE << 12;            // padding
     return bytes;
 }
 
@@ -325,6 +328,55 @@ int test_rtti_uses_target_width() {
     return 0;
 }
 
+// A PE whose optional-header magic is neither PE32 nor PE32+ must not be
+// silently classified as a 64-bit target -- on an x86 host that would flip
+// decode/pointer width away from the host's. Fall back to the host arch.
+int test_module_arch_falls_back_on_unknown_magic() {
+    std::vector<uint8_t> bytes(0x400);
+    auto* dos = reinterpret_cast<IMAGE_DOS_HEADER*>(bytes.data());
+    dos->e_magic = IMAGE_DOS_SIGNATURE;
+    dos->e_lfanew = 0x80;
+    auto* nt = reinterpret_cast<IMAGE_NT_HEADERS*>(bytes.data() + dos->e_lfanew);
+    nt->Signature = IMAGE_NT_SIGNATURE;
+
+    // Real PE32 / PE32+ magics classify normally.
+    nt->OptionalHeader.Magic = IMAGE_NT_OPTIONAL_HDR32_MAGIC;
+    TEST_ASSERT(utility::get_module_arch((HMODULE)bytes.data()) == utility::TargetArch::X86);
+    nt->OptionalHeader.Magic = IMAGE_NT_OPTIONAL_HDR64_MAGIC;
+    TEST_ASSERT(utility::get_module_arch((HMODULE)bytes.data()) == utility::TargetArch::X64);
+
+    // A ROM image and an outright garbage magic are neither; both must degrade
+    // to the host architecture rather than being assumed 64-bit.
+    nt->OptionalHeader.Magic = 0x107;  // IMAGE_ROM_OPTIONAL_HDR_MAGIC
+    TEST_ASSERT(utility::get_module_arch((HMODULE)bytes.data()) == utility::host_arch());
+    nt->OptionalHeader.Magic = 0xDEAD;
+    TEST_ASSERT(utility::get_module_arch((HMODULE)bytes.data()) == utility::host_arch());
+    return 0;
+}
+
+// scan_ptr_noalign must search a pattern of the *target's* pointer width, not
+// the host's. The buffer below holds a 4-byte-matching decoy first and the real
+// 8-byte value second, so a host-width search on a 32-bit host picks the decoy.
+int test_scan_ptr_noalign_uses_target_width() {
+    const uint8_t bytes[] = {
+        0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0x11, 0x22,  // 4-byte match only
+        0xAA, 0xBB, 0xCC, 0xDD, 0x00, 0x00, 0x00, 0x00,  // full 8-byte match
+    };
+    const auto start = reinterpret_cast<uintptr_t>(bytes);
+    constexpr uintptr_t needle = 0xDDCCBBAAull;
+
+    const auto as_x64 = utility::scan_ptr_noalign(
+        start, sizeof(bytes), needle, utility::TargetArch::X64);
+    TEST_ASSERT(as_x64.has_value());
+    TEST_ASSERT(*as_x64 == start + 8);
+
+    const auto as_x86 = utility::scan_ptr_noalign(
+        start, sizeof(bytes), needle, utility::TargetArch::X86);
+    TEST_ASSERT(as_x86.has_value());
+    TEST_ASSERT(*as_x86 == start);
+    return 0;
+}
+
 int main() try {
     std::cout << "===== kananlib-cross-arch-test =====" << std::endl;
     RUN_TEST(test_host_arch_and_pointer_width);
@@ -332,6 +384,8 @@ int main() try {
     RUN_TEST(test_decode_uses_target_arch);
     RUN_TEST(test_scan_and_bounds_use_target_width);
     RUN_TEST(test_rtti_uses_target_width);
+    RUN_TEST(test_module_arch_falls_back_on_unknown_magic);
+    RUN_TEST(test_scan_ptr_noalign_uses_target_width);
     return test_summary();
 } catch (const std::exception& e) {
     std::cout << "Exception: " << e.what() << std::endl;
