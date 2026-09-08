@@ -2589,14 +2589,14 @@ namespace utility {
         return func_start;
     }
 
-    std::optional<uintptr_t> find_function_with_string_refs(HMODULE module, std::wstring_view a, std::wstring_view b, bool follow_calls) {
+    std::optional<uintptr_t> find_function_with_string_refs(HMODULE module, std::wstring_view a, std::wstring_view b, bool follow_calls, bool zero_terminated) {
         KANANLIB_BENCH();
 
         SPDLOG_INFO("Scanning module {} for string references {} and {}", utility::get_module_path(module).value_or("UNKNOWN"), utility::narrow(a), utility::narrow(b));
 
         // We're not going to bother finding the b strings, we will just disassemble the function that contains the a string
         // until we run into a reference to the b string
-        const auto a_datas = utility::scan_strings(module, a.data(), false);
+        const auto a_datas = utility::scan_strings(module, a.data(), zero_terminated);
 
         if (a_datas.empty()) {
             SPDLOG_ERROR("Failed to find strings for {}", utility::narrow(a.data()));
@@ -2641,7 +2641,7 @@ namespace utility {
                     }
 
                     try {
-                        const auto needle = wstring_search_bytes(b);
+                        const auto needle = wstring_search_bytes(b, zero_terminated);
                         const auto* potential_string = (const uint8_t*)*displacement;
 
                         if (IsBadReadPtr((void*)potential_string, needle.size())) {
