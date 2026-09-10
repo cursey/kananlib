@@ -33,7 +33,7 @@ struct RWXPage {
     uint8_t* data{};
     size_t size{0x1000};
 
-    RWXPage() {
+    RWXPage(size_t sz = 0x1000) : size(sz) {
         data = (uint8_t*)VirtualAlloc(nullptr, size, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
     }
     ~RWXPage() {
@@ -809,6 +809,187 @@ int test_remove_undecodable_starts_filters_bad() {
 // main
 // ============================================================================
 
+// ============================================================================
+// detail::SeenSet — growable open-addressing address set used by exhaustive_decode.
+// Deterministic, layout-independent DS tests (fake pointer keys).
+// ============================================================================
+
+int test_seenset_grow_and_rehash() {
+    using Ins = utility::detail::SeenSet::Insert;
+    utility::detail::SeenSet s;
+    TEST_ASSERT(s.begin(16));
+    TEST_ASSERT(s.cap == 16);
+    std::vector<uint8_t*> ptrs;
+    for (size_t i = 0; i < 100; ++i) ptrs.push_back((uint8_t*)(0x1000 + i * 8));
+    for (auto p : ptrs) TEST_ASSERT(s.insert_if_absent(p, size_t{1} << 20, size_t{1} << 20) == Ins::Inserted);
+    TEST_ASSERT(s.count == 100);
+    TEST_ASSERT(s.cap > 16);                          // grew past initial
+    for (auto p : ptrs) TEST_ASSERT(s.contains(p));   // every entry survived rehash
+    // duplicate is a no-op (no count/dirty/budget consumption)
+    TEST_ASSERT(s.insert_if_absent(ptrs[0], size_t{1} << 20, size_t{1} << 20) == Ins::Present);
+    TEST_ASSERT(s.count == 100);
+    return 0;
+}
+
+int test_seenset_grow_triggers_at_50pct() {
+    using Ins = utility::detail::SeenSet::Insert;
+    utility::detail::SeenSet s;
+    TEST_ASSERT(s.begin(16));
+    for (size_t i = 0; i < 8; ++i)  // fill to exactly 50% (8 / 16)
+        TEST_ASSERT(s.insert_if_absent((uint8_t*)(0x1000 + i * 8), size_t{1} << 20, size_t{1} << 20) == Ins::Inserted);
+    TEST_ASSERT(s.cap == 16 && s.count == 8);         // not yet grown
+    TEST_ASSERT(s.insert_if_absent((uint8_t*)0x9000, size_t{1} << 20, size_t{1} << 20) == Ins::Inserted);
+    TEST_ASSERT(s.cap == 32);                         // grew on crossing 50%
+    return 0;
+}
+
+int test_seenset_cleanup_retains_capacity() {
+    using Ins = utility::detail::SeenSet::Insert;
+    utility::detail::SeenSet s;
+    TEST_ASSERT(s.begin(16));
+    for (size_t i = 0; i < 100; ++i) s.insert_if_absent((uint8_t*)(0x1000 + i * 8), size_t{1} << 20, size_t{1} << 20);
+    const size_t grown = s.cap;
+    TEST_ASSERT(grown > 16);
+    s.clear();
+    TEST_ASSERT(s.count == 0);
+    TEST_ASSERT(s.cap == grown);                      // capacity retained for reuse
+    TEST_ASSERT(!s.contains((uint8_t*)0x1000));       // membership cleared
+    TEST_ASSERT(s.insert_if_absent((uint8_t*)0x9000, size_t{1} << 20, size_t{1} << 20) == Ins::Inserted);
+    TEST_ASSERT(s.contains((uint8_t*)0x9000));
+    return 0;
+}
+
+int test_seenset_budget_stops() {
+    using Ins = utility::detail::SeenSet::Insert;
+    utility::detail::SeenSet s;
+    TEST_ASSERT(s.begin(64));
+    for (size_t i = 0; i < 10; ++i)
+        TEST_ASSERT(s.insert_if_absent((uint8_t*)(0x1000 + i * 8), 10, size_t{1} << 20) == Ins::Inserted);
+    TEST_ASSERT(s.insert_if_absent((uint8_t*)0x9000, 10, size_t{1} << 20) == Ins::Full);  // new key at budget
+    TEST_ASSERT(s.count == 10);
+    // Duplicate detection must precede the budget check: a present key at budget
+    // returns Present without consuming budget or a dirty slot.
+    const size_t dc = s.dirty_count;
+    TEST_ASSERT(s.insert_if_absent((uint8_t*)0x1000, 10, size_t{1} << 20) == Ins::Present);
+    TEST_ASSERT(s.count == 10 && s.dirty_count == dc);
+    return 0;
+}
+
+int test_seenset_null_and_maxcap_ceiling() {
+    using Ins = utility::detail::SeenSet::Insert;
+    utility::detail::SeenSet s;
+    TEST_ASSERT(s.begin(16));
+    // null is treated as present and never stored; contains(null) is false.
+    TEST_ASSERT(s.insert_if_absent(nullptr, size_t{1} << 20, size_t{1} << 20) == Ins::Present);
+    TEST_ASSERT(!s.contains(nullptr));
+    TEST_ASSERT(s.count == 0);
+    // With max_cap == initial cap, the table cannot grow past 50% -> Full.
+    for (size_t i = 0; i < 8; ++i)
+        TEST_ASSERT(s.insert_if_absent((uint8_t*)(0x1000 + i * 8), size_t{1} << 20, 16) == Ins::Inserted);
+    TEST_ASSERT(s.insert_if_absent((uint8_t*)0x9000, size_t{1} << 20, 16) == Ins::Full);
+    return 0;
+}
+
+// The latch prevents re-attempting a failed grow (calloc) once per queued branch.
+// We can't force calloc to fail deterministically, so drive the public seam
+// state directly: latch OOM, then assert the no-retry contract.
+int test_seenset_oom_latch() {
+    using Ins = utility::detail::SeenSet::Insert;
+    utility::detail::SeenSet s;
+    TEST_ASSERT(s.begin(16));
+    for (size_t i = 0; i < 8; ++i)  // fill to exactly 50% so the next new key needs a grow
+        TEST_ASSERT(s.insert_if_absent((uint8_t*)(0x1000 + i * 8), size_t{1} << 20, size_t{1} << 20) == Ins::Inserted);
+    s.oomed = true;  // simulate a failed grow
+    const size_t cnt = s.count, dc = s.dirty_count, cp = s.cap;
+    // A present key is still found (probe precedes the grow path).
+    TEST_ASSERT(s.insert_if_absent((uint8_t*)0x1000, size_t{1} << 20, size_t{1} << 20) == Ins::Present);
+    // A new key returns Oom without retrying the alloc or mutating state.
+    TEST_ASSERT(s.insert_if_absent((uint8_t*)0x9000, size_t{1} << 20, size_t{1} << 20) == Ins::Oom);
+    TEST_ASSERT(s.count == cnt && s.dirty_count == dc && s.cap == cp);
+    // begin() clears the latch and the set is usable again.
+    TEST_ASSERT(s.begin(16));
+    TEST_ASSERT(!s.oomed);
+    TEST_ASSERT(s.insert_if_absent((uint8_t*)0x2000, size_t{1} << 20, size_t{1} << 20) == Ins::Inserted);
+    return 0;
+}
+
+int test_exhaustive_decode_huge_maxsize_safe() {
+    RWXPage page;
+    TEST_ASSERT(page.data != nullptr);
+    memset(page.data, 0xCC, page.size);
+    page.data[0] = 0xC3;  // RET at start
+    int count = 0;
+    // A huge max_size must not wrap the budget math or spin the shift loop; the
+    // RET stops decoding immediately and the small initial table is used.
+    utility::exhaustive_decode(page.data, SIZE_MAX,
+        [&](utility::ExhaustionContext&) -> utility::ExhaustionResult {
+            ++count;
+            return utility::ExhaustionResult::CONTINUE;
+        });
+    TEST_ASSERT(count == 1);
+    return 0;
+}
+
+// Large generated corpora force detail::SeenSet to grow through several
+// doublings + rehashes on the real decode path (the earlier tests all fit the
+// 4096-slot initial table), and reuse the thread-local table across functions.
+// Exact counts, identical on a second run, catch rehash corruption / bad reuse.
+int test_decode_large_corpus_stresses_growth() {
+    // (1) NOP sled: N distinct instruction addresses -> multiple table growths.
+    {
+        constexpr size_t N = 40000;
+        RWXPage page(N + 128);                       // +128: exhaustive_decode probes ip+56
+        TEST_ASSERT(page.data != nullptr);
+        memset(page.data, 0x90, N);                  // NOP x N
+        page.data[N] = 0xC3;                         // RET
+        auto run = [&] {
+            size_t c = 0;
+            utility::exhaustive_decode(page.data, N + 8,
+                [&](utility::ExhaustionContext&) -> utility::ExhaustionResult { ++c; return utility::ExhaustionResult::CONTINUE; });
+            return c;
+        };
+        const size_t first = run();
+        TEST_ASSERT(first == N + 1);                 // N NOPs + RET
+        TEST_ASSERT(run() == first);                 // identical after grow-then-reuse
+    }
+    // (2) JNZ +0 sled: each conditional enqueues a (duplicate) fallthrough target,
+    // exercising the branch work-list alongside growth; duplicates add no decodes.
+    {
+        constexpr size_t P = 20000;
+        RWXPage page(P * 2 + 128);
+        TEST_ASSERT(page.data != nullptr);
+        for (size_t i = 0; i < P; ++i) { page.data[i * 2] = 0x75; page.data[i * 2 + 1] = 0x00; }
+        page.data[P * 2] = 0xC3;                     // RET
+        // Fixture shape (else the branch stress is vacuous): the first pair must
+        // decode as a conditional branch that resolves to the next instruction.
+        auto d0 = utility::decode_one(page.data, 16);
+        TEST_ASSERT(d0.has_value());
+        TEST_ASSERT(d0->BranchInfo.IsBranch && d0->BranchInfo.IsConditional);
+        auto rt0 = utility::resolve_displacement((uintptr_t)page.data, &*d0);
+        TEST_ASSERT(rt0.has_value() && *rt0 == (uintptr_t)page.data + 2);
+        auto run = [&](size_t& branch_starts) {
+            size_t c = 0; branch_starts = 0;
+            utility::exhaustive_decode(page.data, P * 2 + 8,
+                [&](utility::ExhaustionContext& ctx) -> utility::ExhaustionResult {
+                    ++c;
+                    if (ctx.branch_start == ctx.addr) ++branch_starts;
+                    return utility::ExhaustionResult::CONTINUE;
+                });
+            return c;
+        };
+        size_t bs1 = 0, bs2 = 0;
+        const size_t first = run(bs1);
+        TEST_ASSERT(first == P + 1);                 // P JNZs + RET decoded once
+        // Proof the branch work-list was actually exercised: each JNZ enqueues its
+        // (duplicate) target, advancing ctx.branch_start, so every decoded
+        // instruction begins a "branch". If the enqueue path silently stopped
+        // recognizing JNZ, this would be 1 while the count above still passed.
+        TEST_ASSERT(bs1 == P + 1);
+        TEST_ASSERT(run(bs2) == first && bs2 == bs1); // deterministic across reuse
+    }
+    return 0;
+}
+
 int main() try {
     std::cout << "===== kananlib-scan-coverage-test =====" << std::endl;
 
@@ -872,6 +1053,14 @@ int main() try {
     RUN_TEST(test_scan_disasm_finds_pattern);
     RUN_TEST(test_scan_disasm_no_match);
     RUN_TEST(test_remove_undecodable_starts_filters_bad);
+    RUN_TEST(test_seenset_grow_and_rehash);
+    RUN_TEST(test_seenset_grow_triggers_at_50pct);
+    RUN_TEST(test_seenset_cleanup_retains_capacity);
+    RUN_TEST(test_seenset_budget_stops);
+    RUN_TEST(test_seenset_null_and_maxcap_ceiling);
+    RUN_TEST(test_seenset_oom_latch);
+    RUN_TEST(test_exhaustive_decode_huge_maxsize_safe);
+    RUN_TEST(test_decode_large_corpus_stresses_growth);
 
     return test_summary();
 } catch(const std::exception& e) {

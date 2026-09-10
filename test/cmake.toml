@@ -219,6 +219,12 @@ sources = ["TestPDBEdge.cpp"]
 compile-definitions = ["KANANLIB_USE_DIA_SDK"]
 condition = "windows-only"
 
+# Target-architecture metadata, address translation, decode, scan, and RTTI.
+[target.kananlib-cross-arch-test]
+type = "kananlib-test-template"
+sources = ["TestCrossArch.cpp"]
+condition = "windows-only"
+
 # Linux PE-mapping + scanning proof: maps the committed sample PE image from
 # disk via map_view_of_file and asserts scan/module behavior on the mapped image.
 [target.kananlib-linux-pe-test]

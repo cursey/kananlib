@@ -47,6 +47,27 @@ namespace detail {
 struct Vtable {
     KANANLIB_RTTI_TI* ti{nullptr};
     uintptr_t vtable{};
+    TargetArch arch{host_arch()};
+    bool loaded{true};  // false for images we mapped ourselves (map_view_of_pe)
+
+    // Decorated RTTI name (".?AV..."). It sits 2 * the target pointer width into
+    // the TypeDescriptor (past the vfptr and undecorated-name cache slot), which
+    // is exactly where a host type_info's raw_name() points -- so computing the
+    // offset works for both loaded and mapped (possibly foreign-arch) modules.
+    std::string_view raw_name() const {
+        return reinterpret_cast<const char*>(
+            reinterpret_cast<uintptr_t>(ti) + 2 * pointer_width(arch));
+    }
+
+    // Undecorated name ("class Foo"). Only a genuinely loaded, host-arch module
+    // exposes a usable host type_info; undecorating a foreign or mapped-image
+    // type_info is unsafe (wrong layout / read-only pages), so those match on
+    // the decorated name instead.
+    std::string_view name() const {
+        return (loaded && arch == host_arch())
+            ? std::string_view{ti->name()}
+            : raw_name();
+    }
 };
 
 std::recursive_mutex s_vtable_cache_mutex{};
@@ -60,10 +81,54 @@ void for_each_uncached(HMODULE m, std::function<void(const Vtable&)> predicate) 
     if (!module_size) {
         return;
     }
-    if (*module_size < sizeof(void*)) {
+
+    const auto arch = utility::get_module_arch(m);
+    const auto width = utility::pointer_width(arch);
+    if (*module_size < width) {
         return;
     }
     const auto end = begin + *module_size;
+
+    // Mapped modules (any arch) are not in the loader list, so the
+    // get_type_info path below can't resolve them; walk them directly at the
+    // target's pointer width. Loaded modules keep the original host path.
+    if (utility::is_mapped_module(m)) {
+        // Parse the complete-object-locator / TypeDescriptor by hand at the
+        // target pointer width (a mapped image can be a foreign arch, e.g. a
+        // 32-bit PE in a 64-bit process). Mapped absolute pointers are already
+        // real host addresses (SEC_IMAGE relocated them), so no translation.
+        for (auto i = begin + width; i < end; i += width) KANANLIB_AV_TRY {
+            const auto col = width == 4
+                ? (uintptr_t)*(uint32_t*)(i - width)
+                : (uintptr_t)*(uint64_t*)(i - width);
+            if (col == 0 || IsBadReadPtr((void*)col, sizeof(_s_RTTICompleteObjectLocator))) {
+                continue;
+            }
+
+            const auto locator = (_s_RTTICompleteObjectLocator*)col;
+            // pTypeDescriptor is an image-relative RVA on x64 and an absolute
+            // pointer on x86; normalize to a 32-bit field either way.
+            const uint32_t td_field = (uint32_t)(uintptr_t)locator->pTypeDescriptor;
+            const auto td = locator->signature == 1 ? begin + td_field : (uintptr_t)td_field;
+            const auto ti = (KANANLIB_RTTI_TI*)td;
+            if (td == 0 || IsBadReadPtr(ti, width * 2 + 4)) {
+                continue;
+            }
+
+            const auto rn = (const char*)(td + width * 2);
+            if (rn[0] != '.' || rn[1] != '?') {
+                continue;
+            }
+            if (std::string_view{rn}.find("@") == std::string_view::npos) {
+                continue;
+            }
+
+            predicate(Vtable{ti, i, arch, /*loaded=*/false});
+        } KANANLIB_AV_EXCEPT {
+            continue;
+        }
+        return;
+    }
 
     for (auto i = begin; i < end - sizeof(void*); i += sizeof(void*)) KANANLIB_AV_TRY {
         const auto fake_obj = (void*)i;
@@ -93,7 +158,7 @@ void for_each_uncached(HMODULE m, std::function<void(const Vtable&)> predicate) 
             continue;
         }
 
-        predicate(Vtable{ti, i});
+        predicate(Vtable{ti, i, arch});
     } KANANLIB_AV_EXCEPT {
         continue;
     }
@@ -235,7 +300,7 @@ std::type_info* get_type_info(const void* obj) {
 
 std::type_info* get_type_info(HMODULE m, std::string_view type_name) {
     const auto result = detail::find(m, [&](const detail::Vtable& vtable) {
-        return vtable.ti->name() == type_name;
+        return vtable.name() == type_name || vtable.raw_name() == type_name;
     });
 
     if (result) {
@@ -369,7 +434,7 @@ std::optional<uintptr_t> find_vtable(HMODULE m, std::string_view type_name) try 
     KANANLIB_BENCH();
 
     const auto result = detail::find(m, [&](const detail::Vtable& vtable) {
-        return vtable.ti->name() == type_name || vtable.ti->raw_name() == type_name;
+        return vtable.name() == type_name || vtable.raw_name() == type_name;
     });
     
     if (result) {
@@ -388,17 +453,22 @@ std::vector<uintptr_t> find_vtables(HMODULE m, std::string_view type_name) {
     std::vector<uintptr_t> result{};
 
     detail::for_each(m, [&](const detail::Vtable& vtable) {
-        if (vtable.ti->name() == type_name || vtable.ti->raw_name() == type_name) {
+        if (vtable.name() == type_name || vtable.raw_name() == type_name) {
             result.push_back(vtable.vtable);
         }
     });
 
-    // Sort the vtables by the offset into each vtable (_s_RTTICompleteObjectLocator)
-    std::sort(result.begin(), result.end(), [](uintptr_t a, uintptr_t b) {
-        const auto locator_a = *(_s_RTTICompleteObjectLocator**)(a - sizeof(void*));
-        const auto locator_b = *(_s_RTTICompleteObjectLocator**)(b - sizeof(void*));
-
-        return locator_a->offset < locator_b->offset;
+    // Sort the vtables by the complete-object-locator's subobject offset. The
+    // locator pointer sits one slot (target pointer width) before the vtable;
+    // read it at that width so a foreign (e.g. 32-bit) module isn't mis-read.
+    const auto width = utility::pointer_width(utility::get_module_arch(m));
+    const auto locator_offset = [width](uintptr_t vtable) -> uint32_t {
+        const auto slot = vtable - width;
+        const uintptr_t col = width == 4 ? *(uint32_t*)slot : *(uint64_t*)slot;
+        return col == 0 ? 0 : ((_s_RTTICompleteObjectLocator*)col)->offset;
+    };
+    std::sort(result.begin(), result.end(), [&](uintptr_t a, uintptr_t b) {
+        return locator_offset(a) < locator_offset(b);
     });
 
     return result;
@@ -408,7 +478,7 @@ std::optional<uintptr_t> find_vtable_partial(HMODULE m, std::string_view type_na
     KANANLIB_BENCH();
 
     const auto result = detail::find(m, [&](const detail::Vtable& vtable) {
-        return std::string_view{vtable.ti->name()}.find(type_name) != std::string_view::npos;
+        return vtable.name().find(type_name) != std::string_view::npos;
     });
     
     if (result) {
@@ -427,7 +497,8 @@ std::optional<uintptr_t> find_vtable_regex(HMODULE m, std::string_view reg_str) 
     std::regex reg{reg_str.data()};
 
     const auto result = detail::find(m, [&](const detail::Vtable& vtable) {
-        return std::regex_match(vtable.ti->name(), reg);
+        const auto name = vtable.name();
+        return std::regex_match(name.begin(), name.end(), reg);
     });
 
     if (result) {
