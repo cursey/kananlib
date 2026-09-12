@@ -57,7 +57,7 @@ if(POLICY CMP0135)
 	cmake_policy(SET CMP0135 NEW)
 endif()
 message(STATUS "Fetching bddisasm (v1.37.0)...")
-FetchContent_Declare(bddisasm
+FetchContent_Declare(bddisasm SYSTEM
 	GIT_REPOSITORY
 		"https://github.com/bitdefender/bddisasm"
 	GIT_TAG
@@ -68,7 +68,7 @@ FetchContent_Declare(bddisasm
 FetchContent_MakeAvailable(bddisasm)
 
 message(STATUS "Fetching spdlog (v1.12.0)...")
-FetchContent_Declare(spdlog
+FetchContent_Declare(spdlog SYSTEM
 	GIT_REPOSITORY
 		"https://github.com/gabime/spdlog"
 	GIT_TAG
@@ -126,6 +126,15 @@ if(WIN32) # windows-only
 	    target_compile_definitions(${CMKR_TARGET} PRIVATE KANANLIB_SAMPLE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/samples)
 	endif()
 	add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
+	# The thread-suspension tests coordinate real ntdll loader/PEB locks, and that
+	# acquisition protocol is deliberately unbounded (it never suspends without
+	# both locks). Their own waits already kill the process on deadlock; this is the
+	# backstop for a wedge anywhere else in that target. Scoped to it on purpose --
+	# every other target keeps CTest's default (measured: with no TIMEOUT property a
+	# test runs uninterrupted; CMake's documented default is 1500s).
+	if (CMKR_TARGET STREQUAL "kananlib-behavior-test")
+	    set_tests_properties(${CMKR_TARGET} PROPERTIES TIMEOUT 600)
+	endif()
 
 endif()
 # Target: kananlib-stress-test
@@ -176,6 +185,15 @@ if(WIN32) # windows-only
 	    target_compile_definitions(${CMKR_TARGET} PRIVATE KANANLIB_SAMPLE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/samples)
 	endif()
 	add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
+	# The thread-suspension tests coordinate real ntdll loader/PEB locks, and that
+	# acquisition protocol is deliberately unbounded (it never suspends without
+	# both locks). Their own waits already kill the process on deadlock; this is the
+	# backstop for a wedge anywhere else in that target. Scoped to it on purpose --
+	# every other target keeps CTest's default (measured: with no TIMEOUT property a
+	# test runs uninterrupted; CMake's documented default is 1500s).
+	if (CMKR_TARGET STREQUAL "kananlib-behavior-test")
+	    set_tests_properties(${CMKR_TARGET} PROPERTIES TIMEOUT 600)
+	endif()
 
 endif()
 # Target: kananlib-utils-test
@@ -225,6 +243,15 @@ if (CMKR_TARGET STREQUAL "kananlib-linux-pe-test" OR CMKR_TARGET STREQUAL "kanan
     target_compile_definitions(${CMKR_TARGET} PRIVATE KANANLIB_SAMPLE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/samples)
 endif()
 add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
+# The thread-suspension tests coordinate real ntdll loader/PEB locks, and that
+# acquisition protocol is deliberately unbounded (it never suspends without
+# both locks). Their own waits already kill the process on deadlock; this is the
+# backstop for a wedge anywhere else in that target. Scoped to it on purpose --
+# every other target keeps CTest's default (measured: with no TIMEOUT property a
+# test runs uninterrupted; CMake's documented default is 1500s).
+if (CMKR_TARGET STREQUAL "kananlib-behavior-test")
+    set_tests_properties(${CMKR_TARGET} PROPERTIES TIMEOUT 600)
+endif()
 
 # Target: kananlib-advanced-test
 set(CMKR_TARGET kananlib-advanced-test)
@@ -273,6 +300,15 @@ if (CMKR_TARGET STREQUAL "kananlib-linux-pe-test" OR CMKR_TARGET STREQUAL "kanan
     target_compile_definitions(${CMKR_TARGET} PRIVATE KANANLIB_SAMPLE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/samples)
 endif()
 add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
+# The thread-suspension tests coordinate real ntdll loader/PEB locks, and that
+# acquisition protocol is deliberately unbounded (it never suspends without
+# both locks). Their own waits already kill the process on deadlock; this is the
+# backstop for a wedge anywhere else in that target. Scoped to it on purpose --
+# every other target keeps CTest's default (measured: with no TIMEOUT property a
+# test runs uninterrupted; CMake's documented default is 1500s).
+if (CMKR_TARGET STREQUAL "kananlib-behavior-test")
+    set_tests_properties(${CMKR_TARGET} PROPERTIES TIMEOUT 600)
+endif()
 
 # Target: kananlib-vtablehook-test
 set(CMKR_TARGET kananlib-vtablehook-test)
@@ -321,6 +357,15 @@ if (CMKR_TARGET STREQUAL "kananlib-linux-pe-test" OR CMKR_TARGET STREQUAL "kanan
     target_compile_definitions(${CMKR_TARGET} PRIVATE KANANLIB_SAMPLE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/samples)
 endif()
 add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
+# The thread-suspension tests coordinate real ntdll loader/PEB locks, and that
+# acquisition protocol is deliberately unbounded (it never suspends without
+# both locks). Their own waits already kill the process on deadlock; this is the
+# backstop for a wedge anywhere else in that target. Scoped to it on purpose --
+# every other target keeps CTest's default (measured: with no TIMEOUT property a
+# test runs uninterrupted; CMake's documented default is 1500s).
+if (CMKR_TARGET STREQUAL "kananlib-behavior-test")
+    set_tests_properties(${CMKR_TARGET} PROPERTIES TIMEOUT 600)
+endif()
 
 # Target: kananlib-input-test
 if(WIN32) # windows-only
@@ -370,6 +415,15 @@ if(WIN32) # windows-only
 	    target_compile_definitions(${CMKR_TARGET} PRIVATE KANANLIB_SAMPLE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/samples)
 	endif()
 	add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
+	# The thread-suspension tests coordinate real ntdll loader/PEB locks, and that
+	# acquisition protocol is deliberately unbounded (it never suspends without
+	# both locks). Their own waits already kill the process on deadlock; this is the
+	# backstop for a wedge anywhere else in that target. Scoped to it on purpose --
+	# every other target keeps CTest's default (measured: with no TIMEOUT property a
+	# test runs uninterrupted; CMake's documented default is 1500s).
+	if (CMKR_TARGET STREQUAL "kananlib-behavior-test")
+	    set_tests_properties(${CMKR_TARGET} PROPERTIES TIMEOUT 600)
+	endif()
 
 endif()
 # Target: kananlib-registry-test
@@ -419,6 +473,15 @@ if (CMKR_TARGET STREQUAL "kananlib-linux-pe-test" OR CMKR_TARGET STREQUAL "kanan
     target_compile_definitions(${CMKR_TARGET} PRIVATE KANANLIB_SAMPLE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/samples)
 endif()
 add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
+# The thread-suspension tests coordinate real ntdll loader/PEB locks, and that
+# acquisition protocol is deliberately unbounded (it never suspends without
+# both locks). Their own waits already kill the process on deadlock; this is the
+# backstop for a wedge anywhere else in that target. Scoped to it on purpose --
+# every other target keeps CTest's default (measured: with no TIMEOUT property a
+# test runs uninterrupted; CMake's documented default is 1500s).
+if (CMKR_TARGET STREQUAL "kananlib-behavior-test")
+    set_tests_properties(${CMKR_TARGET} PROPERTIES TIMEOUT 600)
+endif()
 
 # Target: kananlib-module-test
 if(WIN32) # windows-only
@@ -468,6 +531,15 @@ if(WIN32) # windows-only
 	    target_compile_definitions(${CMKR_TARGET} PRIVATE KANANLIB_SAMPLE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/samples)
 	endif()
 	add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
+	# The thread-suspension tests coordinate real ntdll loader/PEB locks, and that
+	# acquisition protocol is deliberately unbounded (it never suspends without
+	# both locks). Their own waits already kill the process on deadlock; this is the
+	# backstop for a wedge anywhere else in that target. Scoped to it on purpose --
+	# every other target keeps CTest's default (measured: with no TIMEOUT property a
+	# test runs uninterrupted; CMake's documented default is 1500s).
+	if (CMKR_TARGET STREQUAL "kananlib-behavior-test")
+	    set_tests_properties(${CMKR_TARGET} PROPERTIES TIMEOUT 600)
+	endif()
 
 endif()
 # Target: kananlib-scan-test
@@ -517,6 +589,15 @@ if (CMKR_TARGET STREQUAL "kananlib-linux-pe-test" OR CMKR_TARGET STREQUAL "kanan
     target_compile_definitions(${CMKR_TARGET} PRIVATE KANANLIB_SAMPLE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/samples)
 endif()
 add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
+# The thread-suspension tests coordinate real ntdll loader/PEB locks, and that
+# acquisition protocol is deliberately unbounded (it never suspends without
+# both locks). Their own waits already kill the process on deadlock; this is the
+# backstop for a wedge anywhere else in that target. Scoped to it on purpose --
+# every other target keeps CTest's default (measured: with no TIMEOUT property a
+# test runs uninterrupted; CMake's documented default is 1500s).
+if (CMKR_TARGET STREQUAL "kananlib-behavior-test")
+    set_tests_properties(${CMKR_TARGET} PROPERTIES TIMEOUT 600)
+endif()
 
 # Target: kananlib-pdb-rtti-test
 if(WIN32) # windows-only
@@ -570,6 +651,15 @@ if(WIN32) # windows-only
 	    target_compile_definitions(${CMKR_TARGET} PRIVATE KANANLIB_SAMPLE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/samples)
 	endif()
 	add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
+	# The thread-suspension tests coordinate real ntdll loader/PEB locks, and that
+	# acquisition protocol is deliberately unbounded (it never suspends without
+	# both locks). Their own waits already kill the process on deadlock; this is the
+	# backstop for a wedge anywhere else in that target. Scoped to it on purpose --
+	# every other target keeps CTest's default (measured: with no TIMEOUT property a
+	# test runs uninterrupted; CMake's documented default is 1500s).
+	if (CMKR_TARGET STREQUAL "kananlib-behavior-test")
+	    set_tests_properties(${CMKR_TARGET} PROPERTIES TIMEOUT 600)
+	endif()
 
 endif()
 # Target: kananlib-emulation-test
@@ -619,6 +709,15 @@ if (CMKR_TARGET STREQUAL "kananlib-linux-pe-test" OR CMKR_TARGET STREQUAL "kanan
     target_compile_definitions(${CMKR_TARGET} PRIVATE KANANLIB_SAMPLE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/samples)
 endif()
 add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
+# The thread-suspension tests coordinate real ntdll loader/PEB locks, and that
+# acquisition protocol is deliberately unbounded (it never suspends without
+# both locks). Their own waits already kill the process on deadlock; this is the
+# backstop for a wedge anywhere else in that target. Scoped to it on purpose --
+# every other target keeps CTest's default (measured: with no TIMEOUT property a
+# test runs uninterrupted; CMake's documented default is 1500s).
+if (CMKR_TARGET STREQUAL "kananlib-behavior-test")
+    set_tests_properties(${CMKR_TARGET} PROPERTIES TIMEOUT 600)
+endif()
 
 # Target: kananlib-bug-regression-test
 set(CMKR_TARGET kananlib-bug-regression-test)
@@ -667,6 +766,15 @@ if (CMKR_TARGET STREQUAL "kananlib-linux-pe-test" OR CMKR_TARGET STREQUAL "kanan
     target_compile_definitions(${CMKR_TARGET} PRIVATE KANANLIB_SAMPLE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/samples)
 endif()
 add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
+# The thread-suspension tests coordinate real ntdll loader/PEB locks, and that
+# acquisition protocol is deliberately unbounded (it never suspends without
+# both locks). Their own waits already kill the process on deadlock; this is the
+# backstop for a wedge anywhere else in that target. Scoped to it on purpose --
+# every other target keeps CTest's default (measured: with no TIMEOUT property a
+# test runs uninterrupted; CMake's documented default is 1500s).
+if (CMKR_TARGET STREQUAL "kananlib-behavior-test")
+    set_tests_properties(${CMKR_TARGET} PROPERTIES TIMEOUT 600)
+endif()
 
 # Target: kananlib-scan-bug-regression-test
 set(CMKR_TARGET kananlib-scan-bug-regression-test)
@@ -715,6 +823,15 @@ if (CMKR_TARGET STREQUAL "kananlib-linux-pe-test" OR CMKR_TARGET STREQUAL "kanan
     target_compile_definitions(${CMKR_TARGET} PRIVATE KANANLIB_SAMPLE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/samples)
 endif()
 add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
+# The thread-suspension tests coordinate real ntdll loader/PEB locks, and that
+# acquisition protocol is deliberately unbounded (it never suspends without
+# both locks). Their own waits already kill the process on deadlock; this is the
+# backstop for a wedge anywhere else in that target. Scoped to it on purpose --
+# every other target keeps CTest's default (measured: with no TIMEOUT property a
+# test runs uninterrupted; CMake's documented default is 1500s).
+if (CMKR_TARGET STREQUAL "kananlib-behavior-test")
+    set_tests_properties(${CMKR_TARGET} PROPERTIES TIMEOUT 600)
+endif()
 
 # Target: kananlib-behavior-test
 set(CMKR_TARGET kananlib-behavior-test)
@@ -763,6 +880,15 @@ if (CMKR_TARGET STREQUAL "kananlib-linux-pe-test" OR CMKR_TARGET STREQUAL "kanan
     target_compile_definitions(${CMKR_TARGET} PRIVATE KANANLIB_SAMPLE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/samples)
 endif()
 add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
+# The thread-suspension tests coordinate real ntdll loader/PEB locks, and that
+# acquisition protocol is deliberately unbounded (it never suspends without
+# both locks). Their own waits already kill the process on deadlock; this is the
+# backstop for a wedge anywhere else in that target. Scoped to it on purpose --
+# every other target keeps CTest's default (measured: with no TIMEOUT property a
+# test runs uninterrupted; CMake's documented default is 1500s).
+if (CMKR_TARGET STREQUAL "kananlib-behavior-test")
+    set_tests_properties(${CMKR_TARGET} PROPERTIES TIMEOUT 600)
+endif()
 
 # Target: kananlib-scan-coverage-test
 set(CMKR_TARGET kananlib-scan-coverage-test)
@@ -811,6 +937,15 @@ if (CMKR_TARGET STREQUAL "kananlib-linux-pe-test" OR CMKR_TARGET STREQUAL "kanan
     target_compile_definitions(${CMKR_TARGET} PRIVATE KANANLIB_SAMPLE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/samples)
 endif()
 add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
+# The thread-suspension tests coordinate real ntdll loader/PEB locks, and that
+# acquisition protocol is deliberately unbounded (it never suspends without
+# both locks). Their own waits already kill the process on deadlock; this is the
+# backstop for a wedge anywhere else in that target. Scoped to it on purpose --
+# every other target keeps CTest's default (measured: with no TIMEOUT property a
+# test runs uninterrupted; CMake's documented default is 1500s).
+if (CMKR_TARGET STREQUAL "kananlib-behavior-test")
+    set_tests_properties(${CMKR_TARGET} PROPERTIES TIMEOUT 600)
+endif()
 
 # Target: kananlib-scan-stress-test
 set(CMKR_TARGET kananlib-scan-stress-test)
@@ -866,6 +1001,15 @@ if (CMKR_TARGET STREQUAL "kananlib-linux-pe-test" OR CMKR_TARGET STREQUAL "kanan
     target_compile_definitions(${CMKR_TARGET} PRIVATE KANANLIB_SAMPLE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/samples)
 endif()
 add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
+# The thread-suspension tests coordinate real ntdll loader/PEB locks, and that
+# acquisition protocol is deliberately unbounded (it never suspends without
+# both locks). Their own waits already kill the process on deadlock; this is the
+# backstop for a wedge anywhere else in that target. Scoped to it on purpose --
+# every other target keeps CTest's default (measured: with no TIMEOUT property a
+# test runs uninterrupted; CMake's documented default is 1500s).
+if (CMKR_TARGET STREQUAL "kananlib-behavior-test")
+    set_tests_properties(${CMKR_TARGET} PROPERTIES TIMEOUT 600)
+endif()
 
 # Target: kananlib-module-coverage-test
 if(WIN32) # windows-only
@@ -915,6 +1059,15 @@ if(WIN32) # windows-only
 	    target_compile_definitions(${CMKR_TARGET} PRIVATE KANANLIB_SAMPLE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/samples)
 	endif()
 	add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
+	# The thread-suspension tests coordinate real ntdll loader/PEB locks, and that
+	# acquisition protocol is deliberately unbounded (it never suspends without
+	# both locks). Their own waits already kill the process on deadlock; this is the
+	# backstop for a wedge anywhere else in that target. Scoped to it on purpose --
+	# every other target keeps CTest's default (measured: with no TIMEOUT property a
+	# test runs uninterrupted; CMake's documented default is 1500s).
+	if (CMKR_TARGET STREQUAL "kananlib-behavior-test")
+	    set_tests_properties(${CMKR_TARGET} PROPERTIES TIMEOUT 600)
+	endif()
 
 endif()
 # Target: kananlib-rtti-coverage-test
@@ -965,6 +1118,15 @@ if(WIN32) # windows-only
 	    target_compile_definitions(${CMKR_TARGET} PRIVATE KANANLIB_SAMPLE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/samples)
 	endif()
 	add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
+	# The thread-suspension tests coordinate real ntdll loader/PEB locks, and that
+	# acquisition protocol is deliberately unbounded (it never suspends without
+	# both locks). Their own waits already kill the process on deadlock; this is the
+	# backstop for a wedge anywhere else in that target. Scoped to it on purpose --
+	# every other target keeps CTest's default (measured: with no TIMEOUT property a
+	# test runs uninterrupted; CMake's documented default is 1500s).
+	if (CMKR_TARGET STREQUAL "kananlib-behavior-test")
+	    set_tests_properties(${CMKR_TARGET} PROPERTIES TIMEOUT 600)
+	endif()
 
 endif()
 # Target: kananlib-misc-coverage-test
@@ -1014,6 +1176,15 @@ if (CMKR_TARGET STREQUAL "kananlib-linux-pe-test" OR CMKR_TARGET STREQUAL "kanan
     target_compile_definitions(${CMKR_TARGET} PRIVATE KANANLIB_SAMPLE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/samples)
 endif()
 add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
+# The thread-suspension tests coordinate real ntdll loader/PEB locks, and that
+# acquisition protocol is deliberately unbounded (it never suspends without
+# both locks). Their own waits already kill the process on deadlock; this is the
+# backstop for a wedge anywhere else in that target. Scoped to it on purpose --
+# every other target keeps CTest's default (measured: with no TIMEOUT property a
+# test runs uninterrupted; CMake's documented default is 1500s).
+if (CMKR_TARGET STREQUAL "kananlib-behavior-test")
+    set_tests_properties(${CMKR_TARGET} PROPERTIES TIMEOUT 600)
+endif()
 
 # Target: kananlib-scan-bounds-test
 if(WIN32) # windows-only
@@ -1063,6 +1234,15 @@ if(WIN32) # windows-only
 	    target_compile_definitions(${CMKR_TARGET} PRIVATE KANANLIB_SAMPLE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/samples)
 	endif()
 	add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
+	# The thread-suspension tests coordinate real ntdll loader/PEB locks, and that
+	# acquisition protocol is deliberately unbounded (it never suspends without
+	# both locks). Their own waits already kill the process on deadlock; this is the
+	# backstop for a wedge anywhere else in that target. Scoped to it on purpose --
+	# every other target keeps CTest's default (measured: with no TIMEOUT property a
+	# test runs uninterrupted; CMake's documented default is 1500s).
+	if (CMKR_TARGET STREQUAL "kananlib-behavior-test")
+	    set_tests_properties(${CMKR_TARGET} PROPERTIES TIMEOUT 600)
+	endif()
 
 endif()
 # Target: kananlib-scan-path-test
@@ -1113,6 +1293,15 @@ if(WIN32) # windows-only
 	    target_compile_definitions(${CMKR_TARGET} PRIVATE KANANLIB_SAMPLE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/samples)
 	endif()
 	add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
+	# The thread-suspension tests coordinate real ntdll loader/PEB locks, and that
+	# acquisition protocol is deliberately unbounded (it never suspends without
+	# both locks). Their own waits already kill the process on deadlock; this is the
+	# backstop for a wedge anywhere else in that target. Scoped to it on purpose --
+	# every other target keeps CTest's default (measured: with no TIMEOUT property a
+	# test runs uninterrupted; CMake's documented default is 1500s).
+	if (CMKR_TARGET STREQUAL "kananlib-behavior-test")
+	    set_tests_properties(${CMKR_TARGET} PROPERTIES TIMEOUT 600)
+	endif()
 
 endif()
 # Target: kananlib-scan-resolve-test
@@ -1163,6 +1352,15 @@ if(WIN32) # windows-only
 	    target_compile_definitions(${CMKR_TARGET} PRIVATE KANANLIB_SAMPLE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/samples)
 	endif()
 	add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
+	# The thread-suspension tests coordinate real ntdll loader/PEB locks, and that
+	# acquisition protocol is deliberately unbounded (it never suspends without
+	# both locks). Their own waits already kill the process on deadlock; this is the
+	# backstop for a wedge anywhere else in that target. Scoped to it on purpose --
+	# every other target keeps CTest's default (measured: with no TIMEOUT property a
+	# test runs uninterrupted; CMake's documented default is 1500s).
+	if (CMKR_TARGET STREQUAL "kananlib-behavior-test")
+	    set_tests_properties(${CMKR_TARGET} PROPERTIES TIMEOUT 600)
+	endif()
 
 endif()
 # Target: kananlib-module-macho-test
@@ -1212,6 +1410,15 @@ if (CMKR_TARGET STREQUAL "kananlib-linux-pe-test" OR CMKR_TARGET STREQUAL "kanan
     target_compile_definitions(${CMKR_TARGET} PRIVATE KANANLIB_SAMPLE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/samples)
 endif()
 add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
+# The thread-suspension tests coordinate real ntdll loader/PEB locks, and that
+# acquisition protocol is deliberately unbounded (it never suspends without
+# both locks). Their own waits already kill the process on deadlock; this is the
+# backstop for a wedge anywhere else in that target. Scoped to it on purpose --
+# every other target keeps CTest's default (measured: with no TIMEOUT property a
+# test runs uninterrupted; CMake's documented default is 1500s).
+if (CMKR_TARGET STREQUAL "kananlib-behavior-test")
+    set_tests_properties(${CMKR_TARGET} PROPERTIES TIMEOUT 600)
+endif()
 
 # Target: kananlib-pdb-edge-test
 if(WIN32) # windows-only
@@ -1265,6 +1472,15 @@ if(WIN32) # windows-only
 	    target_compile_definitions(${CMKR_TARGET} PRIVATE KANANLIB_SAMPLE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/samples)
 	endif()
 	add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
+	# The thread-suspension tests coordinate real ntdll loader/PEB locks, and that
+	# acquisition protocol is deliberately unbounded (it never suspends without
+	# both locks). Their own waits already kill the process on deadlock; this is the
+	# backstop for a wedge anywhere else in that target. Scoped to it on purpose --
+	# every other target keeps CTest's default (measured: with no TIMEOUT property a
+	# test runs uninterrupted; CMake's documented default is 1500s).
+	if (CMKR_TARGET STREQUAL "kananlib-behavior-test")
+	    set_tests_properties(${CMKR_TARGET} PROPERTIES TIMEOUT 600)
+	endif()
 
 endif()
 # Target: kananlib-linux-pe-test
@@ -1315,6 +1531,15 @@ if(NOT WIN32) # non-windows
 	    target_compile_definitions(${CMKR_TARGET} PRIVATE KANANLIB_SAMPLE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/samples)
 	endif()
 	add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
+	# The thread-suspension tests coordinate real ntdll loader/PEB locks, and that
+	# acquisition protocol is deliberately unbounded (it never suspends without
+	# both locks). Their own waits already kill the process on deadlock; this is the
+	# backstop for a wedge anywhere else in that target. Scoped to it on purpose --
+	# every other target keeps CTest's default (measured: with no TIMEOUT property a
+	# test runs uninterrupted; CMake's documented default is 1500s).
+	if (CMKR_TARGET STREQUAL "kananlib-behavior-test")
+	    set_tests_properties(${CMKR_TARGET} PROPERTIES TIMEOUT 600)
+	endif()
 
 endif()
 # Target: kananlib-linux-audit-test
@@ -1365,5 +1590,14 @@ if(NOT WIN32) # non-windows
 	    target_compile_definitions(${CMKR_TARGET} PRIVATE KANANLIB_SAMPLE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/samples)
 	endif()
 	add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
+	# The thread-suspension tests coordinate real ntdll loader/PEB locks, and that
+	# acquisition protocol is deliberately unbounded (it never suspends without
+	# both locks). Their own waits already kill the process on deadlock; this is the
+	# backstop for a wedge anywhere else in that target. Scoped to it on purpose --
+	# every other target keeps CTest's default (measured: with no TIMEOUT property a
+	# test runs uninterrupted; CMake's documented default is 1500s).
+	if (CMKR_TARGET STREQUAL "kananlib-behavior-test")
+	    set_tests_properties(${CMKR_TARGET} PROPERTIES TIMEOUT 600)
+	endif()
 
 endif()

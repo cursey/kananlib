@@ -165,7 +165,7 @@ against the buggy code, cite the failure, then apply the minimal fix.
 | `kananlib-emulation-test` | 7 | Emulation (ShemuContext construction, NOP/mov/multi-instruction emulation, free function, single-step, HMODULE construction) |
 | `kananlib-bug-regression-test` | 5 | Address (const operators), Patch (disable/toggle on never-enabled) — regression guards |
 | `kananlib-scan-bug-regression-test` | 8 | Scan (nonexistent-module, scan_reverse/scan_data_reverse basics + not-found, scan_strings short-length, scan_reverse length==start wraparound) |
-| `kananlib-behavior-test` | 13 | Scan (scan_strings HMODULE/uintptr), Thread (ThreadSuspender lifecycle/freeze/balance), RTTI (find_all_vtables) |
+| `kananlib-behavior-test` | 17 | Scan (scan_strings HMODULE/uintptr), Thread (ThreadSuspender lifecycle/freeze/balance, loader+PEB lock contention, no-give-up guarantee), RTTI (find_all_vtables) |
 | `kananlib-scan-coverage-test` | 29 | Scan (scan_string all overloads, scan_ptr_noalign, scan_relative_reference[_scalar/_byte_by_byte/_strict], scan_relative_references, scan_reference, scan_displacement_reference[s], resolve_displacement, scan_disasm, exhaustive/linear_decode, collect_basic_blocks, scan_data_reverse, scan_data_t) |
 | `kananlib-module-coverage-test` | 26 | Module (ptr_from_rva, get_imagebase_va_from_ptr, find_partial_module, foreach_module, deeper imports/exports/sections, get_original_bytes, map_view edge cases, path/dir edges) |
 | `kananlib-module-macho-test` | 15 | Module (map_view_of_macho thin/fat success, malformed Mach-O/fat branches, map_view_of_file auto-detect, safe null edges for unlink/safe_unlink, missing load_module_from_current_directory) |
@@ -249,11 +249,34 @@ The PDB edge push added synthetic PE/CodeView fixtures, taking PDB.cpp from 53.1
 1. ~~**Emulation**~~ — **NOW TESTED** (7 tests, `kananlib-emulation-test`)
    - ShemuContext construction (VirtualAlloc'd buffer + HMODULE), NOP/mov/multi-instruction emulation, free function wrapper, single-step, bdshemu counting quirk documented
 
-2. ~~**Thread**~~ — **NOW TESTED** (6 tests in `kananlib-behavior-test`)
+2. ~~**Thread**~~ — **NOW TESTED** (10 tests in `kananlib-behavior-test`)
    - `suspend_threads()` / `resume_threads(ThreadStates)` capture ALL threads except the
      calling one; ThreadSuspender lifecycle (double-construct, suspend/resume, destruct
      without double-unlock), actual thread freeze, suspended-flag accuracy, balanced
      suspend/resume are all exercised against real worker threads.
+   - Loader-lock + PEB-lock (`RtlAcquirePebLock`) acquisition is tested against real
+     ntdll locks held by real contender threads: a loader-lock owner that then wants
+     the PEB lock (the suspender must back out of its partial lock and retry), a
+     PEB-lock owner that pins the acquisition ORDER, and a both-orders soak.
+   - The order test does not race the AB/BA cycle into existence with sleeps (no
+     amount of waiting proves the suspender reached its first lock). It DETECTS the
+     inversion: while owning the PEB lock it try-locks the loader lock repeatedly.
+     A PEB-first implementation can never own the loader lock then, so every probe
+     succeeds; a loader-first one owns it and parks in `RtlAcquirePebLock` holding it,
+     so denial becomes permanent. Sustained denial (200ms) is the trigger. Measured:
+     correct order -> longest denial 0ms over 6 runs (3 idle, 3 under CPU load);
+     wrong order -> detected in ~350ms, 2/2 (and 12/12 with an earlier count-based
+     variant, including under 2x CPU oversubscription). Probing never blocks, so this
+     test cannot wedge either way.
+   - A 6s loader-lock hold proves the acquisition protocol has no give-up path: the
+     freeze must wait the operation out instead of suspending its owner. Run against
+     the earlier 5s-budget revision this test fails (`give-ups: 1`).
+   - Deadlock probes cannot be recovered from in-process, so a wait that times out
+     kills the process via `TerminateProcess` (measured: `exit`/`_Exit` hang, because
+     ExitProcess runs DLL_PROCESS_DETACH under the loader lock). `kananlib-behavior-test`
+     also carries a 600s CTest TIMEOUT as a backstop -- scoped to that one target;
+     measured that a test with no TIMEOUT property runs uninterrupted (CMake's
+     documented default is 1500s), so unrelated targets are unaffected.
 
 3. **Logging** (`include/utility/Logging.hpp`)
    - Just `#if __has_include` + `#define` wrappers around spdlog macros — nothing to test
@@ -380,7 +403,7 @@ static void* g_hook_target = nullptr;  // must be global/static for VirtualProte
   - Single-step emulation (emulate() no-args, verify RIP advances per step)
   - HMODULE construction (kernel32.dll always loaded, verify Shellcode/Size)
   - Key quirk: bdshemu single-step executes 2 NOPs per step (off-by-one in counting); test verifies monotonic RIP/instruction-count progression instead of exact counts
-- [x] Phase 11: Thread tests — DONE (6 tests in `kananlib-behavior-test`, real worker threads, no deadlock because the suspender excludes the calling thread)
+- [x] Phase 11: Thread tests — DONE (10 tests in `kananlib-behavior-test`, real worker threads, no deadlock because the suspender excludes the calling thread; 4 of them hold real ntdll loader/PEB locks to prove the acquisition protocol neither deadlocks nor gives up)
 - [x] Phase 12: Bug-hunt pass (branch `tests`) — Address const operators, Patch disable/toggle, scan_reverse/scan_data_reverse `length == start` wraparound (commit `a346a05`). Each demonstrated with a failing test before the fix; see `test/TESTING.md`.
 - [ ] Phase 13 (open): remaining Scan surface — `scan_disasm`, and a graceful-failure (not crash) audit of `scan_data_reverse` over unmapped memory (it uses raw `memcmp` with no SEH, unlike `Pattern::find_single`).
 - [x] Phase 14: clang coverage tooling — `test/coverage.sh` (LLVM source-based coverage via VS18-bundled clang 20). Fixed `kananlib-test` crashing under the instrumented build (commit `8324df8`): the string-ref→function raw call is gated `#ifndef __clang__` (resolver misresolves under clang's instrumented layout; MSVC path unchanged).
