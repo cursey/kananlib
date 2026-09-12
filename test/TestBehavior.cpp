@@ -536,16 +536,40 @@ static bool lock_loader_blocking(ULONG_PTR& cookie) {
 // std::async on MSVC dispatches onto the PPL thread pool, which delays a second
 // concurrent task by seconds when the first one blocks -- enough to dissolve the
 // interleavings these tests are built to create. So spawn real OS threads, and
-// keep a future alongside each one for bounded (non-hanging) waits.
+// keep a future alongside each one for bounded waits.
+//
+// A deadlock regression cannot be recovered from in-process: the wedged thread
+// owns the loader and/or PEB lock, so joining it blocks forever. Waits therefore
+// report the failure and kill the process, turning a would-be suite wedge into a
+// suite failure.
+//
+// The exit path matters. exit(), abort() and even std::_Exit() all funnel into
+// ExitProcess, which runs DLL_PROCESS_DETACH under the LOADER LOCK -- the very
+// lock the deadlocked thread owns -- so the process hangs anyway. Measured with
+// a deliberately wrong lock order: this message printed, then the process still
+// had to be killed externally after 120s. TerminateProcess notifies no DLLs and
+// takes no user-mode locks, so it is the only reliable escape here.
+[[noreturn]] static void fail_fast(const char* what) {
+    std::printf("  FAIL (fatal): %s -- lock acquisition deadlocked; killing the process so the suite cannot wedge\n", what);
+    std::fflush(stdout);
+    std::fflush(stderr);
+#if defined(_WIN32)
+    TerminateProcess(GetCurrentProcess(), 1);
+#endif
+    std::_Exit(1);
+}
+
 struct LockTask {
     std::thread thread{};
     std::future<int> future{};
 
-    bool finished_within(std::chrono::seconds budget) {
-        return future.wait_for(budget) == std::future_status::ready;
-    }
+    // Blocks up to `budget`. Never returns while the worker is still running --
+    // that only happens on a real deadlock, which is unrecoverable.
+    int join_within(std::chrono::seconds budget, const char* what) {
+        if (future.wait_for(budget) != std::future_status::ready) {
+            fail_fast(what);
+        }
 
-    int join() {
         thread.join();
         return future.get();
     }
@@ -611,10 +635,11 @@ struct StartGate {
 //
 // Proof, not just "didn't hang":
 //   * g_world_lock_retries MUST have advanced -> the drop-and-retry path ran.
-//   * g_world_lock_timeouts MUST be unchanged -> it ended up owning BOTH locks
-//     instead of giving up and freezing the world unlocked.
 //   * the contender MUST have obtained the PEB lock -> its blocked acquire was
 //     released by the suspender backing out.
+//
+// The no-give-up half of the contract has its own test (a 6s loader hold); here
+// the contention is short, so the loop is expected to win without stalling.
 // ============================================================================
 
 int test_threadsuspender_backs_out_when_loader_lock_is_held() {
@@ -630,7 +655,7 @@ int test_threadsuspender_backs_out_when_loader_lock_is_held() {
     { utility::ThreadSuspender warmup; }
 
     const uint32_t retries_before = utility::detail::g_world_lock_retries.load();
-    const uint32_t timeouts_before = utility::detail::g_world_lock_timeouts.load();
+    const uint32_t stalls_before = utility::detail::g_world_lock_stalls.load();
 
     StartGate gate{};
     std::atomic<bool> loader_owned{false};
@@ -686,24 +711,21 @@ int test_threadsuspender_backs_out_when_loader_lock_is_held() {
         [&] { return loader_owned.load(std::memory_order_acquire); },
         std::chrono::milliseconds(5000));
 
-    // A wrong implementation (block on the loader lock while owning the PEB
-    // lock) deadlocks here; nothing in-process can recover from that, so the
-    // report below plus the runner's own timeout is the backstop.
-    const bool suspender_done = suspender.finished_within(std::chrono::seconds(30));
-    const int suspender_rc = suspender.join();
-    const bool contender_done = contender.finished_within(std::chrono::seconds(30));
-    const int contender_rc = contender.join();
+    // A wrong implementation (blocking on the loader lock while owning the PEB
+    // lock) deadlocks here. join_within reports and kills the process rather
+    // than joining a wedged thread, so a regression fails instead of hanging.
+    const int suspender_rc = suspender.join_within(std::chrono::seconds(30), "suspender vs loader-lock owner");
+    const int contender_rc = contender.join_within(std::chrono::seconds(30), "loader-lock owner vs suspender");
 
     const uint32_t retries = utility::detail::g_world_lock_retries.load() - retries_before;
-    const uint32_t timeouts = utility::detail::g_world_lock_timeouts.load() - timeouts_before;
-    std::printf("  world-lock back-outs: %u, give-ups: %u, contender got PEB lock: %s\n",
-                retries, timeouts, contender_got_peb.load() ? "yes" : "no");
+    const uint32_t stalls = utility::detail::g_world_lock_stalls.load() - stalls_before;
+    std::printf("  world-lock back-outs: %u, stall warnings: %u, contender got PEB lock: %s\n",
+                retries, stalls, contender_got_peb.load() ? "yes" : "no");
 
     TEST_ASSERT(armed);                                         // contender really owned the loader lock
-    TEST_ASSERT(suspender_done && suspender_rc == 0);           // no deadlock, world actually frozen
-    TEST_ASSERT(contender_done && contender_rc == 0);           // contender saw the back-out and finished
+    TEST_ASSERT(suspender_rc == 0);                             // no deadlock, world actually frozen
+    TEST_ASSERT(contender_rc == 0);                             // contender saw the back-out and finished
     TEST_ASSERT(retries > 0);                                   // the un-deadlock path ran
-    TEST_ASSERT(timeouts == 0);                                 // and it ended up owning both locks
     TEST_ASSERT(contender_got_peb.load(std::memory_order_acquire)); // its blocked acquire was freed
     return 0;
 }
@@ -719,8 +741,15 @@ int test_threadsuspender_backs_out_when_loader_lock_is_held() {
 // Reverse the order (loader first, then a blocking PEB acquire) and this test
 // deadlocks for real: the suspender would own the loader lock and wait for the
 // PEB lock while the contender owns the PEB lock and waits for the loader lock.
-// The contender's deliberate delay before grabbing the loader lock is what
-// makes that losing interleaving the likely one.
+//
+// Getting there requires the contender to request the loader lock only AFTER
+// the suspender has entered its acquisition protocol; otherwise the contender
+// could take and release the loader lock before a wrong-order suspender ever
+// runs, and the broken implementation would pass. A fixed sleep cannot
+// establish that on a loaded machine, so the contender waits on the
+// g_world_lock_attempts counter, which the suspender bumps on entry before
+// touching either lock. The short sleep after that only covers the handful of
+// instructions between the bump and a wrong-order loader acquire.
 // ============================================================================
 
 int test_threadsuspender_waits_out_peb_lock_owner() {
@@ -733,11 +762,13 @@ int test_threadsuspender_waits_out_peb_lock_owner() {
     // starts, so it cannot stall on the loader lock during resolution.
     { utility::ThreadSuspender warmup; }
 
-    const uint32_t timeouts_before = utility::detail::g_world_lock_timeouts.load();
+    const uint32_t stalls_before = utility::detail::g_world_lock_stalls.load();
+    const uint32_t attempts_before = utility::detail::g_world_lock_attempts.load();
 
     StartGate gate{};
     std::atomic<bool> peb_owned{false};
     std::atomic<bool> contender_got_loader{false};
+    std::atomic<bool> suspender_entered{false};
 
     auto contender = launch_lock_task([&]() -> int {
         if (!gate.wait()) {
@@ -747,18 +778,21 @@ int test_threadsuspender_waits_out_peb_lock_owner() {
         ntlocks::get().acquire_peb();
         peb_owned.store(true, std::memory_order_release);
 
-        // Give a wrong-order suspender time to take the loader lock first, so
-        // the deadlock it would create actually happens.
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        // Wait until the suspender is actually inside the acquisition protocol,
+        // so a wrong-order implementation has reached its loader acquire.
+        const bool observed_entry = spin_until(
+            [&] { return utility::detail::g_world_lock_attempts.load() != attempts_before; },
+            std::chrono::milliseconds(5000));
+        suspender_entered.store(observed_entry, std::memory_order_release);
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
 
         ULONG_PTR cookie = 0;
         if (ntlocks::lock_loader_blocking(cookie)) {
             contender_got_loader.store(true, std::memory_order_release);
             ntlocks::get().unlock_loader(0, cookie);
         }
-
         ntlocks::get().release_peb();
-        return 0;
+        return observed_entry ? 0 : 1;
     });
 
     auto suspender = launch_lock_task([&]() -> int {
@@ -782,20 +816,124 @@ int test_threadsuspender_waits_out_peb_lock_owner() {
         [&] { return peb_owned.load(std::memory_order_acquire); },
         std::chrono::milliseconds(5000));
 
-    const bool suspender_done = suspender.finished_within(std::chrono::seconds(30));
-    const int suspender_rc = suspender.join();
-    const bool contender_done = contender.finished_within(std::chrono::seconds(30));
-    const int contender_rc = contender.join();
+    const int suspender_rc = suspender.join_within(std::chrono::seconds(30), "suspender vs PEB-lock owner");
+    const int contender_rc = contender.join_within(std::chrono::seconds(30), "PEB-lock owner vs suspender");
 
-    const uint32_t timeouts = utility::detail::g_world_lock_timeouts.load() - timeouts_before;
-    std::printf("  give-ups: %u, contender got loader lock: %s\n",
-                timeouts, contender_got_loader.load() ? "yes" : "no");
+    const uint32_t stalls = utility::detail::g_world_lock_stalls.load() - stalls_before;
+    std::printf("  stall warnings: %u, suspender entered before loader request: %s, contender got loader lock: %s\n",
+                stalls, suspender_entered.load() ? "yes" : "no",
+                contender_got_loader.load() ? "yes" : "no");
 
     TEST_ASSERT(armed);                                             // contender really owned the PEB lock
-    TEST_ASSERT(suspender_done && suspender_rc == 0);               // order is deadlock-free
-    TEST_ASSERT(contender_done && contender_rc == 0);
+    TEST_ASSERT(suspender_rc == 0);                                 // order is deadlock-free
+    TEST_ASSERT(contender_rc == 0);
+    TEST_ASSERT(suspender_entered.load(std::memory_order_acquire)); // the interleaving was really set up
     TEST_ASSERT(contender_got_loader.load(std::memory_order_acquire));
-    TEST_ASSERT(timeouts == 0);
+    return 0;
+}
+
+// ============================================================================
+// A long loader operation must be WAITED OUT, never frozen.
+//
+// This is the invariant that makes the whole protocol worth having: the
+// acquisition loop has no give-up path. An earlier revision gave up after a
+// fixed budget and suspended the world anyway -- which freezes the thread that
+// owns the loader lock, deadlocking every later loader/PEB access (exactly what
+// callers like safe_unlink() rely on not happening).
+//
+// Setup: a contender owns the loader lock for longer than the stall-warning
+// interval, then sets `releasing` BEFORE unlocking. The suspender thread
+// records that flag the instant its ThreadSuspender constructor returns.
+//
+// Because the constructor only returns while owning both locks, and the loader
+// lock can only be owned after the contender started releasing it, the flag
+// MUST be set. A give-up path makes the constructor return mid-hold, while the
+// contender still owns the loader lock and the flag is still false -- no timing
+// tolerance involved.
+// ============================================================================
+
+int test_threadsuspender_waits_out_long_loader_operation() {
+#if !defined(_WIN32)
+    TEST_SKIP("NT loader/PEB locks require a Win32 host");
+#endif
+    if (!ntlocks::get().ok()) { TEST_SKIP("ntdll lock exports unavailable"); }
+
+    // See Half #1: resolve the suspender's ntdll pointers up front.
+    { utility::ThreadSuspender warmup; }
+
+    const uint32_t stalls_before = utility::detail::g_world_lock_stalls.load();
+
+    // Deliberately longer than BOTH the current 1s stall-warning interval and
+    // the 5s give-up budget the reviewed revision used, so re-introducing any
+    // give-up path fails this test rather than silently passing it.
+    constexpr auto k_hold = std::chrono::milliseconds(6000);
+
+    StartGate gate{};
+    std::atomic<bool> loader_owned{false};
+    std::atomic<bool> releasing{false};
+    std::atomic<bool> saw_releasing{false};
+
+    auto contender = launch_lock_task([&]() -> int {
+        if (!gate.wait()) {
+            return 1;
+        }
+
+        ULONG_PTR cookie = 0;
+        if (!ntlocks::lock_loader_blocking(cookie)) {
+            return 1;
+        }
+        loader_owned.store(true, std::memory_order_release);
+
+        // A legitimate long loader operation (a big DLL load, a slow disk).
+        std::this_thread::sleep_for(k_hold);
+
+        // Published before the unlock: whoever observes the loader lock as free
+        // must also observe this.
+        releasing.store(true, std::memory_order_release);
+        ntlocks::get().unlock_loader(0, cookie);
+        return 0;
+    });
+
+    auto suspender = launch_lock_task([&]() -> int {
+        if (!gate.wait()) {
+            return 1;
+        }
+
+        if (!spin_until([&] { return loader_owned.load(std::memory_order_acquire); },
+                        std::chrono::milliseconds(5000))) {
+            return 1;
+        }
+
+        utility::ThreadSuspender s;
+        // Sampled before anything else: did the world freeze while the loader
+        // lock was still owned by the contender?
+        saw_releasing.store(releasing.load(std::memory_order_acquire), std::memory_order_release);
+        const size_t captured = s.states.size();
+        s.resume();
+        return captured > 0 ? 0 : 1;
+    });
+
+    const bool started = gate.release(2);
+    const auto t0 = std::chrono::steady_clock::now();
+
+    const int suspender_rc = suspender.join_within(std::chrono::seconds(30), "suspender vs long loader operation");
+    const int contender_rc = contender.join_within(std::chrono::seconds(30), "long loader operation");
+
+    const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - t0);
+    const uint32_t stalls = utility::detail::g_world_lock_stalls.load() - stalls_before;
+    std::printf("  held loader lock %lldms, freeze completed after %lldms, stall warnings: %u, froze only after release: %s\n",
+                (long long)k_hold.count(), (long long)elapsed.count(), stalls,
+                saw_releasing.load() ? "yes" : "no");
+
+    TEST_ASSERT(started);
+    TEST_ASSERT(suspender_rc == 0);
+    TEST_ASSERT(contender_rc == 0);
+    // The core invariant: no suspension happened while the loader lock was held.
+    TEST_ASSERT(saw_releasing.load(std::memory_order_acquire));
+    // And the wait really did outlive the stall-warning budget.
+    TEST_ASSERT(stalls > 0);
+    TEST_ASSERT(elapsed >= k_hold);
     return 0;
 }
 
@@ -821,7 +959,7 @@ int test_threadsuspender_lock_order_soak() {
     { utility::ThreadSuspender warmup; }
 
     const uint32_t retries_before = utility::detail::g_world_lock_retries.load();
-    const uint32_t timeouts_before = utility::detail::g_world_lock_timeouts.load();
+    const uint32_t stalls_before = utility::detail::g_world_lock_stalls.load();
 
     StartGate gate{};
     std::atomic<bool> stop{false};
@@ -886,28 +1024,26 @@ int test_threadsuspender_lock_order_soak() {
 
     const bool started = gate.release(3);
 
-    const bool freezer_done = freezer.finished_within(std::chrono::seconds(60));
-    const int freezer_rc = freezer.join();
+    const int freezer_rc = freezer.join_within(std::chrono::seconds(60), "freeze loop vs both-order contenders");
 
     stop.store(true, std::memory_order_relaxed);
-    const int loader_first_rc = loader_first.join();
-    const int peb_first_rc = peb_first.join();
+    const int loader_first_rc = loader_first.join_within(std::chrono::seconds(30), "loader-first contender");
+    const int peb_first_rc = peb_first.join_within(std::chrono::seconds(30), "PEB-first contender");
 
     const uint32_t retries = utility::detail::g_world_lock_retries.load() - retries_before;
-    const uint32_t timeouts = utility::detail::g_world_lock_timeouts.load() - timeouts_before;
-    std::printf("  %d freezes vs %u contended lock rounds; back-outs: %u, give-ups: %u\n",
-                k_iterations, contender_rounds.load(), retries, timeouts);
+    const uint32_t stalls = utility::detail::g_world_lock_stalls.load() - stalls_before;
+    std::printf("  %d freezes vs %u contended lock rounds; back-outs: %u, stall warnings: %u\n",
+                k_iterations, contender_rounds.load(), retries, stalls);
 
     TEST_ASSERT(started);
-    TEST_ASSERT(freezer_done && freezer_rc == 0);
+    TEST_ASSERT(freezer_rc == 0);
     TEST_ASSERT(loader_first_rc == 0 && peb_first_rc == 0);
     TEST_ASSERT(contender_rounds.load() > 0);
-    // Contenders hold the loader lock ~1ms per round, so the freeze loop must
-    // have hit it at least once and backed out of its partial lock.
-    TEST_ASSERT(retries > 0);
-    // Every freeze still ended up owning both locks; none fell back to the
-    // unlocked path.
-    TEST_ASSERT(timeouts == 0);
+    // Collisions are overwhelmingly likely (contenders own the loader lock for
+    // ~1ms per round) but not synchronized: a scheduler could in principle slot
+    // every freeze between critical sections. Report it rather than assert it --
+    // the deterministic back-out coverage lives in Half #1.
+    TEST_EXPECT(retries > 0);
     return 0;
 }
 
@@ -968,6 +1104,7 @@ int main() try {
     // ThreadSuspender — loader lock + PEB lock (RtlAcquirePebLock) contention
     RUN_TEST(test_threadsuspender_backs_out_when_loader_lock_is_held);
     RUN_TEST(test_threadsuspender_waits_out_peb_lock_owner);
+    RUN_TEST(test_threadsuspender_waits_out_long_loader_operation);
     RUN_TEST(test_threadsuspender_lock_order_soak);
 
     // for_each_uncached (via find_all_vtables)

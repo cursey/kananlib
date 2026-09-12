@@ -21,8 +21,9 @@ void resume_threads(const ThreadStates& states);
 
 namespace detail {
 extern std::mutex g_suspend_mutex;
+extern std::atomic<uint32_t> g_world_lock_attempts;
 extern std::atomic<uint32_t> g_world_lock_retries;
-extern std::atomic<uint32_t> g_world_lock_timeouts;
+extern std::atomic<uint32_t> g_world_lock_stalls;
 }
 
 struct ThreadSuspender {

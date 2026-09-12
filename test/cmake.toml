@@ -69,6 +69,11 @@ if (CMKR_TARGET STREQUAL "kananlib-linux-pe-test" OR CMKR_TARGET STREQUAL "kanan
     target_compile_definitions(${CMKR_TARGET} PRIVATE KANANLIB_SAMPLE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/samples)
 endif()
 add_test(NAME ${CMKR_TARGET} COMMAND ${CMKR_TARGET})
+# The thread-suspension tests coordinate real ntdll loader/PEB locks. Their own
+# waits abort on deadlock, but the acquisition protocol is deliberately
+# unbounded (never suspends without both locks), so keep a suite-level backstop
+# that turns any wedge into a failure instead of a hung run.
+set_tests_properties(${CMKR_TARGET} PROPERTIES TIMEOUT 600)
 """
 
 [target.kananlib-test]

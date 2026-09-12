@@ -13,8 +13,9 @@
 namespace utility {
 namespace detail {
 std::mutex g_suspend_mutex{};
+std::atomic<uint32_t> g_world_lock_attempts{0};
 std::atomic<uint32_t> g_world_lock_retries{0};
-std::atomic<uint32_t> g_world_lock_timeouts{0};
+std::atomic<uint32_t> g_world_lock_stalls{0};
 }
 
 typedef void (WINAPI* PFN_RtlAcquirePebLock)(void);
@@ -23,7 +24,7 @@ typedef void (WINAPI* PFN_RtlReleasePebLock)(void);
 namespace {
 constexpr ULONG k_ldr_lock_try_only = 0x2;
 constexpr ULONG k_ldr_lock_acquired = 0x1;
-constexpr auto k_world_lock_budget = std::chrono::seconds(5);
+constexpr auto k_world_lock_stall_warn_interval = std::chrono::seconds(1);
 constexpr uint32_t k_world_lock_spin_attempts = 8;
 
 struct NtLockApi {
@@ -165,9 +166,10 @@ private:
             return;
         }
 
+        g_world_lock_attempts.fetch_add(1, std::memory_order_relaxed);
         SPDLOG_INFO("Locking PEB + loader locks...");
 
-        const auto deadline = std::chrono::steady_clock::now() + k_world_lock_budget;
+        auto warn_at = std::chrono::steady_clock::now() + k_world_lock_stall_warn_interval;
 
         for (uint32_t attempt = 1;; ++attempt) {
             // 1. PEB lock first, owning nothing else. Recursive, so a nested
@@ -194,14 +196,19 @@ private:
 
             // 3. Couldn't get both: unwind so whoever owns the loader lock can
             //    finish (it may be waiting on the PEB lock we just took), then
-            //    retry from scratch.
+            //    retry from scratch. There is deliberately no give-up path --
+            //    suspending without the loader lock could freeze a thread that
+            //    owns it, deadlocking every later loader/PEB access. A long
+            //    legitimate loader operation must be waited out, not frozen.
             release_peb();
             g_world_lock_retries.fetch_add(1, std::memory_order_relaxed);
 
-            if (std::chrono::steady_clock::now() >= deadline) {
-                g_world_lock_timeouts.fetch_add(1, std::memory_order_relaxed);
-                SPDLOG_WARN("Loader lock unavailable after {} attempts; suspending without it.", attempt);
-                return;
+            const auto now = std::chrono::steady_clock::now();
+
+            if (now >= warn_at) {
+                g_world_lock_stalls.fetch_add(1, std::memory_order_relaxed);
+                SPDLOG_WARN("Loader lock still unavailable after {} attempts; waiting (never suspending without it).", attempt);
+                warn_at = now + k_world_lock_stall_warn_interval;
             }
 
             if (attempt <= k_world_lock_spin_attempts) {
