@@ -255,18 +255,28 @@ The PDB edge push added synthetic PE/CodeView fixtures, taking PDB.cpp from 53.1
      without double-unlock), actual thread freeze, suspended-flag accuracy, balanced
      suspend/resume are all exercised against real worker threads.
    - Loader-lock + PEB-lock (`RtlAcquirePebLock`) acquisition is tested against real
-     ntdll locks held by real contender threads, in both AB and BA orders plus a soak:
-     the suspender must back out of its partial lock and retry rather than deadlock.
+     ntdll locks held by real contender threads: a loader-lock owner that then wants
+     the PEB lock (the suspender must back out of its partial lock and retry), a
+     PEB-lock owner that pins the acquisition ORDER, and a both-orders soak.
+   - The order test does not race the AB/BA cycle into existence with sleeps (no
+     amount of waiting proves the suspender reached its first lock). It DETECTS the
+     inversion: while owning the PEB lock it try-locks the loader lock repeatedly.
+     A PEB-first implementation can never own the loader lock then, so every probe
+     succeeds; a loader-first one owns it and parks in `RtlAcquirePebLock` holding it,
+     so denial becomes permanent. Sustained denial (200ms) is the trigger. Measured:
+     correct order -> longest denial 0ms over 6 runs (3 idle, 3 under CPU load);
+     wrong order -> detected in ~350ms, 2/2 (and 12/12 with an earlier count-based
+     variant, including under 2x CPU oversubscription). Probing never blocks, so this
+     test cannot wedge either way.
    - A 6s loader-lock hold proves the acquisition protocol has no give-up path: the
      freeze must wait the operation out instead of suspending its owner. Run against
      the earlier 5s-budget revision this test fails (`give-ups: 1`).
    - Deadlock probes cannot be recovered from in-process, so a wait that times out
      kills the process via `TerminateProcess` (measured: `exit`/`_Exit` hang, because
-     ExitProcess runs DLL_PROCESS_DETACH under the loader lock). Targets also carry a
-     600s CTest TIMEOUT.
-   - Negative controls: reversing the lock order deadlocks
-     `waits_out_peb_lock_owner` (caught 7/7, including under 2x CPU oversubscription);
-     re-adding a give-up budget fails `waits_out_long_loader_operation`.
+     ExitProcess runs DLL_PROCESS_DETACH under the loader lock). `kananlib-behavior-test`
+     also carries a 600s CTest TIMEOUT as a backstop -- scoped to that one target;
+     measured that a test with no TIMEOUT property runs uninterrupted (CMake's
+     documented default is 1500s), so unrelated targets are unaffected.
 
 3. **Logging** (`include/utility/Logging.hpp`)
    - Just `#if __has_include` + `#define` wrappers around spdlog macros — nothing to test

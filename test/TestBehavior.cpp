@@ -531,6 +531,17 @@ static bool lock_loader_blocking(ULONG_PTR& cookie) {
     cookie = 0;
     return get().lock_loader(0, &disposition, &cookie) >= 0;
 }
+
+// LDR_LOCK_LOADER_LOCK_FLAG_TRY_ONLY / LOCK_ACQUIRED (ntdll-internal values).
+constexpr ULONG k_try_only = 0x2;
+constexpr ULONG k_acquired = 0x1;
+
+// Non-blocking loader-lock acquire. True only if the lock is now ours.
+static bool try_lock_loader(ULONG_PTR& cookie) {
+    ULONG disposition = 0;
+    cookie = 0;
+    return get().lock_loader(k_try_only, &disposition, &cookie) >= 0 && disposition == k_acquired;
+}
 }
 
 // std::async on MSVC dispatches onto the PPL thread pool, which delays a second
@@ -731,25 +742,33 @@ int test_threadsuspender_backs_out_when_loader_lock_is_held() {
 }
 
 // ============================================================================
-// Half #2: a thread OWNS the PEB lock and then WANTS the loader lock.
+// Half #2: a thread OWNS the PEB lock while the suspender wants both locks.
 //
-// This pins the acquisition ORDER. With the correct order (PEB first, loader
-// try-only) the suspender simply blocks on the PEB lock while owning nothing,
-// and the contender -- which needs only the uncontended loader lock -- runs to
-// completion and releases it.
+// This pins the acquisition ORDER.
+// Reverse the order (loader first, then a blocking PEB acquire) and a cycle
+// exists: the suspender would own the loader lock and wait for the PEB lock
+// while this contender owns the PEB lock.
 //
-// Reverse the order (loader first, then a blocking PEB acquire) and this test
-// deadlocks for real: the suspender would own the loader lock and wait for the
-// PEB lock while the contender owns the PEB lock and waits for the loader lock.
+// Rather than racing that cycle into existence with sleeps -- the suspender can
+// be preempted at any point, including right after it signals that it entered
+// the protocol, so no amount of waiting proves it reached its first lock -- this
+// test DETECTS the inverted order directly:
 //
-// Getting there requires the contender to request the loader lock only AFTER
-// the suspender has entered its acquisition protocol; otherwise the contender
-// could take and release the loader lock before a wrong-order suspender ever
-// runs, and the broken implementation would pass. A fixed sleep cannot
-// establish that on a loaded machine, so the contender waits on the
-// g_world_lock_attempts counter, which the suspender bumps on entry before
-// touching either lock. The short sleep after that only covers the handful of
-// instructions between the bump and a wrong-order loader acquire.
+//   while holding the PEB lock, repeatedly TRY-lock the loader lock.
+//
+// A correct implementation takes the PEB lock FIRST, so while we hold it the
+// suspender is parked inside RtlAcquirePebLock and can never own the loader
+// lock: every probe must succeed. A loader-first implementation owns the loader
+// lock and then parks in RtlAcquirePebLock holding it forever, so probes start
+// failing and never recover. Sustained denial is therefore proof of inversion,
+// and it needs no interleaving luck: each probe gap hands the implementation
+// another uncontended chance to take the loader lock, and it only has to take
+// it once for this test to see it.
+//
+// Requiring denial to be SUSTAINED (not a single failed probe) keeps an
+// unrelated momentary loader operation elsewhere in the process from being
+// mistaken for the bug. Probing never blocks, so unlike the previous revision
+// this test cannot wedge even against a wrong-order implementation.
 // ============================================================================
 
 int test_threadsuspender_waits_out_peb_lock_owner() {
@@ -762,13 +781,26 @@ int test_threadsuspender_waits_out_peb_lock_owner() {
     // starts, so it cannot stall on the loader lock during resolution.
     { utility::ThreadSuspender warmup; }
 
-    const uint32_t stalls_before = utility::detail::g_world_lock_stalls.load();
     const uint32_t attempts_before = utility::detail::g_world_lock_attempts.load();
+
+    // Denial is measured in TIME, not probe count: sleep_for(2ms) really sleeps
+    // ~15ms at Windows' default timer resolution, so a count-based threshold
+    // silently scales with timer granularity (measured: 67 probes in a 1s
+    // window, with a wrong-order implementation reaching a 50-denial threshold
+    // only at ~75% of the window). Time-based, the window is ~7x the denial
+    // hold regardless of granularity.
+    constexpr auto k_probe_window = std::chrono::milliseconds(1500);
+    constexpr auto k_probe_gap = std::chrono::milliseconds(2);
+    constexpr auto k_denial_hold = std::chrono::milliseconds(200);
 
     StartGate gate{};
     std::atomic<bool> peb_owned{false};
-    std::atomic<bool> contender_got_loader{false};
     std::atomic<bool> suspender_entered{false};
+    std::atomic<bool> suspender_completed{false};
+    std::atomic<bool> order_violation{false};
+    std::atomic<bool> completed_during_probe{false};
+    std::atomic<uint32_t> probes{0};
+    std::atomic<uint32_t> worst_denial_ms{0};
 
     auto contender = launch_lock_task([&]() -> int {
         if (!gate.wait()) {
@@ -778,19 +810,53 @@ int test_threadsuspender_waits_out_peb_lock_owner() {
         ntlocks::get().acquire_peb();
         peb_owned.store(true, std::memory_order_release);
 
-        // Wait until the suspender is actually inside the acquisition protocol,
-        // so a wrong-order implementation has reached its loader acquire.
+        // Only probe once the suspender is inside the protocol; before that,
+        // loader-lock ownership says nothing about its lock order.
         const bool observed_entry = spin_until(
             [&] { return utility::detail::g_world_lock_attempts.load() != attempts_before; },
             std::chrono::milliseconds(5000));
         suspender_entered.store(observed_entry, std::memory_order_release);
-        std::this_thread::sleep_for(std::chrono::milliseconds(20));
 
-        ULONG_PTR cookie = 0;
-        if (ntlocks::lock_loader_blocking(cookie)) {
-            contender_got_loader.store(true, std::memory_order_release);
-            ntlocks::get().unlock_loader(0, cookie);
+        if (observed_entry) {
+            const auto deadline = std::chrono::steady_clock::now() + k_probe_window;
+            auto denial_since = std::chrono::steady_clock::time_point{};
+
+            while (std::chrono::steady_clock::now() < deadline) {
+                // The suspender must not be able to finish while we own the PEB
+                // lock; if it did, the probe would prove nothing.
+                if (suspender_completed.load(std::memory_order_acquire)) {
+                    completed_during_probe.store(true, std::memory_order_release);
+                    break;
+                }
+
+                ULONG_PTR cookie = 0;
+                const bool got = ntlocks::try_lock_loader(cookie);
+                const auto now = std::chrono::steady_clock::now();
+
+                if (got) {
+                    ntlocks::get().unlock_loader(0, cookie);
+                    denial_since = std::chrono::steady_clock::time_point{};
+                } else {
+                    if (denial_since == std::chrono::steady_clock::time_point{}) {
+                        denial_since = now;
+                    }
+
+                    const auto denied_for = std::chrono::duration_cast<std::chrono::milliseconds>(now - denial_since);
+                    if ((uint32_t)denied_for.count() > worst_denial_ms.load(std::memory_order_relaxed)) {
+                        worst_denial_ms.store((uint32_t)denied_for.count(), std::memory_order_relaxed);
+                    }
+
+                    if (denied_for >= k_denial_hold) {
+                        order_violation.store(true, std::memory_order_release);
+                        break;
+                    }
+                }
+
+                probes.fetch_add(1, std::memory_order_relaxed);
+                std::this_thread::sleep_for(k_probe_gap);
+            }
         }
+
         ntlocks::get().release_peb();
         return observed_entry ? 0 : 1;
     });
@@ -806,6 +872,7 @@ int test_threadsuspender_waits_out_peb_lock_owner() {
         }
 
         utility::ThreadSuspender s;
+        suspender_completed.store(true, std::memory_order_release);
         const size_t captured = s.states.size();
         s.resume();
         return captured > 0 ? 0 : 1;
@@ -819,16 +886,19 @@ int test_threadsuspender_waits_out_peb_lock_owner() {
     const int suspender_rc = suspender.join_within(std::chrono::seconds(30), "suspender vs PEB-lock owner");
     const int contender_rc = contender.join_within(std::chrono::seconds(30), "PEB-lock owner vs suspender");
 
-    const uint32_t stalls = utility::detail::g_world_lock_stalls.load() - stalls_before;
-    std::printf("  stall warnings: %u, suspender entered before loader request: %s, contender got loader lock: %s\n",
-                stalls, suspender_entered.load() ? "yes" : "no",
-                contender_got_loader.load() ? "yes" : "no");
+    std::printf("  %u loader-lock probes while owning the PEB lock, longest denial: %ums (violation at %lldms), inverted order detected: %s\n",
+                probes.load(), worst_denial_ms.load(), (long long)k_denial_hold.count(),
+                order_violation.load() ? "YES" : "no");
 
     TEST_ASSERT(armed);                                             // contender really owned the PEB lock
-    TEST_ASSERT(suspender_rc == 0);                                 // order is deadlock-free
+    TEST_ASSERT(suspender_entered.load(std::memory_order_acquire)); // suspender really was in the protocol
+    TEST_ASSERT(probes.load() > 0);                                 // the probe really ran
+    TEST_ASSERT(!completed_during_probe.load(std::memory_order_acquire));
+    // The invariant: the suspender never owned the loader lock while another
+    // thread owned the PEB lock. That is what makes the cycle impossible.
+    TEST_ASSERT(!order_violation.load(std::memory_order_acquire));
+    TEST_ASSERT(suspender_rc == 0);                                 // and the freeze still completed
     TEST_ASSERT(contender_rc == 0);
-    TEST_ASSERT(suspender_entered.load(std::memory_order_acquire)); // the interleaving was really set up
-    TEST_ASSERT(contender_got_loader.load(std::memory_order_acquire));
     return 0;
 }
 
