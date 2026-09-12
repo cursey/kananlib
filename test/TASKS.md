@@ -165,7 +165,7 @@ against the buggy code, cite the failure, then apply the minimal fix.
 | `kananlib-emulation-test` | 7 | Emulation (ShemuContext construction, NOP/mov/multi-instruction emulation, free function, single-step, HMODULE construction) |
 | `kananlib-bug-regression-test` | 5 | Address (const operators), Patch (disable/toggle on never-enabled) — regression guards |
 | `kananlib-scan-bug-regression-test` | 8 | Scan (nonexistent-module, scan_reverse/scan_data_reverse basics + not-found, scan_strings short-length, scan_reverse length==start wraparound) |
-| `kananlib-behavior-test` | 13 | Scan (scan_strings HMODULE/uintptr), Thread (ThreadSuspender lifecycle/freeze/balance), RTTI (find_all_vtables) |
+| `kananlib-behavior-test` | 16 | Scan (scan_strings HMODULE/uintptr), Thread (ThreadSuspender lifecycle/freeze/balance, loader+PEB lock contention), RTTI (find_all_vtables) |
 | `kananlib-scan-coverage-test` | 29 | Scan (scan_string all overloads, scan_ptr_noalign, scan_relative_reference[_scalar/_byte_by_byte/_strict], scan_relative_references, scan_reference, scan_displacement_reference[s], resolve_displacement, scan_disasm, exhaustive/linear_decode, collect_basic_blocks, scan_data_reverse, scan_data_t) |
 | `kananlib-module-coverage-test` | 26 | Module (ptr_from_rva, get_imagebase_va_from_ptr, find_partial_module, foreach_module, deeper imports/exports/sections, get_original_bytes, map_view edge cases, path/dir edges) |
 | `kananlib-module-macho-test` | 15 | Module (map_view_of_macho thin/fat success, malformed Mach-O/fat branches, map_view_of_file auto-detect, safe null edges for unlink/safe_unlink, missing load_module_from_current_directory) |
@@ -249,11 +249,16 @@ The PDB edge push added synthetic PE/CodeView fixtures, taking PDB.cpp from 53.1
 1. ~~**Emulation**~~ — **NOW TESTED** (7 tests, `kananlib-emulation-test`)
    - ShemuContext construction (VirtualAlloc'd buffer + HMODULE), NOP/mov/multi-instruction emulation, free function wrapper, single-step, bdshemu counting quirk documented
 
-2. ~~**Thread**~~ — **NOW TESTED** (6 tests in `kananlib-behavior-test`)
+2. ~~**Thread**~~ — **NOW TESTED** (9 tests in `kananlib-behavior-test`)
    - `suspend_threads()` / `resume_threads(ThreadStates)` capture ALL threads except the
      calling one; ThreadSuspender lifecycle (double-construct, suspend/resume, destruct
      without double-unlock), actual thread freeze, suspended-flag accuracy, balanced
      suspend/resume are all exercised against real worker threads.
+   - Loader-lock + PEB-lock (`RtlAcquirePebLock`) acquisition is tested against real
+     ntdll locks held by real contender threads, in both AB and BA orders plus a soak:
+     the suspender must back out of its partial lock and retry rather than deadlock.
+     Verified by negative control: making the loader acquire blocking, or reversing the
+     order, deadlocks the corresponding test.
 
 3. **Logging** (`include/utility/Logging.hpp`)
    - Just `#if __has_include` + `#define` wrappers around spdlog macros — nothing to test
@@ -380,7 +385,7 @@ static void* g_hook_target = nullptr;  // must be global/static for VirtualProte
   - Single-step emulation (emulate() no-args, verify RIP advances per step)
   - HMODULE construction (kernel32.dll always loaded, verify Shellcode/Size)
   - Key quirk: bdshemu single-step executes 2 NOPs per step (off-by-one in counting); test verifies monotonic RIP/instruction-count progression instead of exact counts
-- [x] Phase 11: Thread tests — DONE (6 tests in `kananlib-behavior-test`, real worker threads, no deadlock because the suspender excludes the calling thread)
+- [x] Phase 11: Thread tests — DONE (9 tests in `kananlib-behavior-test`, real worker threads, no deadlock because the suspender excludes the calling thread; 3 of them hold real ntdll loader/PEB locks to prove the suspender's lock-acquisition loop cannot deadlock)
 - [x] Phase 12: Bug-hunt pass (branch `tests`) — Address const operators, Patch disable/toggle, scan_reverse/scan_data_reverse `length == start` wraparound (commit `a346a05`). Each demonstrated with a failing test before the fix; see `test/TESTING.md`.
 - [ ] Phase 13 (open): remaining Scan surface — `scan_disasm`, and a graceful-failure (not crash) audit of `scan_data_reverse` over unmapped memory (it uses raw `memcmp` with no SEH, unlike `Pattern::find_single`).
 - [x] Phase 14: clang coverage tooling — `test/coverage.sh` (LLVM source-based coverage via VS18-bundled clang 20). Fixed `kananlib-test` crashing under the instrumented build (commit `8324df8`): the string-ref→function raw call is gated `#ifndef __clang__` (resolver misresolves under clang's instrumented layout; MSVC path unchanged).

@@ -8,6 +8,7 @@
 #include <cstring>
 #include <string>
 #include <vector>
+#include <functional>
 #include <future>
 #include <chrono>
 #include <thread>
@@ -473,6 +474,444 @@ int test_threadsuspender_suspend_balanced() {
 }
 
 // ============================================================================
+// ThreadSuspender — loader lock + PEB lock acquisition must not deadlock.
+//
+// Before freezing the world, suspend_world_locked() takes BOTH the loader lock
+// and the PEB lock (RtlAcquirePebLock), so no thread can be suspended while
+// owning either one. Two independent critical sections taken by one thread is
+// an AB/BA deadlock waiting to happen, and real code takes them in both
+// orders, so the implementation:
+//
+//   1. takes the PEB lock while owning no other NT lock (blocking is safe),
+//   2. TRY-locks the loader lock (never blocks),
+//   3. on failure RELEASES the PEB lock, backs off, and retries.
+//
+// Step 3 is the un-deadlocking step. The tests below build both halves of the
+// cycle with real ntdll locks on real threads and require the suspender to get
+// through them.
+// ============================================================================
+
+typedef void (WINAPI* PFN_RtlAcquirePebLock)(void);
+typedef void (WINAPI* PFN_RtlReleasePebLock)(void);
+
+namespace ntlocks {
+struct Api {
+    PFN_LdrLockLoaderLock lock_loader{nullptr};
+    PFN_LdrUnlockLoaderLock unlock_loader{nullptr};
+    PFN_RtlAcquirePebLock acquire_peb{nullptr};
+    PFN_RtlReleasePebLock release_peb{nullptr};
+
+    bool ok() const {
+        return lock_loader != nullptr && unlock_loader != nullptr
+            && acquire_peb != nullptr && release_peb != nullptr;
+    }
+};
+
+static const Api& get() {
+    static const Api api = []() {
+        Api a{};
+        auto ntdll = utility::get_module("ntdll.dll");
+
+        if (ntdll == nullptr) {
+            return a;
+        }
+
+        a.lock_loader = (PFN_LdrLockLoaderLock)GetProcAddress(ntdll, "LdrLockLoaderLock");
+        a.unlock_loader = (PFN_LdrUnlockLoaderLock)GetProcAddress(ntdll, "LdrUnlockLoaderLock");
+        a.acquire_peb = (PFN_RtlAcquirePebLock)GetProcAddress(ntdll, "RtlAcquirePebLock");
+        a.release_peb = (PFN_RtlReleasePebLock)GetProcAddress(ntdll, "RtlReleasePebLock");
+        return a;
+    }();
+    return api;
+}
+
+// Blocking loader-lock acquire. Returns false if ntdll refused.
+static bool lock_loader_blocking(ULONG_PTR& cookie) {
+    ULONG disposition = 0;
+    cookie = 0;
+    return get().lock_loader(0, &disposition, &cookie) >= 0;
+}
+}
+
+// std::async on MSVC dispatches onto the PPL thread pool, which delays a second
+// concurrent task by seconds when the first one blocks -- enough to dissolve the
+// interleavings these tests are built to create. So spawn real OS threads, and
+// keep a future alongside each one for bounded (non-hanging) waits.
+struct LockTask {
+    std::thread thread{};
+    std::future<int> future{};
+
+    bool finished_within(std::chrono::seconds budget) {
+        return future.wait_for(budget) == std::future_status::ready;
+    }
+
+    int join() {
+        thread.join();
+        return future.get();
+    }
+};
+
+static LockTask launch_lock_task(std::function<int()> body) {
+    std::packaged_task<int()> packaged{std::move(body)};
+    LockTask task{};
+    task.future = packaged.get_future();
+    task.thread = std::thread{std::move(packaged)};
+    return task;
+}
+
+// Spins until `predicate` holds or the budget runs out. Every wait in these
+// tests is bounded so a regression fails or times out instead of wedging.
+template <typename Predicate>
+static bool spin_until(Predicate predicate, std::chrono::milliseconds budget) {
+    const auto deadline = std::chrono::steady_clock::now() + budget;
+    while (!predicate()) {
+        if (std::chrono::steady_clock::now() >= deadline) {
+            return false;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return true;
+}
+
+// Holds every worker at the starting line until all of them are genuinely
+// running. Necessary because thread creation AND thread startup run
+// DLL_THREAD_ATTACH under the loader lock: a thread that is still starting when
+// a contender grabs the loader lock cannot execute a single instruction of its
+// body until that lock is released, which dissolves the interleaving under test.
+struct StartGate {
+    std::atomic<uint32_t> running{0};
+    std::atomic<bool> open{false};
+
+    // Called first thing by each worker; false if the gate never opened.
+    bool wait() {
+        running.fetch_add(1, std::memory_order_release);
+        return spin_until([this] { return open.load(std::memory_order_acquire); },
+                          std::chrono::milliseconds(5000));
+    }
+
+    // Called by the test thread once every worker is spawned; false if some
+    // worker never reached wait().
+    bool release(uint32_t workers) {
+        const bool all_running = spin_until(
+            [&] { return running.load(std::memory_order_acquire) >= workers; },
+            std::chrono::milliseconds(5000));
+        open.store(true, std::memory_order_release);
+        return all_running;
+    }
+};
+
+// ============================================================================
+// Half #1: a thread OWNS the loader lock and then WANTS the PEB lock.
+//
+// The suspender starts from the other end (PEB owned, loader wanted), so the
+// two threads form a genuine cycle the moment the suspender blocks while still
+// holding the PEB lock. It must instead notice the failed loader try, drop the
+// PEB lock -- which is what lets the contender's blocking PEB acquire complete
+// and its loader lock be released -- and then retry.
+//
+// Proof, not just "didn't hang":
+//   * g_world_lock_retries MUST have advanced -> the drop-and-retry path ran.
+//   * g_world_lock_timeouts MUST be unchanged -> it ended up owning BOTH locks
+//     instead of giving up and freezing the world unlocked.
+//   * the contender MUST have obtained the PEB lock -> its blocked acquire was
+//     released by the suspender backing out.
+// ============================================================================
+
+int test_threadsuspender_backs_out_when_loader_lock_is_held() {
+#if !defined(_WIN32)
+    TEST_SKIP("NT loader/PEB locks require a Win32 host");
+#endif
+    if (!ntlocks::get().ok()) { TEST_SKIP("ntdll lock exports unavailable"); }
+
+    // Warm up the suspender's one-time ntdll resolution. GetModuleHandle and
+    // GetProcAddress BLOCK on the loader lock, so an unresolved suspender would
+    // stall inside the resolution step instead of reaching the try-lock loop we
+    // are testing. Order-independent: this test must not rely on an earlier one.
+    { utility::ThreadSuspender warmup; }
+
+    const uint32_t retries_before = utility::detail::g_world_lock_retries.load();
+    const uint32_t timeouts_before = utility::detail::g_world_lock_timeouts.load();
+
+    StartGate gate{};
+    std::atomic<bool> loader_owned{false};
+    std::atomic<bool> contender_got_peb{false};
+
+    auto contender = launch_lock_task([&]() -> int {
+        if (!gate.wait()) {
+            return 1;
+        }
+
+        ULONG_PTR cookie = 0;
+        if (!ntlocks::lock_loader_blocking(cookie)) {
+            return 1;
+        }
+        loader_owned.store(true, std::memory_order_release);
+
+        // Keep the loader lock until the suspender has demonstrably backed out
+        // of a partial lock, so the test exercises the retry path instead of
+        // just winning a race. Bounded so a regression fails instead of hangs.
+        const bool observed_backout = spin_until(
+            [&] { return utility::detail::g_world_lock_retries.load() != retries_before; },
+            std::chrono::milliseconds(5000));
+
+        // Now complete the cycle: block on the PEB lock while still owning the
+        // loader lock. This only returns because the suspender releases it.
+        ntlocks::get().acquire_peb();
+        contender_got_peb.store(true, std::memory_order_release);
+        ntlocks::get().release_peb();
+
+        ntlocks::get().unlock_loader(0, cookie);
+        return observed_backout ? 0 : 1;
+    });
+
+    // Freeze the world only once the loader lock is genuinely taken.
+    auto suspender = launch_lock_task([&]() -> int {
+        if (!gate.wait()) {
+            return 1;
+        }
+
+        if (!spin_until([&] { return loader_owned.load(std::memory_order_acquire); },
+                        std::chrono::milliseconds(5000))) {
+            return 1;
+        }
+
+        utility::ThreadSuspender s;
+        const size_t captured = s.states.size();
+        s.resume();
+        return captured > 0 ? 0 : 1;
+    });
+
+    const bool started = gate.release(2);
+    const bool armed = started && spin_until(
+        [&] { return loader_owned.load(std::memory_order_acquire); },
+        std::chrono::milliseconds(5000));
+
+    // A wrong implementation (block on the loader lock while owning the PEB
+    // lock) deadlocks here; nothing in-process can recover from that, so the
+    // report below plus the runner's own timeout is the backstop.
+    const bool suspender_done = suspender.finished_within(std::chrono::seconds(30));
+    const int suspender_rc = suspender.join();
+    const bool contender_done = contender.finished_within(std::chrono::seconds(30));
+    const int contender_rc = contender.join();
+
+    const uint32_t retries = utility::detail::g_world_lock_retries.load() - retries_before;
+    const uint32_t timeouts = utility::detail::g_world_lock_timeouts.load() - timeouts_before;
+    std::printf("  world-lock back-outs: %u, give-ups: %u, contender got PEB lock: %s\n",
+                retries, timeouts, contender_got_peb.load() ? "yes" : "no");
+
+    TEST_ASSERT(armed);                                         // contender really owned the loader lock
+    TEST_ASSERT(suspender_done && suspender_rc == 0);           // no deadlock, world actually frozen
+    TEST_ASSERT(contender_done && contender_rc == 0);           // contender saw the back-out and finished
+    TEST_ASSERT(retries > 0);                                   // the un-deadlock path ran
+    TEST_ASSERT(timeouts == 0);                                 // and it ended up owning both locks
+    TEST_ASSERT(contender_got_peb.load(std::memory_order_acquire)); // its blocked acquire was freed
+    return 0;
+}
+
+// ============================================================================
+// Half #2: a thread OWNS the PEB lock and then WANTS the loader lock.
+//
+// This pins the acquisition ORDER. With the correct order (PEB first, loader
+// try-only) the suspender simply blocks on the PEB lock while owning nothing,
+// and the contender -- which needs only the uncontended loader lock -- runs to
+// completion and releases it.
+//
+// Reverse the order (loader first, then a blocking PEB acquire) and this test
+// deadlocks for real: the suspender would own the loader lock and wait for the
+// PEB lock while the contender owns the PEB lock and waits for the loader lock.
+// The contender's deliberate delay before grabbing the loader lock is what
+// makes that losing interleaving the likely one.
+// ============================================================================
+
+int test_threadsuspender_waits_out_peb_lock_owner() {
+#if !defined(_WIN32)
+    TEST_SKIP("NT loader/PEB locks require a Win32 host");
+#endif
+    if (!ntlocks::get().ok()) { TEST_SKIP("ntdll lock exports unavailable"); }
+
+    // See Half #1: resolve the suspender's ntdll pointers before the contention
+    // starts, so it cannot stall on the loader lock during resolution.
+    { utility::ThreadSuspender warmup; }
+
+    const uint32_t timeouts_before = utility::detail::g_world_lock_timeouts.load();
+
+    StartGate gate{};
+    std::atomic<bool> peb_owned{false};
+    std::atomic<bool> contender_got_loader{false};
+
+    auto contender = launch_lock_task([&]() -> int {
+        if (!gate.wait()) {
+            return 1;
+        }
+
+        ntlocks::get().acquire_peb();
+        peb_owned.store(true, std::memory_order_release);
+
+        // Give a wrong-order suspender time to take the loader lock first, so
+        // the deadlock it would create actually happens.
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+        ULONG_PTR cookie = 0;
+        if (ntlocks::lock_loader_blocking(cookie)) {
+            contender_got_loader.store(true, std::memory_order_release);
+            ntlocks::get().unlock_loader(0, cookie);
+        }
+
+        ntlocks::get().release_peb();
+        return 0;
+    });
+
+    auto suspender = launch_lock_task([&]() -> int {
+        if (!gate.wait()) {
+            return 1;
+        }
+
+        if (!spin_until([&] { return peb_owned.load(std::memory_order_acquire); },
+                        std::chrono::milliseconds(5000))) {
+            return 1;
+        }
+
+        utility::ThreadSuspender s;
+        const size_t captured = s.states.size();
+        s.resume();
+        return captured > 0 ? 0 : 1;
+    });
+
+    const bool started = gate.release(2);
+    const bool armed = started && spin_until(
+        [&] { return peb_owned.load(std::memory_order_acquire); },
+        std::chrono::milliseconds(5000));
+
+    const bool suspender_done = suspender.finished_within(std::chrono::seconds(30));
+    const int suspender_rc = suspender.join();
+    const bool contender_done = contender.finished_within(std::chrono::seconds(30));
+    const int contender_rc = contender.join();
+
+    const uint32_t timeouts = utility::detail::g_world_lock_timeouts.load() - timeouts_before;
+    std::printf("  give-ups: %u, contender got loader lock: %s\n",
+                timeouts, contender_got_loader.load() ? "yes" : "no");
+
+    TEST_ASSERT(armed);                                             // contender really owned the PEB lock
+    TEST_ASSERT(suspender_done && suspender_rc == 0);               // order is deadlock-free
+    TEST_ASSERT(contender_done && contender_rc == 0);
+    TEST_ASSERT(contender_got_loader.load(std::memory_order_acquire));
+    TEST_ASSERT(timeouts == 0);
+    return 0;
+}
+
+// ============================================================================
+// Soak: both halves of the cycle running continuously while the world is
+// repeatedly frozen. Every suspender must complete while owning both locks.
+//
+// The contenders take both NT locks in OPPOSITE orders, so they are serialized
+// against each other by a test-local mutex -- otherwise they would deadlock
+// each other and prove nothing about the suspender. The suspender is the only
+// unserialized participant, which is exactly the contention we want to test.
+// Each contender also holds the pair for a moment, so the freeze loop really
+// collides with it instead of slipping through the gaps.
+// ============================================================================
+
+int test_threadsuspender_lock_order_soak() {
+#if !defined(_WIN32)
+    TEST_SKIP("NT loader/PEB locks require a Win32 host");
+#endif
+    if (!ntlocks::get().ok()) { TEST_SKIP("ntdll lock exports unavailable"); }
+
+    // See Half #1: resolve the suspender's ntdll pointers up front.
+    { utility::ThreadSuspender warmup; }
+
+    const uint32_t retries_before = utility::detail::g_world_lock_retries.load();
+    const uint32_t timeouts_before = utility::detail::g_world_lock_timeouts.load();
+
+    StartGate gate{};
+    std::atomic<bool> stop{false};
+    std::atomic<uint32_t> contender_rounds{0};
+    std::mutex both_locks_serializer{}; // keeps the contenders from cycling with each other
+
+    // order == 0: loader then PEB.  order == 1: PEB then loader.
+    auto contender_body = [&](int order) -> int {
+        if (!gate.wait()) {
+            return 1;
+        }
+
+        while (!stop.load(std::memory_order_relaxed)) {
+            {
+                std::scoped_lock guard{both_locks_serializer};
+                ULONG_PTR cookie = 0;
+
+                if (order == 0) {
+                    if (!ntlocks::lock_loader_blocking(cookie)) { return 1; }
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                    ntlocks::get().acquire_peb();
+                    ntlocks::get().release_peb();
+                    ntlocks::get().unlock_loader(0, cookie);
+                } else {
+                    ntlocks::get().acquire_peb();
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                    if (!ntlocks::lock_loader_blocking(cookie)) {
+                        ntlocks::get().release_peb();
+                        return 1;
+                    }
+                    ntlocks::get().unlock_loader(0, cookie);
+                    ntlocks::get().release_peb();
+                }
+            }
+
+            contender_rounds.fetch_add(1, std::memory_order_relaxed);
+            std::this_thread::yield();
+        }
+        return 0;
+    };
+
+    auto loader_first = launch_lock_task([&] { return contender_body(0); });
+    auto peb_first = launch_lock_task([&] { return contender_body(1); });
+
+    constexpr int k_iterations = 20;
+    auto freezer = launch_lock_task([&]() -> int {
+        // All three threads exist before any NT lock is taken; see Half #1.
+        if (!gate.wait()) {
+            return 1;
+        }
+
+        for (int i = 0; i < k_iterations; ++i) {
+            utility::ThreadSuspender s;
+            if (s.states.empty()) {
+                return 1;
+            }
+            s.resume();
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        return 0;
+    });
+
+    const bool started = gate.release(3);
+
+    const bool freezer_done = freezer.finished_within(std::chrono::seconds(60));
+    const int freezer_rc = freezer.join();
+
+    stop.store(true, std::memory_order_relaxed);
+    const int loader_first_rc = loader_first.join();
+    const int peb_first_rc = peb_first.join();
+
+    const uint32_t retries = utility::detail::g_world_lock_retries.load() - retries_before;
+    const uint32_t timeouts = utility::detail::g_world_lock_timeouts.load() - timeouts_before;
+    std::printf("  %d freezes vs %u contended lock rounds; back-outs: %u, give-ups: %u\n",
+                k_iterations, contender_rounds.load(), retries, timeouts);
+
+    TEST_ASSERT(started);
+    TEST_ASSERT(freezer_done && freezer_rc == 0);
+    TEST_ASSERT(loader_first_rc == 0 && peb_first_rc == 0);
+    TEST_ASSERT(contender_rounds.load() > 0);
+    // Contenders hold the loader lock ~1ms per round, so the freeze loop must
+    // have hit it at least once and backed out of its partial lock.
+    TEST_ASSERT(retries > 0);
+    // Every freeze still ended up owning both locks; none fell back to the
+    // unlocked path.
+    TEST_ASSERT(timeouts == 0);
+    return 0;
+}
+
+// ============================================================================
 // for_each_uncached — via find_all_vtables on the executable module
 // Exercises the full path: find_all_vtables -> populate -> for_each_uncached
 // which is the function we guarded with get_module_size null check.
@@ -525,6 +964,11 @@ int main() try {
     RUN_TEST(test_threadsuspender_actually_freezes_threads);
     RUN_TEST(test_threadsuspender_suspended_flag_reflects_success);
     RUN_TEST(test_threadsuspender_suspend_balanced);
+
+    // ThreadSuspender — loader lock + PEB lock (RtlAcquirePebLock) contention
+    RUN_TEST(test_threadsuspender_backs_out_when_loader_lock_is_held);
+    RUN_TEST(test_threadsuspender_waits_out_peb_lock_owner);
+    RUN_TEST(test_threadsuspender_lock_order_soak);
 
     // for_each_uncached (via find_all_vtables)
     RUN_TEST(test_find_all_vtables_executable);

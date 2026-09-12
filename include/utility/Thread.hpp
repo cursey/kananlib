@@ -1,5 +1,7 @@
 #pragma once
 
+#include <atomic>
+#include <cstdint>
 #include <memory>
 #include <mutex>
 #include <vector>
@@ -19,6 +21,8 @@ void resume_threads(const ThreadStates& states);
 
 namespace detail {
 extern std::mutex g_suspend_mutex;
+extern std::atomic<uint32_t> g_world_lock_retries;
+extern std::atomic<uint32_t> g_world_lock_timeouts;
 }
 
 struct ThreadSuspender {
