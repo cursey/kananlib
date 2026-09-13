@@ -287,79 +287,81 @@ namespace utility {
         return {};
     }
 
+    namespace {
+        // Aligned search for a `value` of the target's pointer width. The
+        // try/catch skips unreadable pages exactly as the original scan_ptr did.
+        template<typename T>
+        std::optional<uintptr_t> scan_value_aligned(uintptr_t start, size_t length, T value) {
+            auto end = (T*)(start + length);
+            auto it = (T*)start;
+            while (it < end) try {
+                it = std::find(it, end, value);
+                if (it != end) {
+                    return (uintptr_t)it;
+                }
+                // find() exhausted the range; incrementing here would form a
+                // pointer past one-past-the-end (UB).
+                break;
+            } catch(...) {
+                MEMORY_BASIC_INFORMATION mbi{};
+                if (VirtualQuery(it, &mbi, sizeof(mbi)) != 0) {
+                    it = (T*)((uintptr_t)mbi.BaseAddress + mbi.RegionSize);
+                } else {
+                    ++it;
+                }
+                continue;
+            }
+            return std::nullopt;
+        }
+    }
+
     optional<uintptr_t> scan_ptr(HMODULE module, uintptr_t ptr) {
         KANANLIB_BENCH();
 
         const auto module_size = get_module_size(module).value_or(0);
-        auto end = (uintptr_t*)((uintptr_t)module + module_size);
-        auto it = (uintptr_t*)module;
-
-        // just making use of the try catch + while to get through unreadable pages
-        while (it < end) try {
-            it = std::find(it, end, ptr);
-
-            if (it != end) {
-                return (uintptr_t)it;
-            }
-
-            ++it;
-        } catch(...) {
-            MEMORY_BASIC_INFORMATION mbi{};
-            if (VirtualQuery(it, &mbi, sizeof(mbi)) != 0) {
-                it = (uintptr_t*)((uintptr_t)mbi.BaseAddress + mbi.RegionSize);
-            } else {
-                ++it;
-            }
-
-            continue;
-        }
-
-        return std::nullopt;
+        return scan_ptr((uintptr_t)module, module_size, ptr, get_module_arch(module));
     }
 
-    std::optional<uintptr_t> scan_ptr(uintptr_t start, size_t length, uintptr_t ptr) {
+    std::optional<uintptr_t> scan_ptr(uintptr_t start, size_t length, uintptr_t ptr, TargetArch arch) {
         KANANLIB_BENCH();
 
         if (start == 0 || length == 0) {
             return {};
         }
 
-        auto end = (uintptr_t*)(start + length);
-        auto it = (uintptr_t*)start;
-
-        // just making use of the try catch + while to get through unreadable pages
-        while (it < end) try {
-            it = std::find(it, end, ptr);
-
-            if (it != end) {
-                return (uintptr_t)it;
+        // A 32-bit target stores 4-byte pointers; an address that does not fit in
+        // 4 bytes cannot appear in it.
+        if (arch == TargetArch::X86) {
+            if (ptr > 0xFFFFFFFFull) {
+                return std::nullopt;
             }
-
-            ++it;
-        } catch(...) {
-            MEMORY_BASIC_INFORMATION mbi{};
-            if (VirtualQuery(it, &mbi, sizeof(mbi)) != 0) {
-                it = (uintptr_t*)((uintptr_t)mbi.BaseAddress + mbi.RegionSize);
-            } else {
-                ++it;
-            }
-            
-            continue;
+            return scan_value_aligned<uint32_t>(start, length, (uint32_t)ptr);
         }
-
-        return std::nullopt;
+        return scan_value_aligned<uint64_t>(start, length, (uint64_t)ptr);
     }
 
     std::optional<uintptr_t> scan_ptr_noalign(HMODULE module, uintptr_t ptr) {
         KANANLIB_BENCH();
 
-        return utility::scan_data(module, (uint8_t*)&ptr, sizeof(uintptr_t));
+        const auto module_size = get_module_size(module).value_or(0);
+        return scan_ptr_noalign((uintptr_t)module, module_size, ptr, get_module_arch(module));
     }
 
-    std::optional<uintptr_t> scan_ptr_noalign(uintptr_t start, size_t length, uintptr_t ptr) {
+    std::optional<uintptr_t> scan_ptr_noalign(uintptr_t start, size_t length, uintptr_t ptr, TargetArch arch) {
         KANANLIB_BENCH();
 
-        return utility::scan_data(start, length, (uint8_t*)&ptr, sizeof(uintptr_t));
+        if (arch == TargetArch::X86) {
+            if (ptr > 0xFFFFFFFFull) {
+                return std::nullopt;
+            }
+            const uint32_t value = (uint32_t)ptr;
+            return utility::scan_data(start, length, (uint8_t*)&value, sizeof(value));
+        }
+        // Match the target's pointer width explicitly -- sizeof(uintptr_t) is the
+        // *host's* width and would search only 4 bytes for an X64 target on a
+        // 32-bit host.
+        const uint64_t value = (uint64_t)ptr;
+        return utility::scan_data(start, length, (uint8_t*)&value, sizeof(value));
     }
 
     optional<uintptr_t> scan_string(HMODULE module, const string& str, bool zero_terminated) {
@@ -1221,12 +1223,12 @@ namespace utility {
 #endif
     }
     
-    std::optional<uintptr_t> scan_opcode(uintptr_t ip, size_t num_instructions, uint8_t opcode) {
+    std::optional<uintptr_t> scan_opcode(uintptr_t ip, size_t num_instructions, uint8_t opcode, TargetArch arch) {
         KANANLIB_BENCH();
 
         for (size_t i = 0; i < num_instructions; ++i) {
             INSTRUX ix{};
-            const auto status = NdDecodeEx(&ix, (uint8_t*)ip, 1000, KANANLIB_DECODE_MODE, KANANLIB_DECODE_DATA);
+            const auto status = NdDecodeEx(&ix, (uint8_t*)ip, 1000, decode_mode(arch), decode_data(arch));
 
             if (!ND_SUCCESS(status)) {
                 break;
@@ -1242,12 +1244,12 @@ namespace utility {
         return std::nullopt;
     }
 
-    std::optional<uintptr_t> scan_disasm(uintptr_t ip, size_t num_instructions, const string& pattern) {
+    std::optional<uintptr_t> scan_disasm(uintptr_t ip, size_t num_instructions, const string& pattern, TargetArch arch) {
         KANANLIB_BENCH();
 
         for (size_t i = 0; i < num_instructions; ++i) {
             INSTRUX ix{};
-            const auto status = NdDecodeEx(&ix, (uint8_t*)ip, 1000, KANANLIB_DECODE_MODE, KANANLIB_DECODE_DATA);
+            const auto status = NdDecodeEx(&ix, (uint8_t*)ip, 1000, decode_mode(arch), decode_data(arch));
 
             if (!ND_SUCCESS(status)) {
                 break;
@@ -1263,12 +1265,12 @@ namespace utility {
         return std::nullopt;
     }
 
-    std::optional<uintptr_t> scan_mnemonic(uintptr_t ip, size_t num_instructions, const string& mnemonic) {
+    std::optional<uintptr_t> scan_mnemonic(uintptr_t ip, size_t num_instructions, const string& mnemonic, TargetArch arch) {
         KANANLIB_BENCH();
 
         for (size_t i = 0; i < num_instructions; ++i) {
             INSTRUX ix{};
-            const auto status = NdDecodeEx(&ix, (uint8_t*)ip, 1000, KANANLIB_DECODE_MODE, KANANLIB_DECODE_DATA);
+            const auto status = NdDecodeEx(&ix, (uint8_t*)ip, 1000, decode_mode(arch), decode_data(arch));
 
             if (!ND_SUCCESS(status)) {
                 break;
@@ -1284,9 +1286,9 @@ namespace utility {
         return std::nullopt;
     }
 
-    uint32_t get_insn_size(uintptr_t ip) {
+    uint32_t get_insn_size(uintptr_t ip, TargetArch arch) {
         INSTRUX ix{};
-        const auto status = NdDecodeEx(&ix, (uint8_t*)ip, 1000, KANANLIB_DECODE_MODE, KANANLIB_DECODE_DATA);
+        const auto status = NdDecodeEx(&ix, (uint8_t*)ip, 1000, decode_mode(arch), decode_data(arch));
 
         if (!ND_SUCCESS(status)) {
             return 0;
@@ -1301,9 +1303,9 @@ namespace utility {
         return address + customOffset + offset;
     }
 
-    std::optional<INSTRUX> decode_one(uint8_t* ip, size_t max_size) {
+    std::optional<INSTRUX> decode_one(uint8_t* ip, size_t max_size, TargetArch arch) {
         INSTRUX ix{};
-        const auto status = NdDecodeEx(&ix, ip, max_size, KANANLIB_DECODE_MODE, KANANLIB_DECODE_DATA);
+        const auto status = NdDecodeEx(&ix, ip, max_size, decode_mode(arch), decode_data(arch));
 
         if (!ND_SUCCESS(status)) {
             return {};
@@ -1312,13 +1314,13 @@ namespace utility {
         return ix;
     }
 
-    void linear_decode(uint8_t* ip, size_t max_size, std::function<bool(ExhaustionContext&)> callback) {
+    void linear_decode(uint8_t* ip, size_t max_size, std::function<bool(ExhaustionContext&)> callback, TargetArch arch) {
         ExhaustionContext ctx{};
         ctx.branch_start = (uintptr_t)ip;
         ctx.addr = (uintptr_t)ip;
 
         for (size_t i = 0; i < max_size;) try {
-            const auto status = NdDecodeEx(&ctx.instrux, (uint8_t*)ctx.addr, 64, KANANLIB_DECODE_MODE, KANANLIB_DECODE_DATA);
+            const auto status = NdDecodeEx(&ctx.instrux, (uint8_t*)ctx.addr, 64, decode_mode(arch), decode_data(arch));
 
             if (!ND_SUCCESS(status)) {
                 break;
@@ -1338,7 +1340,7 @@ namespace utility {
         }
     }
 
-    void collect_basic_blocks_into(uintptr_t start, const BasicBlockCollectOptions& options, std::vector<BasicBlock>& blocks) {
+    void collect_basic_blocks_into(uintptr_t start, const BasicBlockCollectOptions& options, std::vector<BasicBlock>& blocks, TargetArch arch) {
         uintptr_t previous_branch_start = start;
 
         BasicBlock last_block{};
@@ -1410,7 +1412,7 @@ namespace utility {
             }
 
             return ExhaustionResult::CONTINUE;
-        });
+        }, arch);
 
         // Emit the last block if it differs from the one we last emitted (can happen
         // if the final instruction is a ret/int3/etc).
@@ -1455,13 +1457,13 @@ namespace utility {
         }
     }
 
-    std::vector<BasicBlock> collect_basic_blocks(uintptr_t start, const BasicBlockCollectOptions& options) {
+    std::vector<BasicBlock> collect_basic_blocks(uintptr_t start, const BasicBlockCollectOptions& options, TargetArch arch) {
         std::vector<BasicBlock> blocks{};
-        collect_basic_blocks_into(start, options, blocks);
+        collect_basic_blocks_into(start, options, blocks, arch);
         return blocks;
     }
 
-    std::vector<BasicBlock>::const_iterator get_highest_contiguous_block(const std::vector<BasicBlock>& blocks) {
+    std::vector<BasicBlock>::const_iterator get_highest_contiguous_block(const std::vector<BasicBlock>& blocks, TargetArch arch) {
         if (blocks.empty()) {
             return blocks.end();
         }
@@ -1491,13 +1493,13 @@ namespace utility {
             // the CFG does not account for, but we can still linearly decode through it.
             if (highest_block_end < blocks.back().end) {
                 INSTRUX ix{};
-                const auto status = NdDecodeEx(&ix, (uint8_t*)highest_block_end, 16, KANANLIB_DECODE_MODE, KANANLIB_DECODE_DATA);
+                const auto status = NdDecodeEx(&ix, (uint8_t*)highest_block_end, 16, decode_mode(arch), decode_data(arch));
 
                 if (ND_SUCCESS(status)) {
                     // If the disassembly is successful, we can assume it's a valid instruction
                     // and continue sliding the end forward until we hit an invalid instruction
                     while (true && num_decoded < 16) {
-                        const auto next_status = NdDecodeEx(&ix, (uint8_t*)highest_block_end + ix.Length, 16, KANANLIB_DECODE_MODE, KANANLIB_DECODE_DATA);
+                        const auto next_status = NdDecodeEx(&ix, (uint8_t*)highest_block_end + ix.Length, 16, decode_mode(arch), decode_data(arch));
 
                         if (!ND_SUCCESS(next_status)) {
                             break;
@@ -1720,10 +1722,10 @@ namespace utility {
     }
 
     namespace detail {
-        void remove_undecodable_starts(std::vector<uint32_t>& starts, uintptr_t module) {
-            std::erase_if(starts, [module](uint32_t rva) {
+        void remove_undecodable_starts(std::vector<uint32_t>& starts, uintptr_t module, TargetArch arch) {
+            std::erase_if(starts, [module, arch](uint32_t rva) {
                 INSTRUX ix{};
-                const auto status = NdDecodeEx(&ix, (uint8_t*)(module + rva), 16, KANANLIB_DECODE_MODE, KANANLIB_DECODE_DATA);
+                const auto status = NdDecodeEx(&ix, (uint8_t*)(module + rva), 16, decode_mode(arch), decode_data(arch));
                 return !ND_SUCCESS(status);
             });
         }
@@ -1731,6 +1733,7 @@ namespace utility {
 
     void populate_function_buckets_heuristic(uintptr_t module) {
         KANANLIB_BENCH();
+        const auto arch = get_module_arch((HMODULE)module);
 
         const auto module_size = utility::get_module_size((HMODULE)module).value_or(0xDEADBEEF);
         const auto module_end = module + module_size;
@@ -1885,11 +1888,11 @@ namespace utility {
 
         // Quickly disassemble to make sure they look like function starts
         // Remove any that don't
-        std::erase_if(function_starts, [module](uint32_t rva) {
+        std::erase_if(function_starts, [module, arch](uint32_t rva) {
             const auto absolute = module + rva;
 
             INSTRUX ix{};
-            const auto status = NdDecodeEx(&ix, (uint8_t*)absolute, 16, KANANLIB_DECODE_MODE, KANANLIB_DECODE_DATA);
+            const auto status = NdDecodeEx(&ix, (uint8_t*)absolute, 16, decode_mode(arch), decode_data(arch));
 
             if (!ND_SUCCESS(status)) {
                 return true;
@@ -1929,11 +1932,13 @@ namespace utility {
             const auto region_size = region.RegionSize;
             const auto region_end = region_start + region_size;
 
-            for (auto addr = region_start; addr + sizeof(uintptr_t) < region_end; addr += sizeof(uintptr_t)) {
-                const auto potential_fn_ptr = *(uintptr_t*)addr;
+            const auto ptr_width = pointer_width(arch);
+            for (auto addr = region_start; addr + ptr_width < region_end; addr += ptr_width) {
+                const uintptr_t potential_fn_ptr =
+                    ptr_width == 4 ? (uintptr_t)*(uint32_t*)addr : (uintptr_t)*(uint64_t*)addr;
 
-                // make sure aligned on sizeof(void*)
-                if ((addr & (sizeof(void*) - 1)) != 0) {
+                // make sure aligned on the target pointer width
+                if ((addr & (ptr_width - 1)) != 0) {
                     continue;
                 }
 
@@ -1961,19 +1966,15 @@ namespace utility {
         std::sort(function_starts.begin(), function_starts.end());
         function_starts.erase(std::unique(function_starts.begin(), function_starts.end()), function_starts.end());
 
-#if KANANLIB_ARCH_X86_32
-        // x86-only. The readable-region pointer scan above appends candidates
-        // that bypass the earlier decode check. On the live x86 process a value
-        // that merely happens to point into an executable region need not sit on
-        // an instruction boundary. When it fails to decode, exhaustive_decode
-        // yields only a zero-length [start,start] block and get_insn_size returns
-        // 0, so the heuristic end becomes start_rva + 0 -- a degenerate bucket
-        // entry (EndAddress == BeginAddress) that corrupts find_function_entry's
-        // coverage and surfaces as a bogus zero-width function. Drop such
-        // candidates. Guarded to x86 because this failure is x86-specific and
-        // x64 behavior must remain unchanged.
-        detail::remove_undecodable_starts(function_starts, module);
-#endif
+        // The readable-region pointer scan above appends candidates that bypass
+        // the earlier decode check. For a 32-bit target a value that merely
+        // happens to point into an executable region need not sit on an
+        // instruction boundary; when it fails to decode, the heuristic end
+        // becomes a degenerate zero-width bucket entry. Drop such candidates.
+        // Only needed for x86 targets; x64 behavior is unchanged.
+        if (arch == TargetArch::X86) {
+            detail::remove_undecodable_starts(function_starts, module, arch);
+        }
 
         // Sort function starts by gap to next function (proxy for complexity)
         std::vector<size_t> indices(function_starts.size());
@@ -2003,17 +2004,14 @@ namespace utility {
 
             auto t0 = std::chrono::high_resolution_clock::now();
 
-            // x86 caps exploration at max_size 8192 (matching determine_function_bounds).
-            // exhaustive_decode allocates a per-thread seen table sized from max_size;
-            // at 100000 that is ~96 MiB of TLS tables per worker on x86 (calloc'd
-            // slots + dirty indices, 4-byte pointers/size_t). Under parallel_for the
-            // workers together exhaust the 32-bit address space, calloc fails,
-            // exhaustive_decode aborts before decoding, and collect_basic_blocks
-            // yields only a zero-length [start,start] block -> a bogus ~1-byte end.
-            // Retain the existing x64 limit.
+            // exhaustive_decode's seen table (detail::SeenSet) now grows on demand,
+            // so its per-thread footprint tracks the function's actual instruction
+            // count rather than max_size. That removed the earlier x86 32-bit
+            // address-space blowup (which forced an 8192 cap here), so x86 can now
+            // use the same exploration budget as x64.
             const auto blocks = utility::collect_basic_blocks(start_absolute, BasicBlockCollectOptions{ 
-                .max_size = KANANLIB_ARCH_X86_32 ? 8192 : 100000, .sort = true, .merge_call_blocks = true, .copy_instructions = false
-            });
+                .max_size = 100000, .sort = true, .merge_call_blocks = true, .copy_instructions = false
+            }, arch);
 
             functions_populated[i] = 1;
 
@@ -2031,7 +2029,7 @@ namespace utility {
             }
 
             if (blocks.empty()) {
-                function_ends[i] = start_rva + utility::get_insn_size(start_absolute); // fallback
+                function_ends[i] = start_rva + utility::get_insn_size(start_absolute, arch); // fallback
                 return;
             }
 
@@ -2059,13 +2057,13 @@ namespace utility {
                 // the CFG does not account for, but we can still linearly decode through it.
                 if (highest_block_end < blocks.back().end) {
                     INSTRUX ix{};
-                    const auto status = NdDecodeEx(&ix, (uint8_t*)highest_block_end, 16, KANANLIB_DECODE_MODE, KANANLIB_DECODE_DATA);
+                    const auto status = NdDecodeEx(&ix, (uint8_t*)highest_block_end, 16, decode_mode(arch), decode_data(arch));
 
                     if (ND_SUCCESS(status)) {
                         // If the disassembly is successful, we can assume it's a valid instruction
                         // and continue sliding the end forward until we hit an invalid instruction
                         while (true && num_decoded < 16) {
-                            const auto next_status = NdDecodeEx(&ix, (uint8_t*)highest_block_end + ix.Length, 16, KANANLIB_DECODE_MODE, KANANLIB_DECODE_DATA);
+                            const auto next_status = NdDecodeEx(&ix, (uint8_t*)highest_block_end + ix.Length, 16, decode_mode(arch), decode_data(arch));
 
                             if (!ND_SUCCESS(next_status)) {
                                 break;
@@ -2106,7 +2104,7 @@ namespace utility {
 
                 function_ends[i] = highest_block_end - module;
             } else {
-                function_ends[i] = start_rva + utility::get_insn_size(start_absolute); // fallback
+                function_ends[i] = start_rva + utility::get_insn_size(start_absolute, arch); // fallback
             }
         });
 
@@ -2146,6 +2144,13 @@ namespace utility {
 
     void populate_function_buckets(uintptr_t module) {
         KANANLIB_BENCH();
+
+        // A mapped 32-bit target uses SEH, not .pdata, so it has no usable
+        // exception directory; fall back to the heuristic scan for it. Native
+        // x64 modules keep using the exception directory below.
+        if (get_module_arch((HMODULE)module) == TargetArch::X86) {
+            return populate_function_buckets_heuristic(module);
+        }
 
 #if KANANLIB_ARCH_X86_32
         return populate_function_buckets_heuristic(module);
@@ -2335,13 +2340,14 @@ namespace utility {
     }
 
     std::optional<FunctionBounds> determine_function_bounds(uintptr_t addr) {
-        const auto blocks = utility::collect_basic_blocks(addr, BasicBlockCollectOptions{ .max_size = 8192, .sort = true, .merge_call_blocks = true, .copy_instructions = false });
+        const auto arch = get_module_arch(get_module_within(addr).value_or(nullptr));
+        const auto blocks = utility::collect_basic_blocks(addr, BasicBlockCollectOptions{ .max_size = 8192, .sort = true, .merge_call_blocks = true, .copy_instructions = false }, arch);
 
         if (blocks.empty()) {
             return std::nullopt;
         }
 
-        auto it = get_highest_contiguous_block(blocks);
+        auto it = get_highest_contiguous_block(blocks, arch);
 
         if (it == blocks.end()) {
             return std::nullopt;
@@ -3000,14 +3006,14 @@ namespace utility {
         return result;
     }
 
-    std::optional<uintptr_t> resolve_displacement(uintptr_t ip, const INSTRUX* ix_in) {
+    std::optional<uintptr_t> resolve_displacement(uintptr_t ip, const INSTRUX* ix_in, TargetArch arch) {
         INSTRUX ix_local{};
         const INSTRUX* ix;
         
         if (ix_in) {
             ix = ix_in;
         } else {
-            auto decoded = decode_one((uint8_t*)ip);
+            auto decoded = decode_one((uint8_t*)ip, 1000, arch);
             if (!decoded) {
                 return std::nullopt;
             }
@@ -3022,41 +3028,39 @@ namespace utility {
                 if (mem.HasDisp && mem.IsRipRel) {
                     return ip + ix->Length + (intptr_t)mem.Disp;
                 }
-#if KANANLIB_ARCH_X86_32
                 // On x86 there is no RIP-relative addressing; references use
                 // absolute [disp32] operands. Require a pure displacement --
                 // no base/index register and no segment override -- so that
                 // frame/stack-relative ([ebp-4]) and segment-relative
                 // (fs:[0x18]) operands are NOT mistaken for absolute addresses.
-                if (mem.HasDisp && !mem.IsRipRel
+                if (arch == TargetArch::X86 && mem.HasDisp && !mem.IsRipRel
                         && !mem.HasBase && !mem.HasIndex && !ix->HasSeg) {
                     return (uintptr_t)mem.Disp;
                 }
-#endif
             } else if (operand.Type == ND_OP_OFFS) {
                 const auto& offs = operand.Info.RelativeOffset;
                 return ip + ix->Length + (intptr_t)offs.Rel;
             }
         }
 
-#if KANANLIB_ARCH_X86_32
         // Handle immediate operands that encode absolute addresses. x86-only:
         // MSVC frequently loads string/data addresses via push/mov imm32 with
         // no RIP-relative equivalent. Bounds-check against a loaded module so
         // small integer immediates (e.g. `add eax, 5`) aren't mistaken for
-        // addresses; this does not run on x64, where absolute imm32 pointers
+        // addresses; this does not apply on x64, where absolute imm32 pointers
         // aren't how references are encoded and RIP-relative handling above
         // already covers real references.
-        for (auto i = 0; i < ix->OperandsCount; ++i) {
-            const auto& operand = ix->Operands[i];
-            if (operand.Type == ND_OP_IMM) {
-                const auto imm = (uintptr_t)operand.Info.Immediate.Imm;
-                if (imm != 0 && utility::get_module_within(imm).has_value()) {
-                    return imm;
+        if (arch == TargetArch::X86) {
+            for (auto i = 0; i < ix->OperandsCount; ++i) {
+                const auto& operand = ix->Operands[i];
+                if (operand.Type == ND_OP_IMM) {
+                    const auto imm = (uintptr_t)operand.Info.Immediate.Imm;
+                    if (imm != 0 && utility::get_module_within(imm).has_value()) {
+                        return imm;
+                    }
                 }
             }
         }
-#endif
 
         if (ix->HasDisp && ix->IsRipRelative) {
             return ip + ix->Length + ix->Displacement;

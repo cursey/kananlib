@@ -23,6 +23,37 @@ typedef NTSTATUS (WINAPI* PFN_LdrLockLoaderLock)(ULONG Flags, ULONG *State, ULON
 typedef NTSTATUS (WINAPI* PFN_LdrUnlockLoaderLock)(ULONG Flags, ULONG_PTR Cookie);
 
 namespace utility {
+    // Target architecture of an analyzed module. Almost always the host
+    // architecture, but a 64-bit process can map and analyze a 32-bit PE
+    // (see map_view_of_pe), in which case decode/scan must use the target's
+    // instruction mode and pointer width rather than the host's.
+    enum class TargetArch : uint8_t {
+        X86,
+        X64,
+    };
+
+    constexpr TargetArch host_arch() noexcept {
+#if defined(_M_IX86) || defined(__i386__)
+        return TargetArch::X86;
+#else
+        return TargetArch::X64;
+#endif
+    }
+
+    constexpr size_t pointer_width(TargetArch arch) noexcept {
+        return arch == TargetArch::X86 ? 4 : 8;
+    }
+
+    // Architecture of a mapped/loaded module, detected from its PE optional
+    // header magic. Falls back to the host architecture for non-PE modules.
+    TargetArch get_module_arch(HMODULE module);
+
+    // True if `module` is a fake module we mapped ourselves (map_view_of_pe /
+    // map_view_of_macho) rather than one the OS loader loaded. Mapped modules
+    // are not in the loader's module list, so RTTI/scan paths that rely on it
+    // must fall back to walking the module directly.
+    bool is_mapped_module(HMODULE module);
+
     //
     // Module utilities.
     //

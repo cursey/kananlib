@@ -111,7 +111,56 @@ namespace utility {
             return {};
         }
 
-        return ntHeaders->OptionalHeader.ImageBase;
+        // ImageBase lives at a different offset/width in PE32 vs PE32+, so read
+        // it by the optional header magic rather than the host's compile-time
+        // IMAGE_NT_HEADERS layout (which would mis-read a 32-bit image on x64).
+        // An unrecognized magic identifies neither layout, so there is no valid
+        // field to read -- fail rather than guessing one, matching the DOS/NT
+        // signature checks above.
+        switch (ntHeaders->OptionalHeader.Magic) {
+        case IMAGE_NT_OPTIONAL_HDR32_MAGIC:
+            return ((PIMAGE_NT_HEADERS32)ntHeaders)->OptionalHeader.ImageBase;
+        case IMAGE_NT_OPTIONAL_HDR64_MAGIC:
+            return ((PIMAGE_NT_HEADERS64)ntHeaders)->OptionalHeader.ImageBase;
+        default:
+            return {};
+        }
+    }
+
+    TargetArch get_module_arch(HMODULE module) {
+        if (module == nullptr) {
+            return host_arch();
+        }
+        auto dosHeader = (PIMAGE_DOS_HEADER)module;
+        if (dosHeader->e_magic != IMAGE_DOS_SIGNATURE) {
+            return host_arch();
+        }
+        auto ntHeaders = (PIMAGE_NT_HEADERS)((uintptr_t)dosHeader + dosHeader->e_lfanew);
+        if (ntHeaders->Signature != IMAGE_NT_SIGNATURE) {
+            return host_arch();
+        }
+        // Only the two defined optional-header magics identify an architecture.
+        // Anything else (ROM images, malformed headers) must degrade to the host
+        // arch rather than being assumed 64-bit, which would otherwise flip
+        // decode mode and pointer width on an x86 host.
+        switch (ntHeaders->OptionalHeader.Magic) {
+        case IMAGE_NT_OPTIONAL_HDR32_MAGIC:
+            return TargetArch::X86;
+        case IMAGE_NT_OPTIONAL_HDR64_MAGIC:
+            return TargetArch::X64;
+        default:
+            return host_arch();
+        }
+    }
+
+    bool is_mapped_module(HMODULE module) {
+        std::shared_lock _{g_module_ranges_mutex};
+        for (const auto& range : g_module_ranges) {
+            if (range.begin == (uintptr_t)module) {
+                return true;
+            }
+        }
+        return false;
     }
 
     std::optional<uintptr_t> get_imagebase_va_from_ptr(Address dll, Address base, void* ptr) {
