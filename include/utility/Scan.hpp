@@ -11,6 +11,9 @@
 
 #include <bddisasm.h>
 #include <windows.h>
+#if !defined(_WIN32)
+#include <unistd.h>
+#endif
 #include <utility/Seh.hpp>
 
 #include <utility/Logging.hpp>
@@ -146,6 +149,48 @@ namespace utility {
         ~TlsSeenTable() { free(slots); free(dirty); }
     };
 
+    namespace detail {
+    // The system page size, queried once (readability is page-granular).
+    inline size_t page_size() {
+        static const size_t size = [] {
+#if defined(_WIN32)
+            SYSTEM_INFO si{};
+            GetSystemInfo(&si);
+            return static_cast<size_t>(si.dwPageSize);
+#else
+            return static_cast<size_t>(sysconf(_SC_PAGESIZE));
+#endif
+        }();
+        return size;
+    }
+
+    // How many bytes at `ip` the decoder may read: 0 when `ip` itself is unreadable, else
+    // up to `window`, cut short at the first unreadable page. At most two one-byte probes
+    // (ip's page, and the next page when the window crosses into it); no system call.
+    // A cut-short window lets an instruction that fits decode normally, while one that
+    // runs into the unreadable page fails to decode instead of faulting.
+    inline size_t readable_window(const uint8_t* ip, size_t window) {
+        const size_t page = page_size();
+        const size_t to_page_end = page - (reinterpret_cast<uintptr_t>(ip) & (page - 1));
+        KANANLIB_SEH_TRY {
+            volatile uint8_t probe = *ip;
+            (void)probe;
+        } KANANLIB_SEH_EXCEPT (EXCEPTION_EXECUTE_HANDLER) {
+            return 0;
+        }
+        if (to_page_end >= window) {
+            return window;
+        }
+        KANANLIB_SEH_TRY {
+            volatile uint8_t probe = *(ip + to_page_end);
+            (void)probe;
+        } KANANLIB_SEH_EXCEPT (EXCEPTION_EXECUTE_HANDLER) {
+            return to_page_end;
+        }
+        return window;
+    }
+    } // namespace detail
+
     template<typename F>
     void exhaustive_decode(uint8_t* start, size_t max_size, F&& callback) {
         KANANLIB_BENCH();
@@ -218,22 +263,15 @@ namespace utility {
                     if (seen_table[si] == ip) break;
                 }
 
-                // This instead of IsBadReadPtr so we don't branch into kernel32 every time
-                // we want to test the readability of the memory
-#ifdef NDEBUG
-                KANANLIB_SEH_TRY {
-                    volatile auto test1 = *(uintptr_t*)(ip);
-                    volatile auto test8 = *(uintptr_t*)(ip + 56); // check if we can read ahead without page crossing
-                    (void)test1; (void)test8;
-                } KANANLIB_SEH_EXCEPT (EXCEPTION_EXECUTE_HANDLER) {
+                // Decode only bytes known to be readable (probed directly rather than via
+                // IsBadReadPtr, so we don't branch into kernel32 for every instruction).
+                // Requiring a full 64-byte window here dropped readable code near the end
+                // of a mapping.
+                const size_t readable = detail::readable_window(ip, 64);
+                if (readable == 0) {
                     break;
                 }
-#else
-                if (IsBadReadPtr(ip, 64)) {
-                    break;
-                }
-#endif
-                const auto status = NdDecodeEx(&ctx.instrux, ip, 64, KANANLIB_DECODE_MODE, KANANLIB_DECODE_DATA);
+                const auto status = NdDecodeEx(&ctx.instrux, ip, readable, KANANLIB_DECODE_MODE, KANANLIB_DECODE_DATA);
 
                 if (!ND_SUCCESS(status)) {
                     break;

@@ -11,6 +11,11 @@
 //         the subtraction wraps and the loop either silently skips (length > start)
 //         or wraps i past zero into UINTPTR_MAX (length == start). Fix: guard
 //         against length > start before entering the loop.
+//
+// Bug 3: exhaustive_decode required 64 readable bytes after every instruction start
+//         (it probed ip+56 / IsBadReadPtr(ip, 64)), so fully readable code within 64
+//         bytes of an unreadable page -- the end of a section, a JIT or heap buffer --
+//         stopped decoding early or produced no instructions at all.
 
 #include <atomic>
 #include <chrono>
@@ -428,6 +433,71 @@ int test_scan_strings_hmodule_wide_nonzero_terminated_exact_tail_finds_match() {
 }
 
 // ============================================================================
+// Bug 3: exhaustive_decode near an unreadable page
+// ============================================================================
+
+// `mov eax, 0xFF; add al, 1; lahf; ret` (4 instructions, 9 bytes) placed so that it ends
+// `gap` bytes before a PAGE_NOACCESS page. Every instruction is readable at every gap,
+// so exhaustive_decode must report all four, in order.
+int test_exhaustive_decode_near_unreadable_page() {
+    SYSTEM_INFO si{};
+    GetSystemInfo(&si);
+    const size_t page = si.dwPageSize;
+    auto* mem = static_cast<uint8_t*>(VirtualAlloc(nullptr, page * 2, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
+    TEST_ASSERT(mem != nullptr);
+    DWORD old = 0;
+    TEST_ASSERT(VirtualProtect(mem + page, page, PAGE_NOACCESS, &old));
+    static const uint8_t code[] = { 0xB8, 0xFF, 0x00, 0x00, 0x00, 0x04, 0x01, 0x9F, 0xC3 };
+    static const uint8_t lengths[] = { 5, 2, 1, 1 };
+
+    int failures = 0;
+    for (size_t gap = 0; gap <= 80; ++gap) {
+        uint8_t* p = mem + page - sizeof(code) - gap;
+        std::memcpy(p, code, sizeof(code));
+        std::vector<uintptr_t> seen;
+        utility::exhaustive_decode(p, 16, [&](utility::ExhaustionContext& ctx) {
+            seen.push_back(ctx.addr);
+            return utility::ExhaustionResult::CONTINUE;
+        });
+        bool ok = seen.size() == 4;
+        uintptr_t expect = (uintptr_t)p;
+        for (size_t i = 0; ok && i < 4; ++i) {
+            ok = seen[i] == expect;
+            expect += lengths[i];
+        }
+        if (!ok) {
+            std::printf("  gap %zu bytes before the no-access page: decoded %zu of 4 instructions\n", gap, seen.size());
+            ++failures;
+        }
+    }
+    VirtualFree(mem, 0, MEM_RELEASE);
+    TEST_ASSERT(failures == 0);
+    return 0;
+}
+
+// An instruction that itself runs into the unreadable page is not decoded (no fault).
+int test_exhaustive_decode_truncated_at_unreadable_page() {
+    SYSTEM_INFO si{};
+    GetSystemInfo(&si);
+    const size_t page = si.dwPageSize;
+    auto* mem = static_cast<uint8_t*>(VirtualAlloc(nullptr, page * 2, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
+    TEST_ASSERT(mem != nullptr);
+    DWORD old = 0;
+    TEST_ASSERT(VirtualProtect(mem + page, page, PAGE_NOACCESS, &old));
+    // nop; then the first 3 of the 5 bytes of `mov eax, imm32`
+    uint8_t* p = mem + page - 4;
+    p[0] = 0x90; p[1] = 0xB8; p[2] = 0x11; p[3] = 0x22;
+    std::vector<uintptr_t> seen;
+    utility::exhaustive_decode(p, 16, [&](utility::ExhaustionContext& ctx) {
+        seen.push_back(ctx.addr);
+        return utility::ExhaustionResult::CONTINUE;
+    });
+    VirtualFree(mem, 0, MEM_RELEASE);
+    TEST_ASSERT(seen.size() == 1 && seen[0] == (uintptr_t)p);
+    return 0;
+}
+
+// ============================================================================
 // main
 // ============================================================================
 
@@ -449,6 +519,8 @@ int main() try {
     RUN_TEST(test_scan_strings_hmodule_nonzero_terminated_exact_tail_finds_match);
     RUN_TEST(test_scan_strings_hmodule_wide_nonzero_terminated_exact_tail_finds_match);
     RUN_TEST(test_scan_reverse_length_equals_start);
+    RUN_TEST(test_exhaustive_decode_near_unreadable_page);
+    RUN_TEST(test_exhaustive_decode_truncated_at_unreadable_page);
 
     return test_summary();
 } catch (const std::exception& e) {
