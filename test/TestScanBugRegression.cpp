@@ -440,9 +440,7 @@ int test_scan_strings_hmodule_wide_nonzero_terminated_exact_tail_finds_match() {
 // `gap` bytes before a PAGE_NOACCESS page. Every instruction is readable at every gap,
 // so exhaustive_decode must report all four, in order.
 int test_exhaustive_decode_near_unreadable_page() {
-    SYSTEM_INFO si{};
-    GetSystemInfo(&si);
-    const size_t page = si.dwPageSize;
+    const size_t page = utility::detail::page_size();
     auto* mem = static_cast<uint8_t*>(VirtualAlloc(nullptr, page * 2, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
     TEST_ASSERT(mem != nullptr);
     DWORD old = 0;
@@ -477,9 +475,7 @@ int test_exhaustive_decode_near_unreadable_page() {
 
 // An instruction that itself runs into the unreadable page is not decoded (no fault).
 int test_exhaustive_decode_truncated_at_unreadable_page() {
-    SYSTEM_INFO si{};
-    GetSystemInfo(&si);
-    const size_t page = si.dwPageSize;
+    const size_t page = utility::detail::page_size();
     auto* mem = static_cast<uint8_t*>(VirtualAlloc(nullptr, page * 2, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
     TEST_ASSERT(mem != nullptr);
     DWORD old = 0;
