@@ -17,6 +17,7 @@
 #include <cstring>
 #include <vector>
 #include <functional>
+#include <set>
 
 #include <windows.h>
 
@@ -661,6 +662,137 @@ int test_exhaustive_decode_simple_sequence() {
     return 0;
 }
 
+#if !KANANLIB_ARCH_X86_32
+// ============================================================================
+// exhaustive_decode — RIP-relative indirect call/jmp (FF 15 / FF 25)
+// ============================================================================
+
+// A readable code/data page followed by a PAGE_NOACCESS page. Pointer slots live
+// at +0x800; `noaccess` is an address that faults on read.
+struct IndirectBranchPages {
+    static constexpr uint8_t CALL_RIP = 0x15; // call qword ptr [rip+disp32]
+    static constexpr uint8_t JMP_RIP  = 0x25; // jmp  qword ptr [rip+disp32]
+
+    size_t page{utility::detail::page_size()};
+    uint8_t* code{};
+    uintptr_t* slots{};
+    uintptr_t noaccess{};
+
+    IndirectBranchPages() {
+        code = (uint8_t*)VirtualAlloc(nullptr, page * 2, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+        if (code == nullptr) {
+            return;
+        }
+        DWORD old{};
+        if (!VirtualProtect(code + page, page, PAGE_NOACCESS, &old)) {
+            VirtualFree(code, 0, MEM_RELEASE);
+            code = nullptr;
+            return;
+        }
+        memset(code, 0xCC, page);
+        slots = (uintptr_t*)(code + 0x800);
+        noaccess = (uintptr_t)(code + page);
+    }
+    ~IndirectBranchPages() {
+        if (code) VirtualFree(code, 0, MEM_RELEASE);
+    }
+    IndirectBranchPages(const IndirectBranchPages&) = delete;
+    IndirectBranchPages& operator=(const IndirectBranchPages&) = delete;
+
+    uintptr_t at(size_t off) const { return (uintptr_t)code + off; }
+
+    // Emits the 6-byte `FF modrm disp32` at `off`, reading its pointer from `slot`.
+    void emit(size_t off, uint8_t modrm, uintptr_t slot) {
+        code[off] = 0xFF;
+        code[off + 1] = modrm;
+        const int32_t disp = (int32_t)(slot - (at(off) + 6));
+        memcpy(code + off + 2, &disp, sizeof(disp));
+    }
+
+    std::set<uintptr_t> decode(size_t off, bool step_over_calls = false) {
+        std::set<uintptr_t> seen;
+        utility::exhaustive_decode((uint8_t*)at(off), 100, [&](utility::ExhaustionContext& ctx) {
+            seen.insert(ctx.addr);
+            if (step_over_calls && ctx.instrux.Category == ND_CAT_CALL) {
+                return utility::ExhaustionResult::STEP_OVER;
+            }
+            return utility::ExhaustionResult::CONTINUE;
+        });
+        return seen;
+    }
+};
+
+// call [rip+slot] -> readable target: the target is decoded as a new branch and
+// decoding also continues after the call.
+int test_exhaustive_decode_indirect_call_followed() {
+    IndirectBranchPages f;
+    TEST_ASSERT(f.code != nullptr);
+    f.slots[0] = f.at(0x100);
+    f.emit(0x0, IndirectBranchPages::CALL_RIP, (uintptr_t)&f.slots[0]);
+    f.code[0x6] = 0xC3;   // ret
+    f.code[0x100] = 0xC3; // target: ret
+
+    TEST_ASSERT(f.decode(0x0) == (std::set<uintptr_t>{f.at(0x0), f.at(0x6), f.at(0x100)}));
+    return 0;
+}
+
+// jmp [rip+slot] -> readable target: decoding moves to the target and never falls
+// through past the jmp (the byte after it is int3 filler).
+int test_exhaustive_decode_indirect_jmp_followed() {
+    IndirectBranchPages f;
+    TEST_ASSERT(f.code != nullptr);
+    f.slots[0] = f.at(0x100);
+    f.emit(0x0, IndirectBranchPages::JMP_RIP, (uintptr_t)&f.slots[0]);
+    f.code[0x100] = 0x90; // target: nop
+    f.code[0x101] = 0xC3; //         ret
+
+    TEST_ASSERT(f.decode(0x0) == (std::set<uintptr_t>{f.at(0x0), f.at(0x100), f.at(0x101)}));
+    return 0;
+}
+
+// The slot holds a pointer into a PAGE_NOACCESS page: nothing is reported from the
+// target, decoding continues after the call, and the jmp ends the branch.
+int test_exhaustive_decode_indirect_unreadable_target() {
+    IndirectBranchPages f;
+    TEST_ASSERT(f.code != nullptr);
+    f.slots[0] = f.noaccess;
+    f.emit(0x0, IndirectBranchPages::CALL_RIP, (uintptr_t)&f.slots[0]);
+    f.code[0x6] = 0xC3;
+    f.emit(0x20, IndirectBranchPages::JMP_RIP, (uintptr_t)&f.slots[0]);
+
+    TEST_ASSERT(f.decode(0x0) == (std::set<uintptr_t>{f.at(0x0), f.at(0x6)}));
+    TEST_ASSERT(f.decode(0x20) == (std::set<uintptr_t>{f.at(0x20)}));
+    return 0;
+}
+
+// The slot itself is in a PAGE_NOACCESS page: reading it must not fault; the call
+// is skipped over and the jmp ends the branch.
+int test_exhaustive_decode_indirect_unreadable_slot() {
+    IndirectBranchPages f;
+    TEST_ASSERT(f.code != nullptr);
+    f.emit(0x0, IndirectBranchPages::CALL_RIP, f.noaccess);
+    f.code[0x6] = 0xC3;
+    f.emit(0x20, IndirectBranchPages::JMP_RIP, f.noaccess);
+
+    TEST_ASSERT(f.decode(0x0) == (std::set<uintptr_t>{f.at(0x0), f.at(0x6)}));
+    TEST_ASSERT(f.decode(0x20) == (std::set<uintptr_t>{f.at(0x20)}));
+    return 0;
+}
+
+// STEP_OVER on an indirect call keeps its readable target out of the walk.
+int test_exhaustive_decode_indirect_call_step_over() {
+    IndirectBranchPages f;
+    TEST_ASSERT(f.code != nullptr);
+    f.slots[0] = f.at(0x100);
+    f.emit(0x0, IndirectBranchPages::CALL_RIP, (uintptr_t)&f.slots[0]);
+    f.code[0x6] = 0xC3;
+    f.code[0x100] = 0xC3;
+
+    TEST_ASSERT(f.decode(0x0, true) == (std::set<uintptr_t>{f.at(0x0), f.at(0x6)}));
+    return 0;
+}
+#endif
+
 // ============================================================================
 // linear_decode — simple linear instruction decode
 // ============================================================================
@@ -861,6 +993,13 @@ int main() try {
 
     // exhaustive_decode
     RUN_TEST(test_exhaustive_decode_simple_sequence);
+#if !KANANLIB_ARCH_X86_32
+    RUN_TEST(test_exhaustive_decode_indirect_call_followed);
+    RUN_TEST(test_exhaustive_decode_indirect_jmp_followed);
+    RUN_TEST(test_exhaustive_decode_indirect_unreadable_target);
+    RUN_TEST(test_exhaustive_decode_indirect_unreadable_slot);
+    RUN_TEST(test_exhaustive_decode_indirect_call_step_over);
+#endif
 
     // linear_decode
     RUN_TEST(test_linear_decode_simple);

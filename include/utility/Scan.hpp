@@ -189,6 +189,18 @@ namespace utility {
         }
         return window;
     }
+
+    // Reads the pointer-sized value at `addr` into `out`; false if any of its bytes are unreadable.
+    // Probes directly under SEH instead of calling IsBadReadPtr, avoiding a kernelbase
+    // transition on every indirect branch.
+    inline bool try_read_ptr(uintptr_t addr, uintptr_t& out) {
+        KANANLIB_SEH_TRY {
+            out = *reinterpret_cast<const volatile uintptr_t*>(addr);
+            return true;
+        } KANANLIB_SEH_EXCEPT (EXCEPTION_EXECUTE_HANDLER) {
+            return false;
+        }
+    }
     } // namespace detail
 
     template<typename F>
@@ -351,14 +363,15 @@ namespace utility {
                     SPDLOG_DEBUG("Indirect jmp detected: {:x}", (uintptr_t)ip);
                     const auto dest = utility::calculate_absolute((uintptr_t)ip + 2);
 
-                    if (dest != 0 && dest != (uintptr_t)ip && !IsBadReadPtr((void*)dest, sizeof(void*))) {
-                        const auto real_dest = *(uintptr_t*)dest;
+                    uintptr_t real_dest = 0;
+                    uintptr_t probe = 0;
 
+                    if (dest != 0 && dest != (uintptr_t)ip && detail::try_read_ptr(dest, real_dest)) {
                         // Cannot step over jmps
-                        if (real_dest != 0 && real_dest != (uintptr_t)ip && !IsBadReadPtr((void*)real_dest, sizeof(void*))) {
-                            SPDLOG_DEBUG("Indirect jmp destination: {:x}", (uintptr_t)real_dest);
+                        if (real_dest != 0 && real_dest != (uintptr_t)ip && detail::try_read_ptr(real_dest, probe)) {
+                            SPDLOG_DEBUG("Indirect jmp destination: {:x}", real_dest);
                             ip = (uint8_t*)real_dest;
-                            ctx.branch_start = (uintptr_t)real_dest;
+                            ctx.branch_start = real_dest;
                             ++total_branches_seen;
                             continue;
                         }
@@ -371,13 +384,14 @@ namespace utility {
 
                     const auto dest = utility::calculate_absolute((uintptr_t)ip + 2);
 
-                    if (dest != 0 && dest != (uintptr_t)ip && !IsBadReadPtr((void*)dest, sizeof(void*))) {
-                        const auto real_dest = *(uintptr_t*)dest;
+                    uintptr_t real_dest = 0;
+                    uintptr_t probe = 0;
 
-                        if (real_dest != 0 && real_dest != (uintptr_t)ip && !IsBadReadPtr((void*)real_dest, sizeof(void*)) && result != ExhaustionResult::STEP_OVER) {
+                    if (dest != 0 && dest != (uintptr_t)ip && detail::try_read_ptr(dest, real_dest)) {
+                        if (result != ExhaustionResult::STEP_OVER && real_dest != 0 && real_dest != (uintptr_t)ip && detail::try_read_ptr(real_dest, probe)) {
                             branches.push_back((uint8_t*)real_dest);
                             ++total_branches_seen;
-                            SPDLOG_DEBUG("Indirect call destination: {:x}", (uintptr_t)real_dest);
+                            SPDLOG_DEBUG("Indirect call destination: {:x}", real_dest);
                         }
                     }
                 } else if (ix.BranchInfo.IsBranch && !ix.BranchInfo.IsConditional) {
