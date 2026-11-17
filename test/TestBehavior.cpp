@@ -11,6 +11,7 @@
 #include <functional>
 #include <future>
 #include <chrono>
+#include <memory>
 #include <thread>
 #include <atomic>
 #include <mutex>
@@ -1118,6 +1119,131 @@ int test_threadsuspender_lock_order_soak() {
 }
 
 // ============================================================================
+// Process heap lock: no thread may be frozen while it owns it.
+//
+// Code inside a frozen scope allocates: suspend_threads() itself (make_unique
+// per thread, vector growth, logging) and every caller's hook setup. If a thread
+// is frozen inside RtlAllocateHeap/RtlFreeHeap while it owns the process heap's
+// critical section, the first such allocation blocks forever. Seen in
+// REFramework as an intermittent Dragon's Dogma 2 startup hang: the log stopped
+// after the 5th "Suspending <tid>" while the game was loading (allocating hard).
+//
+// Workers here churn blocks above the LFH limit, so every HeapAlloc/HeapFree
+// takes the heap lock, and the freezer allocates inside each frozen scope the
+// way callers do. Without the heap lock in WorldLock this deadlocked before the
+// first freeze completed (3/3 runs).
+//
+// The scenario runs in a child process: a deadlocked suspender may already
+// have frozen this test's main thread, so no in-process watchdog could fire.
+// The parent waits with a deadline and terminates a wedged child.
+// ============================================================================
+
+#if defined(_WIN32) // Process heap APIs: absent from the Linux compat layer.
+static constexpr char k_heap_lock_child_arg[] = "--heap-lock-child";
+
+static int heap_lock_child_scenario() {
+    { utility::ThreadSuspender warmup; } // one-time ntdll resolution, see Half #1
+
+    StartGate gate{};
+    std::atomic<bool> stop{false};
+    std::atomic<uint64_t> churn{0};
+    constexpr uint32_t k_workers = 8;
+    constexpr int k_freezes = 50;
+
+    std::vector<LockTask> workers{};
+    for (uint32_t i = 0; i < k_workers; ++i) {
+        workers.push_back(launch_lock_task([&, i]() -> int {
+            if (!gate.wait()) {
+                return 1;
+            }
+
+            const auto heap = GetProcessHeap();
+            uint32_t x = 0x9E3779B9u * (i + 1);
+
+            while (!stop.load(std::memory_order_relaxed)) {
+                x ^= x << 13; x ^= x >> 17; x ^= x << 5;
+                // 20-220 KiB: above the LFH limit, so the heap lock is taken.
+                auto p = static_cast<volatile char*>(HeapAlloc(heap, 0, 20 * 1024 + (x % (200 * 1024))));
+                if (p == nullptr) {
+                    return 1;
+                }
+                p[0] = 1;
+                HeapFree(heap, 0, (void*)p);
+                churn.fetch_add(1, std::memory_order_relaxed);
+            }
+            return 0;
+        }));
+    }
+
+    auto freezer = launch_lock_task([&]() -> int {
+        if (!gate.wait()) {
+            return 1;
+        }
+        if (!spin_until([&] { return churn.load(std::memory_order_relaxed) > 1000; }, std::chrono::milliseconds(5000))) {
+            return 1;
+        }
+
+        for (int i = 0; i < k_freezes; ++i) {
+            utility::ThreadSuspender s;
+            if (s.states.empty()) {
+                return 1;
+            }
+            auto block = std::make_unique<char[]>(100 * 1024); // hook setup allocates while frozen
+            block[0] = 1;
+            s.resume();
+        }
+        return 0;
+    });
+
+    if (!gate.release(k_workers + 1)) {
+        return 1;
+    }
+
+    const int freezer_rc = freezer.join_within(std::chrono::seconds(60), "freeze loop vs heap churn");
+    stop.store(true, std::memory_order_relaxed);
+    int workers_rc = 0;
+    for (auto& w : workers) {
+        workers_rc |= w.join_within(std::chrono::seconds(30), "heap churn worker");
+    }
+
+    std::printf("  child: %d freezes vs %llu heap churn rounds\n", k_freezes, (unsigned long long)churn.load());
+    return freezer_rc | workers_rc;
+}
+#endif
+
+int test_threadsuspender_never_freezes_heap_lock_owner() {
+#if !defined(_WIN32)
+    TEST_SKIP("process heap lock requires a Win32 host");
+#else
+    char exe[MAX_PATH]{};
+    TEST_ASSERT(GetModuleFileNameA(nullptr, exe, MAX_PATH) != 0);
+
+    std::string cmdline = std::string{"\""} + exe + "\" " + k_heap_lock_child_arg;
+    STARTUPINFOA si{sizeof(si)};
+    PROCESS_INFORMATION pi{};
+    TEST_ASSERT(CreateProcessA(exe, cmdline.data(), nullptr, nullptr, TRUE, 0, nullptr, nullptr, &si, &pi));
+    CloseHandle(pi.hThread);
+
+    constexpr DWORD k_budget_ms = 120 * 1000;
+    const DWORD wait = WaitForSingleObject(pi.hProcess, k_budget_ms);
+    DWORD exit_code = 1;
+
+    if (wait == WAIT_TIMEOUT) {
+        std::printf("  FAIL: child still running after %lus -- a thread was frozen while owning the process heap lock\n", k_budget_ms / 1000);
+        TerminateProcess(pi.hProcess, 1);
+        WaitForSingleObject(pi.hProcess, 10 * 1000);
+    } else {
+        GetExitCodeProcess(pi.hProcess, &exit_code);
+    }
+    CloseHandle(pi.hProcess);
+
+    TEST_ASSERT(wait == WAIT_OBJECT_0); // no deadlock
+    TEST_ASSERT(exit_code == 0);        // every freeze completed, workers stopped cleanly
+    return 0;
+#endif
+}
+
+// ============================================================================
 // for_each_uncached — via find_all_vtables on the executable module
 // Exercises the full path: find_all_vtables -> populate -> for_each_uncached
 // which is the function we guarded with get_module_size null check.
@@ -1153,7 +1279,16 @@ int test_find_all_vtables_null_module_returns_empty() {
 // main
 // ============================================================================
 
-int main() try {
+int main(int argc, char** argv) try {
+#if defined(_WIN32)
+    if (argc > 1 && std::strcmp(argv[1], k_heap_lock_child_arg) == 0) {
+        return heap_lock_child_scenario();
+    }
+#else
+    (void)argc;
+    (void)argv;
+#endif
+
     std::printf("=== Behavior Tests ===\n");
 
     // scan_strings — all 4 overloads
@@ -1176,6 +1311,7 @@ int main() try {
     RUN_TEST(test_threadsuspender_waits_out_peb_lock_owner);
     RUN_TEST(test_threadsuspender_waits_out_long_loader_operation);
     RUN_TEST(test_threadsuspender_lock_order_soak);
+    RUN_TEST(test_threadsuspender_never_freezes_heap_lock_owner);
 
     // for_each_uncached (via find_all_vtables)
     RUN_TEST(test_find_all_vtables_executable);

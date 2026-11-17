@@ -126,17 +126,23 @@ void resume_threads(const ThreadStates& states) {
 }
 
 namespace detail {
-// Holds the two NT locks that must not be owned by a frozen thread:
+// Holds the locks that must not be owned by a frozen thread:
 //
 //   * loader lock -- a thread suspended mid-DLL-load leaves the loader locked,
 //     deadlocking anything that touches it afterwards.
 //   * PEB lock    -- a thread suspended inside a PEB critical section (process
 //     parameters, environment, current directory) deadlocks the PEB walkers
 //     (utility::foreach_module and friends) that run while the world is frozen.
+//   * process heap lock -- a thread suspended inside RtlAllocateHeap/RtlFreeHeap
+//     while owning the heap's critical section deadlocks the next allocation:
+//     suspend_threads() itself allocates between SuspendThread calls, and so do
+//     logging and every caller's hook setup inside the frozen scope. (Seen as an
+//     intermittent REFramework startup hang in a game that was loading, i.e.
+//     allocating hard, while the world was frozen.)
 //
-// Lock-order hazard: these are two independent critical sections and real code
-// takes them in both orders, so blocking on both invites a classic AB/BA
-// deadlock against a thread that owns one and wants the other.
+// Lock-order hazard: the PEB and loader locks are two independent critical
+// sections and real code takes them in both orders, so blocking on both invites
+// a classic AB/BA deadlock against a thread that owns one and wants the other.
 //
 // Protocol that makes the cycle impossible:
 //   1. Take the PEB lock while owning no other NT lock. Blocking here is safe:
@@ -145,9 +151,16 @@ namespace detail {
 //   3. On failure, RELEASE the PEB lock, back off, and start over. That release
 //      is the un-deadlock step: the loader-lock owner that was blocked on the
 //      PEB lock now runs to completion and drops the loader lock for us.
+//   4. Only then take the process heap lock, blocking. It has to come last: PEB
+//      and loader lock owners allocate while holding them (environment updates,
+//      DLL loads), so taking the heap lock first would deadlock against them.
+//      Last is safe because, with both NT locks ours, the heap lock can only be
+//      owned by code inside the heap manager, which takes neither NT lock and
+//      always finishes. (An explicit HeapLock() holder that then waits for the
+//      PEB or loader lock would still deadlock us; no such caller is known.)
 //
-// So we never own one of the pair while blocking on the other, and every
-// partially-locked state is unwound instead of waited on.
+// So we never own one of the PEB/loader pair while blocking on the other, and
+// every partially-locked state is unwound instead of waited on.
 struct WorldLock {
     WorldLock() {
         acquire();
@@ -162,6 +175,18 @@ struct WorldLock {
 
 private:
     void acquire() {
+        acquire_nt_locks();
+
+        // 4. Process heap lock, last and blocking (see above). Recursive, so our
+        //    own allocations while suspending still work. Win32 only: the Linux
+        //    port's suspender freezes nothing, and its compat layer has no heaps.
+#if defined(_WIN32)
+        m_heap = GetProcessHeap();
+        m_heap_held = m_heap != nullptr && HeapLock(m_heap) != FALSE;
+#endif
+    }
+
+    void acquire_nt_locks() {
         if (m_api.acquire_peb == nullptr && m_api.lock_loader == nullptr) {
             return;
         }
@@ -230,6 +255,13 @@ private:
         const bool held_any = m_loader_held || m_peb_held;
 
         // Reverse acquisition order.
+#if defined(_WIN32)
+        if (m_heap_held) {
+            m_heap_held = false;
+            HeapUnlock(m_heap);
+        }
+#endif
+
         if (m_loader_held) {
             m_loader_held = false;
             m_api.unlock_loader(0, m_loader_cookie);
@@ -246,16 +278,19 @@ private:
     ULONG_PTR m_loader_cookie{0};
     bool m_loader_held{false};
     bool m_peb_held{false};
+    HANDLE m_heap{nullptr};
+    bool m_heap_held{false};
 };
 
-// Suspends every other thread while holding the loader and PEB locks, so we
-// never freeze a thread inside either of them (which would deadlock anything
-// that later touches the loader or the PEB). Returns the captured states.
+// Suspends every other thread while holding the loader, PEB and process heap
+// locks, so we never freeze a thread inside any of them (which would deadlock
+// anything that later touches the loader, the PEB or the heap). Returns the
+// captured states.
 static ThreadStates suspend_world_locked() {
     WorldLock world{};
 
-    // Both locks are dropped by ~WorldLock once the threads are frozen: from
-    // here on nobody else can run, so they are ours to take again freely.
+    // All three locks are dropped by ~WorldLock once the threads are frozen:
+    // from here on nobody else can run, so they are ours to take again freely.
     return suspend_threads();
 }
 }
