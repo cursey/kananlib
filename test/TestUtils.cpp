@@ -456,6 +456,26 @@ int test_config_get_set_float() {
     return 0;
 }
 
+int test_config_get_invalid_number() {
+    // Values from a hand-edited file: unparsable or out of range must read as absent, not throw.
+    utility::Config cfg;
+    cfg.set("text", "abc");
+    cfg.set("huge", "99999999999999999999");
+    cfg.set("ok", "7");
+
+    TEST_ASSERT(!cfg.get<float>("text").has_value());
+    TEST_ASSERT(!cfg.get<double>("text").has_value());
+    TEST_ASSERT(!cfg.get<int>("text").has_value());
+    TEST_ASSERT(!cfg.get<uint32_t>("text").has_value());
+    TEST_ASSERT(!cfg.get<int>("huge").has_value());
+    TEST_ASSERT(!cfg.get<uint32_t>("huge").has_value());
+
+    auto ok = cfg.get<int>("ok");
+    TEST_ASSERT(ok.has_value() && *ok == 7);
+
+    return 0;
+}
+
 int test_config_save_load() {
     // Use a temp path.
     char temp_dir[MAX_PATH] = {};
@@ -563,6 +583,7 @@ int main() try {
     RUN_TEST(test_config_get_set_bool);
     RUN_TEST(test_config_get_set_int);
     RUN_TEST(test_config_get_set_float);
+    RUN_TEST(test_config_get_invalid_number);
     RUN_TEST(test_config_save_load);
     RUN_TEST(test_config_empty_key_ignored);
     RUN_TEST(test_config_overwrite);

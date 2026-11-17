@@ -2,6 +2,7 @@
 
 #include <map>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <type_traits>
 
@@ -29,17 +30,22 @@ namespace utility {
                 return {};
             }
 
-            // Use the correct conversion function based on the type.
-            if constexpr (std::is_integral_v<T>) {
-                if constexpr (std::is_unsigned_v<T>) {
-                    return (T)std::stoul(*value);
+            // Use the correct conversion function based on the type. A malformed or out-of-range value (a hand-edited
+            // config file) reads as absent, like an unparsable bool, instead of throwing out of every caller.
+            try {
+                if constexpr (std::is_integral_v<T>) {
+                    if constexpr (std::is_unsigned_v<T>) {
+                        return (T)std::stoul(*value);
+                    }
+                    else {
+                        return (T)std::stol(*value);
+                    }
                 }
                 else {
-                    return (T)std::stol(*value);
+                    return (T)std::stod(*value);
                 }
-            }
-            else {
-                return (T)std::stod(*value);
+            } catch (const std::logic_error&) { // std::invalid_argument, std::out_of_range
+                return {};
             }
         }
 

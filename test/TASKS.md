@@ -154,7 +154,7 @@ against the buggy code, cite the failure, then apply the minimal fix.
 |---|---|---|
 | `kananlib-test` | 9 | Scan, PDB, RTTI, Module, String-refs |
 | `kananlib-stress-test` | 19 | Scan (collect_basic_blocks, exhaustive_decode) |
-| `kananlib-utils-test` | 31 | Pattern, String, Address, Config |
+| `kananlib-utils-test` | 33 | Pattern, String, Address, Config |
 | `kananlib-advanced-test` | 16 | ScopeGuard, Benchmark, Memory, Patch, PointerHook |
 | `kananlib-vtablehook-test` | 8 | VtableHook |
 | `kananlib-input-test` | 3 | Input |
@@ -175,7 +175,7 @@ against the buggy code, cite the failure, then apply the minimal fix.
 | `kananlib-scan-bounds-test` | 24 | Scan (populate_function_buckets_heuristic, find_function_entry, find_all_function_bounds, determine_function_bounds, find_function_start[_unwind/_with_call], find_virtual_function_start, resolve_scope_table_owner, resolve_instruction) |
 | `kananlib-scan-path-test` | 32 | Scan (find_next_displacement, find_{string_reference,pointer,displacement,mnemonic,register_usage,pattern}_in_path, find_encapsulating_function[_disp], find_encapsulating_virtual_function[_disp]) |
 | `kananlib-scan-resolve-test` | 20 | Scan (scan_ptr HMODULE, find_function_from_string_ref ascii/wide, find_function_with_string_refs/refs, find_virtual_function_*, get_disassembly_behind, collect_linear_blocks, collect_{ascii,unicode}_string_references, scan_displacement_references) |
-| **Total** | **358** | **20 of 20 modules** |
+| **Total** | **360** | **20 of 20 modules** |
 
 ## Measured Line Coverage
 
