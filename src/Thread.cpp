@@ -8,6 +8,7 @@
 
 #include <utility/Logging.hpp>
 #include <utility/Module.hpp>
+#include <utility/Scan.hpp>
 #include <utility/Thread.hpp>
 
 namespace utility {
@@ -139,6 +140,12 @@ namespace detail {
 //     logging and every caller's hook setup inside the frozen scope. (Seen as an
 //     intermittent REFramework startup hang in a game that was loading, i.e.
 //     allocating hard, while the world was frozen.)
+//   * function-bucket lock (Scan.cpp) -- kananlib's own lock around the function
+//     tables behind find_function_start and friends. A thread suspended while it
+//     owns it deadlocks the first function lookup inside the frozen scope. (Seen
+//     as a REFramework startup hang: a game thread was filling the buckets of a
+//     DLL it had just loaded, waiting for the heap lock we held, and was frozen
+//     there.)
 //
 // Lock-order hazard: the PEB and loader locks are two independent critical
 // sections and real code takes them in both orders, so blocking on both invites
@@ -151,7 +158,11 @@ namespace detail {
 //   3. On failure, RELEASE the PEB lock, back off, and start over. That release
 //      is the un-deadlock step: the loader-lock owner that was blocked on the
 //      PEB lock now runs to completion and drops the loader lock for us.
-//   4. Only then take the process heap lock, blocking. It has to come last: PEB
+//   4. Take the function-bucket lock, blocking. After the NT locks: code that
+//      scans under the loader lock already owns that when it asks for this one,
+//      and its owners take neither NT lock. Before the heap lock: its owners
+//      allocate while holding it.
+//   5. Only then take the process heap lock, blocking. It has to come last: PEB
 //      and loader lock owners allocate while holding them (environment updates,
 //      DLL loads), so taking the heap lock first would deadlock against them.
 //      Last is safe because, with both NT locks ours, the heap lock can only be
@@ -177,7 +188,11 @@ private:
     void acquire() {
         acquire_nt_locks();
 
-        // 4. Process heap lock, last and blocking (see above). Recursive, so our
+        // 4. Function-bucket lock (see above).
+        detail::lock_function_buckets();
+        m_buckets_held = true;
+
+        // 5. Process heap lock, last and blocking (see above). Recursive, so our
         //    own allocations while suspending still work. Win32 only: the Linux
         //    port's suspender freezes nothing, and its compat layer has no heaps.
 #if defined(_WIN32)
@@ -262,6 +277,11 @@ private:
         }
 #endif
 
+        if (m_buckets_held) {
+            m_buckets_held = false;
+            detail::unlock_function_buckets();
+        }
+
         if (m_loader_held) {
             m_loader_held = false;
             m_api.unlock_loader(0, m_loader_cookie);
@@ -278,18 +298,19 @@ private:
     ULONG_PTR m_loader_cookie{0};
     bool m_loader_held{false};
     bool m_peb_held{false};
+    bool m_buckets_held{false};
     HANDLE m_heap{nullptr};
     bool m_heap_held{false};
 };
 
-// Suspends every other thread while holding the loader, PEB and process heap
-// locks, so we never freeze a thread inside any of them (which would deadlock
-// anything that later touches the loader, the PEB or the heap). Returns the
-// captured states.
+// Suspends every other thread while holding the loader, PEB, function-bucket
+// and process heap locks, so we never freeze a thread inside any of them (which
+// would deadlock anything that later touches the loader, the PEB, the function
+// tables or the heap). Returns the captured states.
 static ThreadStates suspend_world_locked() {
     WorldLock world{};
 
-    // All three locks are dropped by ~WorldLock once the threads are frozen:
+    // All of these locks are dropped by ~WorldLock once the threads are frozen:
     // from here on nobody else can run, so they are ours to take again freely.
     return suspend_threads();
 }

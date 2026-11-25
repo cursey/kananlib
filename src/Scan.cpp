@@ -1727,6 +1727,14 @@ namespace utility {
                 return !ND_SUCCESS(status);
             });
         }
+
+        void lock_function_buckets() {
+            bucket_mtx.lock();
+        }
+
+        void unlock_function_buckets() {
+            bucket_mtx.unlock();
+        }
     }
 
     void populate_function_buckets_heuristic(uintptr_t module) {

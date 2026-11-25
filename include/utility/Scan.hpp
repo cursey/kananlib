@@ -495,6 +495,13 @@ namespace utility {
         // Internal implementation detail exposed for deterministic unit testing;
         // not a supported API.
         void remove_undecodable_starts(std::vector<uint32_t>& starts, uintptr_t module);
+
+        // The lock of the function buckets behind find_function_start and friends.
+        // For ThreadSuspender only (see WorldLock in Thread.cpp): a thread frozen
+        // while it owns this lock blocks every function lookup in the frozen scope.
+        // Not a supported API.
+        void lock_function_buckets();
+        void unlock_function_buckets();
     }
 
     struct FunctionBounds {

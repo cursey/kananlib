@@ -1244,6 +1244,202 @@ int test_threadsuspender_never_freezes_heap_lock_owner() {
 }
 
 // ============================================================================
+// Function-bucket lock: no thread may be frozen while it owns it.
+//
+// Code inside a frozen scope looks functions up (find_function_start,
+// find_function_from_string_ref, ...), and that takes Scan.cpp's bucket_mtx. If
+// a thread is frozen while it owns that lock, the first lookup blocks forever.
+// Seen in REFramework as a startup hang of Onimusha: Way of the Sword (1 of 12
+// launches, full dump): the game's main thread was filling the buckets of a DLL
+// it had just loaded (exclusive owner, waiting for the heap lock the suspender
+// held at that moment) and was frozen there. The frozen scope's first scan then
+// waited for the lock.
+//
+// Populators here fill the buckets of fresh fake modules in a loop (exclusive
+// owner, allocating above the LFH limit while it holds the lock, like the
+// thread in that dump), lookers hold the lock shared, and the freezer does both
+// inside each frozen scope, the way callers do.
+//
+// Runs in a child process, for the same reason as the heap lock test above.
+// ============================================================================
+
+#if defined(_WIN64) // The fake modules are PE32+ images with an exception directory.
+static constexpr char k_bucket_lock_child_arg[] = "--bucket-lock-child";
+
+// A minimal PE image in fresh memory: headers plus an exception directory of
+// `count` functions. Never freed: the base address is the key of its buckets.
+static HMODULE make_fake_module(uint32_t count) {
+    constexpr uint32_t k_pdata_rva = 0x1000;
+    constexpr uint32_t k_code_rva = 0x100000;
+    const size_t pdata_size = count * sizeof(IMAGE_RUNTIME_FUNCTION_ENTRY);
+
+    auto base = static_cast<uint8_t*>(VirtualAlloc(nullptr, k_pdata_rva + pdata_size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
+    if (base == nullptr) {
+        return nullptr;
+    }
+
+    auto dos = reinterpret_cast<PIMAGE_DOS_HEADER>(base);
+    dos->e_magic = IMAGE_DOS_SIGNATURE;
+    dos->e_lfanew = 0x80;
+
+    auto nt = reinterpret_cast<PIMAGE_NT_HEADERS>(base + dos->e_lfanew);
+    nt->Signature = IMAGE_NT_SIGNATURE;
+    nt->FileHeader.Machine = IMAGE_FILE_MACHINE_AMD64;
+    nt->OptionalHeader.Magic = IMAGE_NT_OPTIONAL_HDR64_MAGIC;
+    nt->OptionalHeader.SizeOfImage = k_code_rva + count * 0x10;
+    nt->OptionalHeader.NumberOfRvaAndSizes = IMAGE_NUMBEROF_DIRECTORY_ENTRIES;
+    nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXCEPTION] = {k_pdata_rva, static_cast<DWORD>(pdata_size)};
+
+    auto entries = reinterpret_cast<PIMAGE_RUNTIME_FUNCTION_ENTRY>(base + k_pdata_rva);
+    for (uint32_t i = 0; i < count; ++i) {
+        entries[i].BeginAddress = k_code_rva + i * 0x10;
+        entries[i].EndAddress = entries[i].BeginAddress + 0x10;
+    }
+
+    return reinterpret_cast<HMODULE>(base);
+}
+
+static int bucket_lock_child_scenario() {
+    { utility::ThreadSuspender warmup; } // one-time ntdll resolution, see Half #1
+
+    // 8 bytes per function while sorting: above the LFH limit, so the heap lock
+    // is taken while the bucket lock is owned.
+    constexpr uint32_t k_big_module = 2100;
+    constexpr uint32_t k_small_module = 16;
+
+    // A function of this executable. Its buckets exist from here on, so looking
+    // it up only takes the lock shared.
+    const auto real_function = reinterpret_cast<uintptr_t>(&make_fake_module);
+    if (!utility::find_function_entry(real_function)) {
+        return 1;
+    }
+
+    StartGate gate{};
+    std::atomic<bool> stop{false};
+    std::atomic<uint64_t> churn{0};
+    constexpr uint32_t k_populators = 2;
+    constexpr uint32_t k_lookers = 4;
+    constexpr uint32_t k_modules_per_populator = 250;
+    constexpr int k_freezes = 50;
+
+    const auto look_up_until_stopped = [&]() -> int {
+        while (!stop.load(std::memory_order_relaxed)) {
+            if (!utility::find_function_entry(real_function)) {
+                return 1;
+            }
+            churn.fetch_add(1, std::memory_order_relaxed);
+        }
+        return 0;
+    };
+
+    std::vector<LockTask> workers{};
+    for (uint32_t i = 0; i < k_populators; ++i) {
+        workers.push_back(launch_lock_task([&]() -> int {
+            if (!gate.wait()) {
+                return 1;
+            }
+
+            for (uint32_t n = 0; n < k_modules_per_populator && !stop.load(std::memory_order_relaxed); ++n) {
+                const auto fake = make_fake_module(k_big_module);
+                if (fake == nullptr || utility::find_all_function_bounds(fake).size() != k_big_module) {
+                    return 1;
+                }
+                churn.fetch_add(1, std::memory_order_relaxed);
+            }
+
+            return look_up_until_stopped(); // out of fresh modules
+        }));
+    }
+
+    for (uint32_t i = 0; i < k_lookers; ++i) {
+        workers.push_back(launch_lock_task([&]() -> int {
+            if (!gate.wait()) {
+                return 1;
+            }
+            return look_up_until_stopped();
+        }));
+    }
+
+    auto freezer = launch_lock_task([&]() -> int {
+        if (!gate.wait()) {
+            return 1;
+        }
+        if (!spin_until([&] { return churn.load(std::memory_order_relaxed) > 1000; }, std::chrono::milliseconds(5000))) {
+            return 1;
+        }
+
+        for (int i = 0; i < k_freezes; ++i) {
+            const auto fake = make_fake_module(k_small_module);
+            if (fake == nullptr) {
+                return 1;
+            }
+
+            utility::ThreadSuspender s;
+            if (s.states.empty()) {
+                return 1;
+            }
+            // What callers do while the world is frozen: look a function up, and
+            // scan a module for the first time.
+            const bool looked_up = utility::find_function_entry(real_function).has_value();
+            const bool populated = utility::find_all_function_bounds(fake).size() == k_small_module;
+            s.resume();
+
+            if (!looked_up || !populated) {
+                return 1;
+            }
+        }
+        return 0;
+    });
+
+    if (!gate.release(k_populators + k_lookers + 1)) {
+        return 1;
+    }
+
+    const int freezer_rc = freezer.join_within(std::chrono::seconds(60), "freeze loop vs function-bucket lock");
+    stop.store(true, std::memory_order_relaxed);
+    int workers_rc = 0;
+    for (auto& w : workers) {
+        workers_rc |= w.join_within(std::chrono::seconds(30), "function-bucket lock worker");
+    }
+
+    std::printf("  child: %d freezes vs %llu function-bucket lock rounds\n", k_freezes, (unsigned long long)churn.load());
+    return freezer_rc | workers_rc;
+}
+#endif
+
+int test_threadsuspender_never_freezes_function_bucket_lock_owner() {
+#if !defined(_WIN64)
+    TEST_SKIP("the fake modules need a 64-bit Win32 host");
+#else
+    char exe[MAX_PATH]{};
+    TEST_ASSERT(GetModuleFileNameA(nullptr, exe, MAX_PATH) != 0);
+
+    std::string cmdline = std::string{"\""} + exe + "\" " + k_bucket_lock_child_arg;
+    STARTUPINFOA si{sizeof(si)};
+    PROCESS_INFORMATION pi{};
+    TEST_ASSERT(CreateProcessA(exe, cmdline.data(), nullptr, nullptr, TRUE, 0, nullptr, nullptr, &si, &pi));
+    CloseHandle(pi.hThread);
+
+    constexpr DWORD k_budget_ms = 120 * 1000;
+    const DWORD wait = WaitForSingleObject(pi.hProcess, k_budget_ms);
+    DWORD exit_code = 1;
+
+    if (wait == WAIT_TIMEOUT) {
+        std::printf("  FAIL: child still running after %lus -- a thread was frozen while owning the function-bucket lock\n", k_budget_ms / 1000);
+        TerminateProcess(pi.hProcess, 1);
+        WaitForSingleObject(pi.hProcess, 10 * 1000);
+    } else {
+        GetExitCodeProcess(pi.hProcess, &exit_code);
+    }
+    CloseHandle(pi.hProcess);
+
+    TEST_ASSERT(wait == WAIT_OBJECT_0); // no deadlock
+    TEST_ASSERT(exit_code == 0);        // every freeze completed, workers stopped cleanly
+    return 0;
+#endif
+}
+
+// ============================================================================
 // for_each_uncached — via find_all_vtables on the executable module
 // Exercises the full path: find_all_vtables -> populate -> for_each_uncached
 // which is the function we guarded with get_module_size null check.
@@ -1284,6 +1480,11 @@ int main(int argc, char** argv) try {
     if (argc > 1 && std::strcmp(argv[1], k_heap_lock_child_arg) == 0) {
         return heap_lock_child_scenario();
     }
+#if defined(_WIN64)
+    if (argc > 1 && std::strcmp(argv[1], k_bucket_lock_child_arg) == 0) {
+        return bucket_lock_child_scenario();
+    }
+#endif
 #else
     (void)argc;
     (void)argv;
@@ -1312,6 +1513,7 @@ int main(int argc, char** argv) try {
     RUN_TEST(test_threadsuspender_waits_out_long_loader_operation);
     RUN_TEST(test_threadsuspender_lock_order_soak);
     RUN_TEST(test_threadsuspender_never_freezes_heap_lock_owner);
+    RUN_TEST(test_threadsuspender_never_freezes_function_bucket_lock_owner);
 
     // for_each_uncached (via find_all_vtables)
     RUN_TEST(test_find_all_vtables_executable);
